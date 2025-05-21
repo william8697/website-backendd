@@ -26,6 +26,27 @@ const MONGODB_URI = 'mongodb+srv://mosesmwainaina1994:OWlondlAbn3bJuj4@cluster0.
 mongoose.connect(MONGODB_URI)
   .then(() => console.log('MongoDB connected successfully'))
   .catch(err => console.error('MongoDB connection error:', err));
+mongoose.connect(MONGODB_URI)
+  .then(async () => {
+    console.log('MongoDB connected successfully');
+    
+    // Check if any admin exists
+    const adminCount = await Admin.countDocuments();
+    if (adminCount === 0) {
+      const adminEmail = 'admin@yourdomain.com';
+      const adminPassword = 'yourSecurePassword123!';
+      const salt = bcrypt.genSaltSync(12);
+      const hashedPassword = bcrypt.hashSync(adminPassword, salt);
+      
+      await Admin.create({
+        email: adminEmail,
+        password: hashedPassword,
+        permissions: ['superadmin']
+      });
+      
+      console.log('Initial admin created:', adminEmail);
+    }
+  })
 
 // Middleware
 app.use(cors({
