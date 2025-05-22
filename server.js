@@ -20,32 +20,22 @@ const { v4: uuidv4 } = require('uuid');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// MongoDB connection - Updated for MongoDB Driver v4.0.0+
+// MongoDB connection
 const MONGODB_URI = 'mongodb+srv://mosesmwainaina1994:OWlondlAbn3bJuj4@cluster0.edyueep.mongodb.net/crypto-arbitrage?retryWrites=true&w=majority&appName=Cluster0';
 
 mongoose.connect(MONGODB_URI)
-  .then(() => console.log('MongoDB connected successfully'))
-  .catch(err => console.error('MongoDB connection error:', err));
-mongoose.connect(MONGODB_URI)
   .then(async () => {
     console.log('MongoDB connected successfully');
-    // Add this route for admin verification
-app.get('/api/v1/admin/verify', adminProtect, (req, res) => {
-  res.json({ 
-    status: 'success', 
-    admin: { email: req.admin.email } 
-  });
-});
     
     // Check if any admin exists
-    const adminCount = await Admin.countDocuments();
+    const adminCount = await mongoose.model('Admin').countDocuments();
     if (adminCount === 0) {
       const adminEmail = 'admin@yourdomain.com';
       const adminPassword = 'yourSecurePassword123!';
       const salt = bcrypt.genSaltSync(12);
       const hashedPassword = bcrypt.hashSync(adminPassword, salt);
       
-      await Admin.create({
+      await mongoose.model('Admin').create({
         email: adminEmail,
         password: hashedPassword,
         permissions: ['superadmin']
@@ -54,6 +44,7 @@ app.get('/api/v1/admin/verify', adminProtect, (req, res) => {
       console.log('Initial admin created:', adminEmail);
     }
   })
+  .catch(err => console.error('MongoDB connection error:', err));
 
 // Middleware
 app.use(cors({
@@ -298,16 +289,13 @@ app.post('/api/v1/auth/signup', async (req, res) => {
   try {
     const { firstName, lastName, email, password, country, currency } = req.body;
     
-    // Check if user exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({ status: 'fail', message: 'Email already in use' });
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    // Create user
     const newUser = await User.create({
       firstName,
       lastName,
@@ -318,10 +306,8 @@ app.post('/api/v1/auth/signup', async (req, res) => {
       apiKey: crypto.randomBytes(16).toString('hex')
     });
 
-    // Generate token
     const token = createToken(newUser._id);
 
-    // Send welcome email
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: email,
@@ -347,23 +333,17 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
   try {
     const { walletAddress, walletProvider, signature, message } = req.body;
     
-    // Verify signature (simplified for example)
-    // In production, you would verify the signature against the message and wallet address
-    
-    // Check if wallet already exists
     const existingUser = await User.findOne({ walletAddress });
     if (existingUser) {
       return res.status(400).json({ status: 'fail', message: 'Wallet already registered' });
     }
 
-    // Create user
     const newUser = await User.create({
       walletAddress,
       walletProvider,
       apiKey: crypto.randomBytes(16).toString('hex')
     });
 
-    // Generate token
     const token = createToken(newUser._id);
 
     res.status(201).json({
@@ -382,22 +362,18 @@ app.post('/api/v1/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // 1) Check if email and password exist
     if (!email || !password) {
       return res.status(400).json({ status: 'fail', message: 'Please provide email and password!' });
     }
 
-    // 2) Check if user exists && password is correct
     const user = await User.findOne({ email }).select('+password');
 
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ status: 'fail', message: 'Incorrect email or password' });
     }
 
-    // 3) If everything ok, send token to client
     const token = createToken(user._id);
 
-    // Update last login
     user.lastLogin = new Date();
     await user.save();
 
@@ -417,19 +393,13 @@ app.post('/api/v1/auth/wallet-login', async (req, res) => {
   try {
     const { walletAddress, signature, message } = req.body;
     
-    // Verify signature (simplified for example)
-    // In production, you would verify the signature against the message and wallet address
-    
-    // Check if wallet exists
     const user = await User.findOne({ walletAddress });
     if (!user) {
       return res.status(401).json({ status: 'fail', message: 'Wallet not registered' });
     }
 
-    // Generate token
     const token = createToken(user._id);
 
-    // Update last login
     user.lastLogin = new Date();
     await user.save();
 
@@ -458,6 +428,13 @@ app.get('/api/v1/auth/verify', protect, async (req, res) => {
   }
 });
 
+app.get('/api/v1/admin/verify', adminProtect, (req, res) => {
+  res.json({ 
+    status: 'success', 
+    admin: { email: req.admin.email } 
+  });
+});
+
 app.post('/api/v1/auth/logout', (req, res) => {
   res.cookie('jwt', 'loggedout', {
     expires: new Date(Date.now() + 10 * 1000),
@@ -472,23 +449,20 @@ app.post('/api/v1/auth/forgot-password', async (req, res) => {
     const user = await User.findOne({ email });
 
     if (!user) {
-      // For security reasons, we don't reveal if email exists
       return res.status(200).json({
         status: 'success',
         message: 'If your email is registered, you will receive a password reset link'
       });
     }
 
-    // Create reset token
     const resetToken = crypto.randomBytes(32).toString('hex');
     user.passwordResetToken = crypto
       .createHash('sha256')
       .update(resetToken)
       .digest('hex');
-    user.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+    user.passwordResetExpires = Date.now() + 10 * 60 * 1000;
     await user.save();
 
-    // Send email
     const resetURL = `https://website-xi-ten-52.vercel.app/reset-password?token=${resetToken}`;
     const mailOptions = {
       from: process.env.EMAIL_USER,
@@ -665,11 +639,6 @@ app.post('/api/v1/users/generate-api-key', protect, async (req, res) => {
 
 app.post('/api/v1/users/export-data', protect, async (req, res) => {
   try {
-    const user = req.user;
-    
-    // In a real application, you would queue a job to export all user data
-    // and email it to the user when ready
-    
     res.status(200).json({
       status: 'success',
       message: 'Data export request received. You will receive an email when your data is ready.'
@@ -721,8 +690,6 @@ app.get('/api/v1/wallet/balance', protect, async (req, res) => {
 
 app.get('/api/v1/wallet/deposit-address', protect, async (req, res) => {
   try {
-    // In a real application, this would generate a unique deposit address
-    // for the user based on the selected cryptocurrency
     const { currency } = req.query;
     const currencies = ['BTC', 'ETH', 'BNB', 'USDT'];
     
@@ -730,7 +697,6 @@ app.get('/api/v1/wallet/deposit-address', protect, async (req, res) => {
       return res.status(400).json({ status: 'fail', message: 'Invalid currency' });
     }
 
-    // Generate a mock deposit address
     const depositAddress = crypto.randomBytes(10).toString('hex');
 
     res.status(200).json({
@@ -759,7 +725,6 @@ app.post('/api/v1/wallet/deposit', protect, async (req, res) => {
       return res.status(400).json({ status: 'fail', message: 'Amount must be greater than 0' });
     }
 
-    // Create transaction record
     const transaction = await Transaction.create({
       userId: user._id,
       type: 'deposit',
@@ -768,9 +733,6 @@ app.post('/api/v1/wallet/deposit', protect, async (req, res) => {
       txHash,
       status: 'pending'
     });
-
-    // In a real application, you would verify the transaction on the blockchain
-    // before updating the user's balance
 
     res.status(200).json({
       status: 'success',
@@ -804,10 +766,6 @@ app.post('/api/v1/wallet/withdraw', protect, async (req, res) => {
       return res.status(400).json({ status: 'fail', message: 'Insufficient balance' });
     }
 
-    // In a real application, you would validate the address format
-    // based on the cryptocurrency
-
-    // Create transaction record
     const transaction = await Transaction.create({
       userId: user._id,
       type: 'withdrawal',
@@ -817,7 +775,6 @@ app.post('/api/v1/wallet/withdraw', protect, async (req, res) => {
       status: 'pending'
     });
 
-    // Deduct from user balance (in a real app, this would happen after blockchain confirmation)
     user.balance[currency] -= amount;
     await user.save();
 
@@ -900,10 +857,8 @@ app.post('/api/v1/trades/execute', protect, async (req, res) => {
       return res.status(400).json({ status: 'fail', message: 'Minimum balance of $100 required to trade' });
     }
 
-    // Get current price (in a real app, this would come from an exchange API)
     const price = Math.random() * 10000;
 
-    // Create trade
     const trade = await Trade.create({
       userId: user._id,
       pair,
@@ -913,7 +868,6 @@ app.post('/api/v1/trades/execute', protect, async (req, res) => {
       status: 'pending'
     });
 
-    // Create transaction
     await Transaction.create({
       userId: user._id,
       type: 'trade',
@@ -922,23 +876,19 @@ app.post('/api/v1/trades/execute', protect, async (req, res) => {
       status: 'pending'
     });
 
-    // Deduct from user balance (in a real app, this would happen after trade execution)
     user.balance.USD -= amount;
     await user.save();
 
-    // Simulate trade completion after 5 seconds
     setTimeout(async () => {
-      const profit = amount * 0.05; // 5% profit for demo
+      const profit = amount * 0.05;
       trade.status = 'completed';
       trade.profit = profit;
       trade.completedAt = new Date();
       await trade.save();
 
-      // Update user balance with profit
       user.balance.USD += amount + profit;
       await user.save();
 
-      // Update transaction
       await Transaction.updateOne(
         { userId: user._id, tradeId: trade._id },
         { status: 'completed' }
@@ -959,7 +909,6 @@ app.post('/api/v1/trades/execute', protect, async (req, res) => {
 // Arbitrage Routes
 app.get('/api/v1/arbitrage/opportunities', protect, async (req, res) => {
   try {
-    // In a real application, these would come from your arbitrage detection system
     const mockOpportunities = [
       {
         pair: 'BTC/USDT',
@@ -968,7 +917,7 @@ app.get('/api/v1/arbitrage/opportunities', protect, async (req, res) => {
         buyPrice: 50000,
         sellPrice: 50250,
         profit: 250,
-        expiry: new Date(Date.now() + 5 * 60 * 1000) // 5 minutes from now
+        expiry: new Date(Date.now() + 5 * 60 * 1000)
       },
       {
         pair: 'ETH/USDT',
@@ -977,7 +926,7 @@ app.get('/api/v1/arbitrage/opportunities', protect, async (req, res) => {
         buyPrice: 3500,
         sellPrice: 3525,
         profit: 25,
-        expiry: new Date(Date.now() + 3 * 60 * 1000) // 3 minutes from now
+        expiry: new Date(Date.now() + 3 * 60 * 1000)
       }
     ];
 
@@ -1006,10 +955,6 @@ app.post('/api/v1/arbitrage/execute', protect, async (req, res) => {
       return res.status(400).json({ status: 'fail', message: 'Minimum balance of $100 required to trade' });
     }
 
-    // In a real application, you would fetch the opportunity details
-    // and execute the arbitrage trade on the exchanges
-
-    // For demo purposes, we'll use a mock opportunity
     const mockOpportunity = {
       pair: 'BTC/USDT',
       exchangeFrom: 'Binance',
@@ -1019,12 +964,11 @@ app.post('/api/v1/arbitrage/execute', protect, async (req, res) => {
       profit: 250
     };
 
-    // Create trade
     const trade = await Trade.create({
       userId: user._id,
       pair: mockOpportunity.pair,
       type: 'arbitrage',
-      amount: 100, // Fixed $100 for demo
+      amount: 100,
       price: mockOpportunity.buyPrice,
       profit: mockOpportunity.profit,
       exchangeFrom: mockOpportunity.exchangeFrom,
@@ -1032,7 +976,6 @@ app.post('/api/v1/arbitrage/execute', protect, async (req, res) => {
       status: 'pending'
     });
 
-    // Create transaction
     await Transaction.create({
       userId: user._id,
       type: 'trade',
@@ -1041,21 +984,17 @@ app.post('/api/v1/arbitrage/execute', protect, async (req, res) => {
       status: 'pending'
     });
 
-    // Deduct from user balance (in a real app, this would happen after trade execution)
     user.balance.USD -= 100;
     await user.save();
 
-    // Simulate trade completion after 5 seconds
     setTimeout(async () => {
       trade.status = 'completed';
       trade.completedAt = new Date();
       await trade.save();
 
-      // Update user balance with profit
       user.balance.USD += 100 + mockOpportunity.profit;
       await user.save();
 
-      // Update transaction
       await Transaction.updateOne(
         { userId: user._id, tradeId: trade._id },
         { status: 'completed' }
@@ -1571,6 +1510,57 @@ app.post('/api/v1/admin/tickets/:id/response', adminProtect, async (req, res) =>
   }
 });
 
+app.get('/api/v1/admin/kyc', adminProtect, async (req, res) => {
+  try {
+    const { limit = 10, page = 1, status } = req.query;
+    const skip = (page - 1) * limit;
+
+    const query = { kycStatus: status || { $ne: 'none' } };
+    
+    const users = await User.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .select('firstName lastName email kycStatus kycDetails createdAt');
+
+    const total = await User.countDocuments(query);
+
+    res.status(200).json({
+      status: 'success',
+      results: users.length,
+      total,
+      data: {
+        kycApplications: users
+      }
+    });
+  } catch (err) {
+    res.status(400).json({ status: 'fail', message: err.message });
+  }
+});
+
+app.get('/api/v1/admin/logs', adminProtect, async (req, res) => {
+  try {
+    const { limit = 10, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
+
+    // In a real app, you would have a proper logging system
+    // This is just a placeholder
+    const logs = [];
+    const total = 0;
+
+    res.status(200).json({
+      status: 'success',
+      results: logs.length,
+      total,
+      data: {
+        logs
+      }
+    });
+  } catch (err) {
+    res.status(400).json({ status: 'fail', message: err.message });
+  }
+});
+
 app.post('/api/v1/admin/broadcast', adminProtect, async (req, res) => {
   try {
     const { message, target } = req.body;
@@ -1578,9 +1568,6 @@ app.post('/api/v1/admin/broadcast', adminProtect, async (req, res) => {
     if (!message) {
       return res.status(400).json({ status: 'fail', message: 'Please provide a message' });
     }
-
-    // In a real application, you would send this message to all targeted users
-    // via email, push notification, or WebSocket
 
     res.status(200).json({
       status: 'success',
@@ -1606,11 +1593,9 @@ wss.on('connection', (ws, req) => {
   }
 
   ws.on('message', (message) => {
-    // Handle incoming WebSocket messages
     console.log(`Received message from user ${ws.userId}: ${message}`);
   });
 
-  // Send initial connection confirmation
   ws.send(JSON.stringify({ type: 'connection', status: 'success' }));
 });
 
