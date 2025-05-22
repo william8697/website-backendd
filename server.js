@@ -29,6 +29,13 @@ mongoose.connect(MONGODB_URI)
 mongoose.connect(MONGODB_URI)
   .then(async () => {
     console.log('MongoDB connected successfully');
+    // Add this route for admin verification
+app.get('/api/v1/admin/verify', adminProtect, (req, res) => {
+  res.json({ 
+    status: 'success', 
+    admin: { email: req.admin.email } 
+  });
+});
     
     // Check if any admin exists
     const adminCount = await Admin.countDocuments();
@@ -227,7 +234,8 @@ const upload = multer({
 
 // Email configuration
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: process.env.EMAIL_HOST,
+  port: process.env.EMAIL_PORT,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
