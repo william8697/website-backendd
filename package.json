@@ -1,7 +1,7 @@
 {
   "name": "crypto-trading-backend",
   "version": "1.0.0",
-  "description": "Backend for Crypto Trading Platform with Arbitrage Functionality",
+  "description": "Comprehensive backend for Crypto Trading Platform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -13,27 +13,28 @@
     "trading",
     "arbitrage",
     "nodejs",
+    "express",
     "mongodb"
   ],
-  "author": "Your Name",
+  "author": "Admin",
   "license": "MIT",
   "dependencies": {
+    "axios": "^1.6.7",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
-    "dotenv": "^16.0.3",
+    "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "jsonwebtoken": "^9.0.0",
-    "mongoose": "^7.3.1",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.0.3",
     "multer": "^1.4.5-lts.1",
-    "nodemailer": "^6.9.1",
-    "path": "^0.12.7",
-    "uuid": "^9.0.0",
+    "nodemailer": "^6.9.5",
+    "uuid": "^9.0.1",
     "ws": "^8.13.0"
   },
   "devDependencies": {
-    "nodemon": "^2.0.22"
+    "nodemon": "^3.0.2"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=18.0.0"
   }
 }
