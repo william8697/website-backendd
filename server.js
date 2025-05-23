@@ -6,30 +6,37 @@ const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const multer = require('multer');
-const nodemailer = require('nodemailer');
+const morgan = require('morgan');
 const WebSocket = require('ws');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
+const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
+const { v4: uuidv4 } = require('uuid');
+const axios = require('axios');
 
 // Initialize Express app
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// MongoDB connection
-const MONGODB_URI = 'mongodb+srv://mosesmwainaina1994:OWlondlAbn3bJuj4@cluster0.edyueep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
-mongoose.connect(MONGODB_URI)
-  .then(() => console.log('Connected to MongoDB'))
-  .catch(err => console.error('MongoDB connection error:', err));
+// Database connection
+const MONGODB_URI = 'mongodb+srv://mosesmwainaina1994:OWlondlAbn3bJuj4@cluster0.edyueep.mongodb.net/crypto_trading?retryWrites=true&w=majority&appName=Cluster0';
+mongoose.connect(MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => console.log('MongoDB connected successfully'))
+.catch(err => console.error('MongoDB connection error:', err));
 
 // Middleware
 app.use(cors({
-  origin: 'https://website-xi-ten-52.vercel.app',
+  origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000'],
   credentials: true
 }));
 app.use(helmet());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(morgan('combined'));
 
 // Rate limiting
 const limiter = rateLimit({
@@ -38,384 +45,299 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Constants
+// JWT Configuration
 const JWT_SECRET = '17581758Na.%';
-const FRONTEND_URL = 'https://website-xi-ten-52.vercel.app';
-const EMAIL_CONFIG = {
-  user: '7c707ac161af1c',
-  pass: '6c08aa4f2c679a',
+const JWT_EXPIRES_IN = '1d';
+
+// Email configuration
+const emailTransporter = nodemailer.createTransport({
   host: 'sandbox.smtp.mailtrap.io',
-  port: 2525
-};
-
-// Email transporter
-const transporter = nodemailer.createTransport({
-  host: EMAIL_CONFIG.host,
-  port: EMAIL_CONFIG.port,
+  port: 2525,
   auth: {
-    user: EMAIL_CONFIG.user,
-    pass: EMAIL_CONFIG.pass
+    user: '7c707ac161af1c',
+    pass: '6c08aa4f2c679a'
   }
-});
-
-// MongoDB Schemas
-const userSchema = new mongoose.Schema({
-  firstName: { type: String, required: true },
-  lastName: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: function() { return !this.walletAddress } },
-  walletAddress: { type: String, unique: true, sparse: true },
-  country: { type: String, required: true },
-  currency: { type: String, default: 'USD' },
-  balance: {
-    USD: { type: Number, default: 0 },
-    BTC: { type: Number, default: 0 },
-    ETH: { type: Number, default: 0 },
-    BNB: { type: Number, default: 0 }
-  },
-  kycStatus: { type: String, enum: ['not_verified', 'pending', 'verified', 'rejected'], default: 'not_verified' },
-  kycDocuments: {
-    idFront: String,
-    idBack: String,
-    selfie: String
-  },
-  settings: {
-    theme: { type: String, default: 'light' },
-    language: { type: String, default: 'en' },
-    notifications: { type: Boolean, default: true },
-    twoFactor: { type: Boolean, default: false }
-  },
-  isAdmin: { type: Boolean, default: false },
-  apiKey: String,
-  createdAt: { type: Date, default: Date.now },
-  lastLogin: Date,
-  active: { type: Boolean, default: true }
-});
-
-const tradeSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  fromCoin: { type: String, required: true },
-  toCoin: { type: String, required: true },
-  amount: { type: Number, required: true },
-  rate: { type: Number, required: true },
-  profit: { type: Number, required: true },
-  status: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },
-  createdAt: { type: Date, default: Date.now }
-});
-
-const transactionSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['deposit', 'withdrawal', 'trade'], required: true },
-  coin: { type: String, required: true },
-  amount: { type: Number, required: true },
-  address: String,
-  txHash: String,
-  status: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },
-  createdAt: { type: Date, default: Date.now }
-});
-
-const supportTicketSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  email: { type: String, required: true },
-  subject: { type: String, required: true },
-  message: { type: String, required: true },
-  attachments: [String],
-  status: { type: String, enum: ['open', 'in_progress', 'resolved'], default: 'open' },
-  responses: [{
-    message: String,
-    fromAdmin: Boolean,
-    createdAt: { type: Date, default: Date.now }
-  }],
-  createdAt: { type: Date, default: Date.now }
-});
-
-const adminLogSchema = new mongoose.Schema({
-  adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  action: { type: String, required: true },
-  target: String,
-  details: Object,
-  createdAt: { type: Date, default: Date.now }
-});
-
-const coinPriceSchema = new mongoose.Schema({
-  coin: { type: String, required: true, unique: true },
-  price: { type: Number, required: true },
-  lastUpdated: { type: Date, default: Date.now }
 });
 
 // Models
-const User = mongoose.model('User', userSchema);
-const Trade = mongoose.model('Trade', tradeSchema);
-const Transaction = mongoose.model('Transaction', transactionSchema);
-const SupportTicket = mongoose.model('SupportTicket', supportTicketSchema);
-const AdminLog = mongoose.model('AdminLog', adminLogSchema);
-const CoinPrice = mongoose.model('CoinPrice', coinPriceSchema);
+const User = require('./models/User')(mongoose);
+const Trade = require('./models/Trade')(mongoose);
+const Transaction = require('./models/Transaction')(mongoose);
+const SupportTicket = require('./models/SupportTicket')(mongoose);
+const KYC = require('./models/KYC')(mongoose);
+const Admin = require('./models/Admin')(mongoose);
+const ActivityLog = require('./models/ActivityLog')(mongoose);
+const ArbitrageOpportunity = require('./models/ArbitrageOpportunity')(mongoose);
 
-// Helper functions
-const generateApiKey = () => {
-  return require('crypto').randomBytes(32).toString('hex');
+// File upload configuration
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/');
+  },
+  filename: (req, file, cb) => {
+    cb(null, `${Date.now()}-${file.originalname}`);
+  }
+});
+const upload = multer({ storage });
+
+// Utility functions
+const generateAuthToken = (userId) => {
+  return jwt.sign({ id: userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 };
 
-const sendEmail = async (to, subject, text, html) => {
+const verifyToken = (token) => {
+  return jwt.verify(token, JWT_SECRET);
+};
+
+const protect = async (req, res, next) => {
+  let token;
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    token = req.headers.authorization.split(' ')[1];
+  } else if (req.cookies?.token) {
+    token = req.cookies.token;
+  }
+
+  if (!token) {
+    return res.status(401).json({ success: false, message: 'Not authorized, no token' });
+  }
+
   try {
-    await transporter.sendMail({
-      from: '"Crypto Trading Market" <support@cryptotradingmarket.com>',
-      to,
-      subject,
-      text,
-      html
+    const decoded = verifyToken(token);
+    const user = await User.findById(decoded.id).select('-password');
+    
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Not authorized, user not found' });
+    }
+
+    req.user = user;
+    next();
+  } catch (err) {
+    console.error(err);
+    return res.status(401).json({ success: false, message: 'Not authorized, token failed' });
+  }
+};
+
+const adminProtect = async (req, res, next) => {
+  let token;
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    token = req.headers.authorization.split(' ')[1];
+  }
+
+  if (!token) {
+    return res.status(401).json({ success: false, message: 'Not authorized, no token' });
+  }
+
+  try {
+    const decoded = verifyToken(token);
+    const admin = await Admin.findById(decoded.id).select('-password');
+    
+    if (!admin) {
+      return res.status(401).json({ success: false, message: 'Not authorized, admin not found' });
+    }
+
+    req.admin = admin;
+    next();
+  } catch (err) {
+    console.error(err);
+    return res.status(401).json({ success: false, message: 'Not authorized, token failed' });
+  }
+};
+
+const logActivity = async (userId, activityType, details) => {
+  try {
+    await ActivityLog.create({
+      user: userId,
+      activityType,
+      details,
+      ipAddress: 'req.ip' // In real app, you'd get this from req.ip
     });
-    return true;
-  } catch (error) {
-    console.error('Email sending error:', error);
-    return false;
+  } catch (err) {
+    console.error('Error logging activity:', err);
   }
 };
 
-const authenticate = async (req, res, next) => {
-  try {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Authentication required' });
-
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await User.findById(decoded.userId);
-    if (!user) return res.status(401).json({ error: 'User not found' });
-
-    req.user = user;
-    next();
-  } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
-};
-
-const authenticateAdmin = async (req, res, next) => {
-  try {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Authentication required' });
-
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await User.findById(decoded.userId);
-    if (!user || !user.isAdmin) return res.status(403).json({ error: 'Admin access required' });
-
-    req.user = user;
-    next();
-  } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
-};
-
-// Initialize WebSocket server
+// WebSocket Server
 const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
 const wss = new WebSocket.Server({ server });
 
-// WebSocket connection handler
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
   console.log('New WebSocket connection');
-  
+
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
       
-      if (data.type === 'auth') {
+      if (data.type === 'authenticate') {
         try {
-          const decoded = jwt.verify(data.token, JWT_SECRET);
-          const user = await User.findById(decoded.userId);
-          if (user) {
-            ws.userId = user._id;
-            ws.isAdmin = user.isAdmin;
-            ws.send(JSON.stringify({ type: 'auth', status: 'success' }));
+          const decoded = verifyToken(data.token);
+          
+          if (data.userType === 'user') {
+            const user = await User.findById(decoded.id);
+            if (user) {
+              ws.userId = user._id;
+              ws.userType = 'user';
+              ws.send(JSON.stringify({ type: 'authentication', success: true }));
+              return;
+            }
+          } else if (data.userType === 'admin') {
+            const admin = await Admin.findById(decoded.id);
+            if (admin) {
+              ws.userId = admin._id;
+              ws.userType = 'admin';
+              ws.send(JSON.stringify({ type: 'authentication', success: true }));
+              return;
+            }
           }
-        } catch (error) {
-          ws.send(JSON.stringify({ type: 'auth', status: 'failed', error: 'Invalid token' }));
+          
+          ws.send(JSON.stringify({ type: 'authentication', success: false, message: 'Invalid token' }));
+        } catch (err) {
+          ws.send(JSON.stringify({ type: 'authentication', success: false, message: 'Invalid token' }));
         }
       }
-    } catch (error) {
-      console.error('WebSocket message error:', error);
+    } catch (err) {
+      console.error('WebSocket message error:', err);
     }
   });
-  
+
   ws.on('close', () => {
     console.log('WebSocket connection closed');
   });
 });
 
-// Broadcast function for WebSocket
-const broadcast = (data, userId = null, isAdmin = false) => {
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      if (userId && client.userId && client.userId.toString() === userId.toString()) {
-        client.send(JSON.stringify(data));
-      } else if (isAdmin && client.isAdmin) {
-        client.send(JSON.stringify(data));
-      } else if (!userId && !isAdmin) {
-        client.send(JSON.stringify(data));
-      }
+const broadcastToUser = (userId, message) => {
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN && client.userId && client.userId.toString() === userId.toString() && client.userType === 'user') {
+      client.send(JSON.stringify(message));
     }
   });
 };
 
-// File upload configuration
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, 'uploads');
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
+const broadcastToAdmins = (message) => {
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN && client.userType === 'admin') {
+      client.send(JSON.stringify(message));
     }
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
+  });
+};
 
-const upload = multer({ 
-  storage,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
-});
-
-// API Routes
+// Routes
 
 // Auth Routes
 app.post('/api/v1/auth/signup', async (req, res) => {
   try {
     const { firstName, lastName, email, password, country, currency } = req.body;
-    
-    // Validate input
-    if (!firstName || !lastName || !email || !password || !country) {
-      return res.status(400).json({ error: 'All fields are required' });
-    }
-    
+
     // Check if user exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      return res.status(400).json({ error: 'Email already in use' });
+      return res.status(400).json({ success: false, message: 'User already exists' });
     }
-    
+
     // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-    
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
     // Create user
-    const user = new User({
+    const user = await User.create({
       firstName,
       lastName,
       email,
       password: hashedPassword,
       country,
-      currency: currency || 'USD',
-      apiKey: generateApiKey()
+      currency,
+      balances: {
+        BTC: 0,
+        ETH: 0,
+        USDT: 0,
+        BNB: 0,
+        XRP: 0
+      }
     });
-    
-    await user.save();
-    
+
     // Generate token
-    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
-    
+    const token = generateAuthToken(user._id);
+
+    // Log activity
+    await logActivity(user._id, 'signup', { method: 'email' });
+
     // Send welcome email
-    await sendEmail(
-      email,
-      'Welcome to Crypto Trading Market',
-      `Hi ${firstName},\n\nWelcome to Crypto Trading Market! Your account has been successfully created.`,
-      `<h1>Welcome to Crypto Trading Market!</h1><p>Hi ${firstName},</p><p>Your account has been successfully created.</p>`
-    );
-    
-    res.status(201).json({ 
+    try {
+      await emailTransporter.sendMail({
+        from: '"Crypto Trading Market" <support@cryptotradingmarket.com>',
+        to: email,
+        subject: 'Welcome to Crypto Trading Market',
+        html: `<h1>Welcome ${firstName}!</h1><p>Your account has been successfully created.</p>`
+      });
+    } catch (emailErr) {
+      console.error('Failed to send welcome email:', emailErr);
+    }
+
+    res.status(201).json({
+      success: true,
       token,
       user: {
         id: user._id,
         firstName: user.firstName,
         lastName: user.lastName,
         email: user.email,
-        balance: user.balance,
-        kycStatus: user.kycStatus,
-        settings: user.settings
+        country: user.country,
+        currency: user.currency,
+        balances: user.balances,
+        createdAt: user.createdAt
       }
     });
-  } catch (error) {
-    console.error('Signup error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 app.post('/api/v1/auth/wallet-signup', async (req, res) => {
   try {
-    const { walletAddress, signature, firstName, lastName, country, currency } = req.body;
-    
+    const { walletAddress, signature, firstName, lastName, email, country, currency } = req.body;
+
+    // Verify signature
+    // In a real app, you'd verify the signature against the wallet address
+    // This is a simplified version
     if (!walletAddress || !signature) {
-      return res.status(400).json({ error: 'Wallet address and signature are required' });
+      return res.status(400).json({ success: false, message: 'Wallet address and signature are required' });
     }
-    
-    // Verify signature (simplified for example)
-    // In production, you would verify the signature matches the wallet address
-    
+
     // Check if wallet already exists
     const existingUser = await User.findOne({ walletAddress });
     if (existingUser) {
-      return res.status(400).json({ error: 'Wallet already registered' });
+      return res.status(400).json({ success: false, message: 'Wallet already registered' });
     }
-    
-    // Create user
-    const user = new User({
-      firstName: firstName || 'Wallet',
-      lastName: lastName || 'User',
-      walletAddress,
-      country: country || 'Unknown',
-      currency: currency || 'USD',
-      apiKey: generateApiKey()
-    });
-    
-    await user.save();
-    
-    // Generate token
-    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
-    
-    res.status(201).json({ 
-      token,
-      user: {
-        id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        walletAddress: user.walletAddress,
-        balance: user.balance,
-        kycStatus: user.kycStatus,
-        settings: user.settings
-      }
-    });
-  } catch (error) {
-    console.error('Wallet signup error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
 
-app.post('/api/v1/auth/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
-    }
-    
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-    
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-    
-    // Update last login
-    user.lastLogin = new Date();
-    await user.save();
-    
+    // Create user
+    const user = await User.create({
+      firstName,
+      lastName,
+      email,
+      walletAddress,
+      country,
+      currency,
+      balances: {
+        BTC: 0,
+        ETH: 0,
+        USDT: 0,
+        BNB: 0,
+        XRP: 0
+      },
+      isWalletUser: true
+    });
+
     // Generate token
-    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
-    
-    res.json({ 
+    const token = generateAuthToken(user._id);
+
+    // Log activity
+    await logActivity(user._id, 'signup', { method: 'wallet', walletAddress });
+
+    res.status(201).json({
+      success: true,
       token,
       user: {
         id: user._id,
@@ -423,800 +345,1042 @@ app.post('/api/v1/auth/login', async (req, res) => {
         lastName: user.lastName,
         email: user.email,
         walletAddress: user.walletAddress,
-        balance: user.balance,
-        kycStatus: user.kycStatus,
-        settings: user.settings,
-        isAdmin: user.isAdmin
+        country: user.country,
+        currency: user.currency,
+        balances: user.balances,
+        createdAt: user.createdAt,
+        isWalletUser: true
       }
     });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.post('/api/v1/auth/login', async (req, res) => {
+  try {
+    const { email, password, rememberMe } = req.body;
+
+    // Check if user exists
+    const user = await User.findOne({ email }).select('+password');
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    }
+
+    // Check password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    }
+
+    // Generate token
+    const token = generateAuthToken(user._id);
+
+    // Log activity
+    await logActivity(user._id, 'login', { method: 'email' });
+
+    // Prepare user data to return
+    const userData = {
+      id: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      walletAddress: user.walletAddress,
+      country: user.country,
+      currency: user.currency,
+      balances: user.balances,
+      createdAt: user.createdAt,
+      isWalletUser: user.isWalletUser
+    };
+
+    res.status(200).json({
+      success: true,
+      token,
+      user: userData
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 app.post('/api/v1/auth/wallet-login', async (req, res) => {
   try {
     const { walletAddress, signature } = req.body;
-    
+
+    // Verify signature
+    // In a real app, you'd verify the signature against the wallet address
+    // This is a simplified version
     if (!walletAddress || !signature) {
-      return res.status(400).json({ error: 'Wallet address and signature are required' });
+      return res.status(400).json({ success: false, message: 'Wallet address and signature are required' });
     }
-    
-    // Verify signature (simplified for example)
-    // In production, you would verify the signature matches the wallet address
-    
+
+    // Check if wallet exists
     const user = await User.findOne({ walletAddress });
     if (!user) {
-      return res.status(401).json({ error: 'Wallet not registered' });
+      return res.status(401).json({ success: false, message: 'Wallet not registered' });
     }
-    
-    // Update last login
-    user.lastLogin = new Date();
-    await user.save();
-    
+
     // Generate token
-    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
-    
-    res.json({ 
+    const token = generateAuthToken(user._id);
+
+    // Log activity
+    await logActivity(user._id, 'login', { method: 'wallet', walletAddress });
+
+    // Prepare user data to return
+    const userData = {
+      id: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      walletAddress: user.walletAddress,
+      country: user.country,
+      currency: user.currency,
+      balances: user.balances,
+      createdAt: user.createdAt,
+      isWalletUser: true
+    };
+
+    res.status(200).json({
+      success: true,
       token,
-      user: {
-        id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        walletAddress: user.walletAddress,
-        balance: user.balance,
-        kycStatus: user.kycStatus,
-        settings: user.settings,
-        isAdmin: user.isAdmin
-      }
+      user: userData
     });
-  } catch (error) {
-    console.error('Wallet login error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 app.post('/api/v1/auth/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
-    
-    if (!email) {
-      return res.status(400).json({ error: 'Email is required' });
-    }
-    
+
     const user = await User.findOne({ email });
     if (!user) {
-      // For security, don't reveal if email exists
-      return res.json({ message: 'If an account exists with this email, a password reset link has been sent' });
+      // For security, don't reveal if email doesn't exist
+      return res.status(200).json({ 
+        success: true, 
+        message: 'If your email is registered, you will receive a password reset link' 
+      });
     }
+
+    // Generate reset token
+    const resetToken = crypto.randomBytes(20).toString('hex');
+    const resetTokenExpiry = Date.now() + 3600000; // 1 hour from now
+
+    user.resetPasswordToken = resetToken;
+    user.resetPasswordExpires = resetTokenExpiry;
+    await user.save();
+
+    // Send email
+    const resetUrl = `https://website-xi-ten-52.vercel.app/reset-password?token=${resetToken}`;
     
-    // Generate reset token (expires in 1 hour)
-    const resetToken = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '1h' });
-    
-    // Send reset email
-    const resetLink = `${FRONTEND_URL}/reset-password?token=${resetToken}`;
-    const emailSent = await sendEmail(
-      email,
-      'Password Reset Request',
-      `You requested a password reset. Click this link to reset your password: ${resetLink}`,
-      `<h1>Password Reset Request</h1><p>Click <a href="${resetLink}">here</a> to reset your password. This link expires in 1 hour.</p>`
-    );
-    
-    if (!emailSent) {
-      return res.status(500).json({ error: 'Failed to send reset email' });
+    try {
+      await emailTransporter.sendMail({
+        from: '"Crypto Trading Market" <support@cryptotradingmarket.com>',
+        to: user.email,
+        subject: 'Password Reset Request',
+        html: `
+          <p>You requested a password reset for your Crypto Trading Market account.</p>
+          <p>Click this link to reset your password:</p>
+          <a href="${resetUrl}">${resetUrl}</a>
+          <p>This link will expire in 1 hour.</p>
+          <p>If you didn't request this, please ignore this email.</p>
+        `
+      });
+
+      res.status(200).json({ 
+        success: true, 
+        message: 'If your email is registered, you will receive a password reset link' 
+      });
+    } catch (emailErr) {
+      console.error('Failed to send password reset email:', emailErr);
+      res.status(500).json({ success: false, message: 'Failed to send password reset email' });
     }
-    
-    res.json({ message: 'If an account exists with this email, a password reset link has been sent' });
-  } catch (error) {
-    console.error('Forgot password error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 app.post('/api/v1/auth/reset-password', async (req, res) => {
   try {
     const { token, newPassword } = req.body;
-    
-    if (!token || !newPassword) {
-      return res.status(400).json({ error: 'Token and new password are required' });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await User.findById(decoded.userId);
+
+    const user = await User.findOne({ 
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: Date.now() }
+    });
+
     if (!user) {
-      return res.status(400).json({ error: 'Invalid token' });
+      return res.status(400).json({ success: false, message: 'Invalid or expired token' });
     }
-    
+
     // Hash new password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
     user.password = hashedPassword;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
     await user.save();
-    
-    res.json({ message: 'Password reset successfully' });
-  } catch (error) {
-    if (error.name === 'TokenExpiredError') {
-      return res.status(400).json({ error: 'Reset token has expired' });
+
+    // Log activity
+    await logActivity(user._id, 'password_reset', {});
+
+    // Send confirmation email
+    try {
+      await emailTransporter.sendMail({
+        from: '"Crypto Trading Market" <support@cryptotradingmarket.com>',
+        to: user.email,
+        subject: 'Password Reset Confirmation',
+        html: `<p>Your Crypto Trading Market password has been successfully reset.</p>`
+      });
+    } catch (emailErr) {
+      console.error('Failed to send password reset confirmation email:', emailErr);
     }
-    console.error('Reset password error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(200).json({ success: true, message: 'Password reset successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.post('/api/v1/auth/logout', authenticate, async (req, res) => {
+app.post('/api/v1/auth/logout', protect, async (req, res) => {
   try {
     // In a real app, you might want to invalidate the token on the server side
-    res.json({ message: 'Logged out successfully' });
-  } catch (error) {
-    console.error('Logout error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    // For now, we'll just respond successfully since JWT is stateless
+    
+    // Log activity
+    await logActivity(req.user._id, 'logout', {});
+    
+    res.status(200).json({ success: true, message: 'Logged out successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.get('/api/v1/auth/me', authenticate, async (req, res) => {
+app.get('/api/v1/auth/check', protect, async (req, res) => {
   try {
-    res.json({
-      user: {
-        id: req.user._id,
-        firstName: req.user.firstName,
-        lastName: req.user.lastName,
-        email: req.user.email,
-        walletAddress: req.user.walletAddress,
-        balance: req.user.balance,
-        kycStatus: req.user.kycStatus,
-        settings: req.user.settings,
-        isAdmin: req.user.isAdmin,
-        createdAt: req.user.createdAt
-      }
+    res.status(200).json({ 
+      success: true, 
+      user: req.user 
     });
-  } catch (error) {
-    console.error('Get user error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // User Routes
-app.get('/api/v1/users/me', authenticate, async (req, res) => {
+app.get('/api/v1/users/me', protect, async (req, res) => {
   try {
-    res.json({
-      user: {
-        id: req.user._id,
-        firstName: req.user.firstName,
-        lastName: req.user.lastName,
-        email: req.user.email,
-        walletAddress: req.user.walletAddress,
-        balance: req.user.balance,
-        kycStatus: req.user.kycStatus,
-        settings: req.user.settings,
-        isAdmin: req.user.isAdmin,
-        createdAt: req.user.createdAt
-      }
-    });
-  } catch (error) {
-    console.error('Get user error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    const user = await User.findById(req.user._id).select('-password');
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    res.status(200).json({ success: true, user });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.patch('/api/v1/users/me', authenticate, async (req, res) => {
+app.patch('/api/v1/users/update-profile', protect, async (req, res) => {
   try {
     const { firstName, lastName, country, currency } = req.body;
-    
-    if (firstName) req.user.firstName = firstName;
-    if (lastName) req.user.lastName = lastName;
-    if (country) req.user.country = country;
-    if (currency) req.user.currency = currency;
-    
-    await req.user.save();
-    
-    res.json({
-      user: {
-        id: req.user._id,
-        firstName: req.user.firstName,
-        lastName: req.user.lastName,
-        email: req.user.email,
-        walletAddress: req.user.walletAddress,
-        balance: req.user.balance,
-        kycStatus: req.user.kycStatus,
-        settings: req.user.settings,
-        isAdmin: req.user.isAdmin,
-        createdAt: req.user.createdAt
-      }
-    });
-  } catch (error) {
-    console.error('Update user error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
 
-app.patch('/api/v1/users/settings', authenticate, async (req, res) => {
-  try {
-    const { theme, language, notifications, twoFactor } = req.body;
-    
-    if (theme) req.user.settings.theme = theme;
-    if (language) req.user.settings.language = language;
-    if (notifications !== undefined) req.user.settings.notifications = notifications;
-    if (twoFactor !== undefined) req.user.settings.twoFactor = twoFactor;
-    
-    await req.user.save();
-    
-    res.json({
-      settings: req.user.settings
-    });
-  } catch (error) {
-    console.error('Update settings error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { firstName, lastName, country, currency },
+      { new: true, runValidators: true }
+    ).select('-password');
 
-app.post('/api/v1/users/kyc', authenticate, upload.fields([
-  { name: 'idFront', maxCount: 1 },
-  { name: 'idBack', maxCount: 1 },
-  { name: 'selfie', maxCount: 1 }
-]), async (req, res) => {
-  try {
-    const files = req.files;
-    
-    if (!files || !files.idFront || !files.idBack || !files.selfie) {
-      return res.status(400).json({ error: 'All documents are required' });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
-    
-    req.user.kycStatus = 'pending';
-    req.user.kycDocuments = {
-      idFront: files.idFront[0].path,
-      idBack: files.idBack[0].path,
-      selfie: files.selfie[0].path
-    };
-    
-    await req.user.save();
-    
-    // Notify admin about new KYC submission
-    broadcast({
-      type: 'KYC_SUBMITTED',
-      userId: req.user._id,
-      userEmail: req.user.email
-    }, null, true);
-    
-    res.json({ 
-      message: 'KYC documents submitted for verification',
-      kycStatus: req.user.kycStatus
-    });
-  } catch (error) {
-    console.error('KYC submission error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    // Log activity
+    await logActivity(user._id, 'profile_update', { fields: Object.keys(req.body) });
+
+    res.status(200).json({ success: true, user });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.patch('/api/v1/users/password', authenticate, async (req, res) => {
+app.patch('/api/v1/auth/update-password', protect, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
-    
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ error: 'Current and new password are required' });
-    }
-    
-    const isMatch = await bcrypt.compare(currentPassword, req.user.password);
+
+    // Get user with password
+    const user = await User.findById(req.user._id).select('+password');
+
+    // Check current password
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
     if (!isMatch) {
-      return res.status(401).json({ error: 'Current password is incorrect' });
+      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
     }
-    
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    req.user.password = hashedPassword;
-    await req.user.save();
-    
-    res.json({ message: 'Password updated successfully' });
-  } catch (error) {
-    console.error('Password update error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    user.password = hashedPassword;
+    await user.save();
+
+    // Log activity
+    await logActivity(user._id, 'password_change', {});
+
+    // Send email notification
+    try {
+      await emailTransporter.sendMail({
+        from: '"Crypto Trading Market" <support@cryptotradingmarket.com>',
+        to: user.email,
+        subject: 'Password Changed',
+        html: `<p>Your Crypto Trading Market password was recently changed. If you didn't make this change, please contact support immediately.</p>`
+      });
+    } catch (emailErr) {
+      console.error('Failed to send password change notification:', emailErr);
+    }
+
+    res.status(200).json({ success: true, message: 'Password updated successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.post('/api/v1/users/generate-api-key', authenticate, async (req, res) => {
+// KYC Routes
+app.post('/api/v1/users/kyc', protect, upload.array('documents', 3), async (req, res) => {
   try {
-    req.user.apiKey = generateApiKey();
-    await req.user.save();
-    
-    res.json({ apiKey: req.user.apiKey });
-  } catch (error) {
-    console.error('API key generation error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    const { documentType, documentNumber } = req.body;
+    const files = req.files;
+
+    if (!documentType || !documentNumber || !files || files.length < 3) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Document type, number, and all 3 files (front, back, selfie) are required' 
+      });
+    }
+
+    // Check if user already has a pending or approved KYC
+    const existingKYC = await KYC.findOne({ user: req.user._id, status: { $in: ['pending', 'approved'] } });
+    if (existingKYC) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'You already have a KYC submission that is pending or approved' 
+      });
+    }
+
+    // Create KYC record
+    const kyc = await KYC.create({
+      user: req.user._id,
+      documentType,
+      documentNumber,
+      documentFront: files[0].path,
+      documentBack: files[1].path,
+      selfie: files[2].path,
+      status: 'pending'
+    });
+
+    // Update user's KYC status
+    await User.findByIdAndUpdate(req.user._id, { kycStatus: 'pending' });
+
+    // Log activity
+    await logActivity(req.user._id, 'kyc_submission', {});
+
+    // Notify admins
+    broadcastToAdmins({
+      type: 'NEW_KYC_SUBMISSION',
+      message: 'New KYC submission received',
+      kycId: kyc._id,
+      userId: req.user._id,
+      userName: `${req.user.firstName} ${req.user.lastName}`
+    });
+
+    res.status(201).json({ success: true, kyc });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.post('/api/v1/users/export-data', authenticate, async (req, res) => {
+app.get('/api/v1/users/kyc-status', protect, async (req, res) => {
   try {
-    // In a real app, you would generate a comprehensive data export
-    const userData = {
-      profile: {
-        firstName: req.user.firstName,
-        lastName: req.user.lastName,
-        email: req.user.email,
-        walletAddress: req.user.walletAddress,
-        country: req.user.country,
-        currency: req.user.currency,
-        createdAt: req.user.createdAt
-      },
-      balance: req.user.balance,
-      settings: req.user.settings,
-      kycStatus: req.user.kycStatus
-    };
-    
-    // Send email with data (in production, you might generate a downloadable file)
-    const emailSent = await sendEmail(
-      req.user.email,
-      'Your Data Export from Crypto Trading Market',
-      `Here's your exported data:\n\n${JSON.stringify(userData, null, 2)}`,
-      `<h1>Your Data Export</h1><pre>${JSON.stringify(userData, null, 2)}</pre>`
-    );
-    
-    if (!emailSent) {
-      return res.status(500).json({ error: 'Failed to send data export email' });
-    }
-    
-    res.json({ message: 'Data export sent to your email' });
-  } catch (error) {
-    console.error('Data export error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+    const kyc = await KYC.findOne({ user: req.user._id }).sort({ createdAt: -1 });
 
-app.delete('/api/v1/users/delete-account', authenticate, async (req, res) => {
-  try {
-    const { password } = req.body;
-    
-    if (!password) {
-      return res.status(400).json({ error: 'Password is required' });
-    }
-    
-    const isMatch = await bcrypt.compare(password, req.user.password);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Password is incorrect' });
-    }
-    
-    // In production, you might want to anonymize data instead of deleting
-    await User.findByIdAndDelete(req.user._id);
-    
-    res.json({ message: 'Account deleted successfully' });
-  } catch (error) {
-    console.error('Account deletion error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(200).json({ 
+      success: true, 
+      status: kyc ? kyc.status : 'not_submitted',
+      details: kyc || null
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // Wallet Routes
-app.post('/api/v1/wallet/deposit-address', authenticate, async (req, res) => {
+app.get('/api/v1/wallet/balances', protect, async (req, res) => {
   try {
-    const { coin } = req.body;
+    const user = await User.findById(req.user._id).select('balances');
     
-    if (!coin) {
-      return res.status(400).json({ error: 'Coin is required' });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
-    
-    // In a real app, you would generate a unique deposit address for the user
-    // For this example, we'll return a mock address
-    const mockAddresses = {
-      BTC: '3FZbgi29cpjq2GjdwV8eyHuJJnkLtktZc5',
-      ETH: '0x71C7656EC7ab88b098defB751B7401B5f6d8976F',
-      BNB: 'bnb1qxy2kgdxgjryq2k8px5n4ces2m4q4u8x0p5u6q'
-    };
-    
-    const address = mockAddresses[coin] || `mock_${coin.toLowerCase()}_address_${req.user._id}`;
-    
-    // Create a deposit transaction record
-    const transaction = new Transaction({
-      userId: req.user._id,
-      type: 'deposit',
-      coin,
-      amount: 0, // Will be updated when deposit is detected
-      address,
-      status: 'pending'
-    });
-    
-    await transaction.save();
-    
-    res.json({ address });
-  } catch (error) {
-    console.error('Deposit address error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(200).json({ success: true, balances: user.balances });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.post('/api/v1/wallet/withdraw', authenticate, async (req, res) => {
+app.post('/api/v1/wallet/deposit-address', protect, async (req, res) => {
   try {
-    const { coin, amount, address } = req.body;
+    const { coin } = req.body;
     
-    if (!coin || !amount || !address) {
-      return res.status(400).json({ error: 'Coin, amount, and address are required' });
+    if (!['BTC', 'ETH', 'USDT', 'BNB', 'XRP'].includes(coin)) {
+      return res.status(400).json({ success: false, message: 'Invalid coin' });
     }
+
+    // In a real app, you'd generate or retrieve a deposit address from your wallet service
+    // For demo, we'll generate a random string
+    const depositAddress = `3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy_${Date.now()}`;
+    const depositMemo = coin === 'XRP' ? `MEMO_${req.user._id.toString().slice(-8)}` : undefined;
+
+    res.status(200).json({ 
+      success: true, 
+      address: depositAddress,
+      memo: depositMemo
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.post('/api/v1/wallet/withdraw', protect, async (req, res) => {
+  try {
+    const { coin, amount, address, memo } = req.body;
     
-    if (amount <= 0) {
-      return res.status(400).json({ error: 'Amount must be positive' });
+    if (!['BTC', 'ETH', 'USDT', 'BNB', 'XRP'].includes(coin)) {
+      return res.status(400).json({ success: false, message: 'Invalid coin' });
     }
+
+    if (isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid amount' });
+    }
+
+    if (!address) {
+      return res.status(400).json({ success: false, message: 'Address is required' });
+    }
+
+    // Get user with current balances
+    const user = await User.findById(req.user._id);
     
     // Check balance
-    if (req.user.balance[coin] < amount) {
-      return res.status(400).json({ error: 'Insufficient balance' });
+    if (user.balances[coin] < amount) {
+      return res.status(400).json({ success: false, message: 'Insufficient balance' });
     }
-    
-    // Deduct balance
-    req.user.balance[coin] -= amount;
-    await req.user.save();
-    
+
+    // Check minimum withdrawal amount
+    const minWithdrawal = {
+      BTC: 0.001,
+      ETH: 0.01,
+      USDT: 50,
+      BNB: 0.1,
+      XRP: 20
+    };
+
+    if (amount < minWithdrawal[coin]) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Minimum withdrawal amount for ${coin} is ${minWithdrawal[coin]}`
+      });
+    }
+
+    // Deduct from balance
+    user.balances[coin] = parseFloat((user.balances[coin] - amount).toFixed(8));
+    await user.save();
+
     // Create withdrawal transaction
-    const transaction = new Transaction({
-      userId: req.user._id,
+    const transaction = await Transaction.create({
+      user: user._id,
       type: 'withdrawal',
       coin,
       amount,
       address,
+      memo,
       status: 'pending'
     });
-    
-    await transaction.save();
-    
-    // Broadcast balance update
-    broadcast({
-      type: 'BALANCE_UPDATE',
-      userId: req.user._id,
-      balance: req.user.balance
-    }, req.user._id);
-    
-    res.json({ 
+
+    // Log activity
+    await logActivity(user._id, 'withdrawal_request', { coin, amount, address });
+
+    // Notify admins
+    broadcastToAdmins({
+      type: 'NEW_WITHDRAWAL',
+      message: 'New withdrawal request',
+      transactionId: transaction._id,
+      userId: user._id,
+      userName: `${user.firstName} ${user.lastName}`,
+      coin,
+      amount
+    });
+
+    // Notify user via WebSocket
+    broadcastToUser(user._id, {
+      type: 'WITHDRAWAL_REQUESTED',
       message: 'Withdrawal request submitted',
       transactionId: transaction._id,
-      balance: req.user.balance
+      coin,
+      amount
     });
-  } catch (error) {
-    console.error('Withdrawal error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(200).json({ 
+      success: true, 
+      message: 'Withdrawal request submitted',
+      transaction
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.get('/api/v1/wallet/transactions', authenticate, async (req, res) => {
+app.get('/api/v1/wallet/transactions', protect, async (req, res) => {
   try {
     const { type, coin, limit = 10, page = 1 } = req.query;
     
-    const query = { userId: req.user._id };
+    const query = { user: req.user._id };
     if (type) query.type = type;
     if (coin) query.coin = coin;
-    
-    const transactions = await Transaction.find(query)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-    
-    res.json({ transactions });
-  } catch (error) {
-    console.error('Get transactions error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    const options = {
+      limit: parseInt(limit),
+      skip: (parseInt(page) - 1) * parseInt(limit),
+      sort: { createdAt: -1 }
+    };
+
+    const transactions = await Transaction.find(query, null, options);
+    const total = await Transaction.countDocuments(query);
+
+    res.status(200).json({ 
+      success: true, 
+      transactions,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// Trade Routes (Arbitrage)
-app.get('/api/v1/arbitrage/opportunities', authenticate, async (req, res) => {
+// Trade Routes
+app.get('/api/v1/trades/market-data', async (req, res) => {
   try {
-    // In a real app, you would calculate actual arbitrage opportunities
-    // For this example, we'll return mock data
-    
-    const mockOpportunities = [
-      {
-        fromCoin: 'BTC',
-        toCoin: 'ETH',
-        rate: 18.5,
-        profit: 1.5
-      },
-      {
-        fromCoin: 'ETH',
-        toCoin: 'BNB',
-        rate: 3.2,
-        profit: 0.8
-      },
-      {
-        fromCoin: 'BTC',
-        toCoin: 'BNB',
-        rate: 60.2,
-        profit: 2.1
-      }
-    ];
-    
-    res.json({ opportunities: mockOpportunities });
-  } catch (error) {
-    console.error('Get arbitrage opportunities error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    // In a real app, you'd fetch this from a crypto API like CoinGecko or Binance
+    // For demo, we'll return static data
+    const marketData = {
+      BTC: { price: 50000, change24h: 2.5 },
+      ETH: { price: 3000, change24h: -1.2 },
+      USDT: { price: 1, change24h: 0 },
+      BNB: { price: 400, change24h: 3.7 },
+      XRP: { price: 0.5, change24h: 5.2 }
+    };
+
+    res.status(200).json({ success: true, marketData });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.post('/api/v1/arbitrage/execute', authenticate, async (req, res) => {
+app.post('/api/v1/trades/execute', protect, async (req, res) => {
   try {
     const { fromCoin, toCoin, amount } = req.body;
     
-    if (!fromCoin || !toCoin || !amount) {
-      return res.status(400).json({ error: 'From coin, to coin, and amount are required' });
+    if (!['BTC', 'ETH', 'USDT', 'BNB', 'XRP'].includes(fromCoin) || 
+        !['BTC', 'ETH', 'USDT', 'BNB', 'XRP'].includes(toCoin)) {
+      return res.status(400).json({ success: false, message: 'Invalid coin(s)' });
     }
-    
-    if (amount <= 0) {
-      return res.status(400).json({ error: 'Amount must be positive' });
+
+    if (fromCoin === toCoin) {
+      return res.status(400).json({ success: false, message: 'Cannot trade the same coin' });
     }
+
+    if (isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid amount' });
+    }
+
+    // Get user with current balances
+    const user = await User.findById(req.user._id);
     
     // Check balance
-    if (req.user.balance[fromCoin] < amount) {
-      return res.status(400).json({ error: 'Insufficient balance' });
+    if (user.balances[fromCoin] < amount) {
+      return res.status(400).json({ success: false, message: 'Insufficient balance' });
     }
-    
-    // In a real app, you would calculate the actual rate and profit
-    // For this example, we'll use mock values
-    const mockRates = {
-      'BTC-ETH': 18.5,
-      'ETH-BNB': 3.2,
-      'BTC-BNB': 60.2
+
+    // Get market prices (in a real app, this would be from an API)
+    const marketPrices = {
+      BTC: { price: 50000, fee: 0.001 },
+      ETH: { price: 3000, fee: 0.003 },
+      USDT: { price: 1, fee: 0.01 },
+      BNB: { price: 400, fee: 0.002 },
+      XRP: { price: 0.5, fee: 0.005 }
     };
-    
-    const rate = mockRates[`${fromCoin}-${toCoin}`] || 1;
-    const profit = Math.random() * 5; // Random profit between 0-5%
-    const receivedAmount = amount * rate * (1 + profit / 100);
-    
-    // Deduct from balance
-    req.user.balance[fromCoin] -= amount;
-    // Add to balance
-    req.user.balance[toCoin] += receivedAmount;
-    await req.user.save();
-    
+
+    // Calculate conversion
+    const fromValue = amount * marketPrices[fromCoin].price;
+    const toAmount = (fromValue * (1 - marketPrices[toCoin].fee)) / marketPrices[toCoin].price;
+
+    // Update balances
+    user.balances[fromCoin] = parseFloat((user.balances[fromCoin] - amount).toFixed(8));
+    user.balances[toCoin] = parseFloat((user.balances[toCoin] + toAmount).toFixed(8));
+    await user.save();
+
     // Create trade record
-    const trade = new Trade({
-      userId: req.user._id,
+    const trade = await Trade.create({
+      user: user._id,
       fromCoin,
       toCoin,
-      amount,
-      rate,
-      profit,
+      fromAmount: amount,
+      toAmount,
+      fee: marketPrices[toCoin].fee,
+      rate: toAmount / amount,
       status: 'completed'
     });
-    
-    await trade.save();
-    
-    // Create transaction record
-    const transaction = new Transaction({
-      userId: req.user._id,
-      type: 'trade',
-      coin: fromCoin,
-      amount: -amount,
-      status: 'completed'
+
+    // Log activity
+    await logActivity(user._id, 'trade_executed', { fromCoin, toCoin, amount, toAmount });
+
+    // Notify user via WebSocket
+    broadcastToUser(user._id, {
+      type: 'TRADE_EXECUTED',
+      message: 'Trade completed successfully',
+      tradeId: trade._id,
+      fromCoin,
+      toCoin,
+      fromAmount: amount,
+      toAmount
     });
-    
-    await transaction.save();
-    
-    const transaction2 = new Transaction({
-      userId: req.user._id,
-      type: 'trade',
-      coin: toCoin,
-      amount: receivedAmount,
-      status: 'completed'
-    });
-    
-    await transaction2.save();
-    
-    // Broadcast updates
-    broadcast({
-      type: 'BALANCE_UPDATE',
-      userId: req.user._id,
-      balance: req.user.balance
-    }, req.user._id);
-    
-    broadcast({
-      type: 'TRADE_UPDATE',
-      userId: req.user._id,
-      trade: {
-        id: trade._id,
-        fromCoin,
-        toCoin,
-        amount,
-        rate,
-        profit,
-        status: 'completed',
-        createdAt: trade.createdAt
-      }
-    }, req.user._id);
-    
-    res.json({ 
+
+    res.status(200).json({ 
+      success: true, 
       message: 'Trade executed successfully',
-      trade: {
-        id: trade._id,
-        fromCoin,
-        toCoin,
-        amount,
-        receivedAmount,
-        rate,
-        profit,
-        status: 'completed',
-        createdAt: trade.createdAt
-      },
-      balance: req.user.balance
+      trade,
+      newBalances: user.balances
     });
-  } catch (error) {
-    console.error('Trade execution error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.get('/api/v1/trades/history', authenticate, async (req, res) => {
+app.get('/api/v1/trades/history', protect, async (req, res) => {
   try {
     const { fromCoin, toCoin, limit = 10, page = 1 } = req.query;
     
-    const query = { userId: req.user._id };
+    const query = { user: req.user._id };
     if (fromCoin) query.fromCoin = fromCoin;
     if (toCoin) query.toCoin = toCoin;
+
+    const options = {
+      limit: parseInt(limit),
+      skip: (parseInt(page) - 1) * parseInt(limit),
+      sort: { createdAt: -1 }
+    };
+
+    const trades = await Trade.find(query, null, options);
+    const total = await Trade.countDocuments(query);
+
+    res.status(200).json({ 
+      success: true, 
+      trades,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Arbitrage Routes
+app.get('/api/v1/arbitrage/opportunities', protect, async (req, res) => {
+  try {
+    // In a real app, you'd calculate arbitrage opportunities from market data
+    // For demo, we'll return some static opportunities
+    const opportunities = [
+      {
+        id: 1,
+        pair: 'BTC/USDT',
+        exchange1: 'Binance',
+        exchange2: 'Coinbase',
+        buyPrice: 49500,
+        sellPrice: 50200,
+        profitPercentage: 1.4,
+        volume: 2500000
+      },
+      {
+        id: 2,
+        pair: 'ETH/USDT',
+        exchange1: 'Kraken',
+        exchange2: 'Binance',
+        buyPrice: 2950,
+        sellPrice: 3020,
+        profitPercentage: 2.3,
+        volume: 1800000
+      },
+      {
+        id: 3,
+        pair: 'BNB/BTC',
+        exchange1: 'Binance',
+        exchange2: 'Huobi',
+        buyPrice: 0.0078,
+        sellPrice: 0.0081,
+        profitPercentage: 3.8,
+        volume: 950000
+      }
+    ];
+
+    res.status(200).json({ success: true, opportunities });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.post('/api/v1/arbitrage/execute', protect, async (req, res) => {
+  try {
+    const { opportunityId, amount } = req.body;
     
-    const trades = await Trade.find(query)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+    if (isNaN(amount) || amount < 100) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Minimum arbitrage amount is $100 equivalent' 
+      });
+    }
+
+    // Get user with current balances
+    const user = await User.findById(req.user._id);
     
-    res.json({ trades });
-  } catch (error) {
-    console.error('Get trade history error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    // Check USDT balance (assuming arbitrage requires USDT)
+    if (user.balances.USDT < amount) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Insufficient USDT balance for arbitrage' 
+      });
+    }
+
+    // Get opportunity (in real app, this would be from DB or API)
+    const opportunity = {
+      id: 1,
+      pair: 'BTC/USDT',
+      exchange1: 'Binance',
+      exchange2: 'Coinbase',
+      buyPrice: 49500,
+      sellPrice: 50200,
+      profitPercentage: 1.4,
+      volume: 2500000
+    };
+
+    if (opportunityId != opportunity.id) {
+      return res.status(404).json({ success: false, message: 'Opportunity not found' });
+    }
+
+    // Calculate profit (simplified)
+    const profit = (amount * opportunity.profitPercentage) / 100;
+    const fee = profit * 0.2; // 20% platform fee
+    const userProfit = profit - fee;
+
+    // Update balances
+    user.balances.USDT = parseFloat((user.balances.USDT - amount).toFixed(2));
+    user.balances.USDT = parseFloat((user.balances.USDT + amount + userProfit).toFixed(2));
+    await user.save();
+
+    // Create arbitrage record
+    const arbitrage = await ArbitrageOpportunity.create({
+      user: user._id,
+      opportunityId,
+      pair: opportunity.pair,
+      amount,
+      profit: userProfit,
+      fee,
+      status: 'completed'
+    });
+
+    // Log activity
+    await logActivity(user._id, 'arbitrage_executed', { 
+      opportunityId, 
+      amount, 
+      profit: userProfit 
+    });
+
+    // Notify user via WebSocket
+    broadcastToUser(user._id, {
+      type: 'ARBITRAGE_COMPLETED',
+      message: 'Arbitrage trade completed',
+      arbitrageId: arbitrage._id,
+      amount,
+      profit: userProfit
+    });
+
+    res.status(200).json({ 
+      success: true, 
+      message: 'Arbitrage executed successfully',
+      arbitrage,
+      newBalances: user.balances
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/v1/arbitrage/history', protect, async (req, res) => {
+  try {
+    const { limit = 10, page = 1 } = req.query;
+    
+    const query = { user: req.user._id };
+
+    const options = {
+      limit: parseInt(limit),
+      skip: (parseInt(page) - 1) * parseInt(limit),
+      sort: { createdAt: -1 }
+    };
+
+    const arbitrages = await ArbitrageOpportunity.find(query, null, options);
+    const total = await ArbitrageOpportunity.countDocuments(query);
+
+    res.status(200).json({ 
+      success: true, 
+      arbitrages,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // Support Routes
-app.post('/api/v1/support/tickets', authenticate, upload.array('attachments', 3), async (req, res) => {
+app.post('/api/v1/support/tickets', protect, upload.array('attachments', 3), async (req, res) => {
   try {
     const { subject, message } = req.body;
-    const attachments = req.files?.map(file => file.path) || [];
-    
+    const attachments = req.files;
+
     if (!subject || !message) {
-      return res.status(400).json({ error: 'Subject and message are required' });
+      return res.status(400).json({ success: false, message: 'Subject and message are required' });
     }
-    
-    const ticket = new SupportTicket({
-      userId: req.user._id,
-      email: req.user.email,
+
+    // Create ticket
+    const ticket = await SupportTicket.create({
+      user: req.user._id,
       subject,
       message,
-      attachments,
+      attachments: attachments ? attachments.map(file => file.path) : [],
       status: 'open'
     });
-    
-    await ticket.save();
-    
-    // Notify admin about new ticket
-    broadcast({
-      type: 'NEW_TICKET',
+
+    // Log activity
+    await logActivity(req.user._id, 'support_ticket_created', { ticketId: ticket._id });
+
+    // Notify admins
+    broadcastToAdmins({
+      type: 'NEW_SUPPORT_TICKET',
+      message: 'New support ticket created',
       ticketId: ticket._id,
-      subject: ticket.subject,
-      userId: req.user._id
-    }, null, true);
-    
-    res.json({ 
-      message: 'Support ticket created successfully',
-      ticket: {
-        id: ticket._id,
-        subject: ticket.subject,
-        status: ticket.status,
-        createdAt: ticket.createdAt
-      }
+      userId: req.user._id,
+      userName: `${req.user.firstName} ${req.user.lastName}`,
+      subject
     });
-  } catch (error) {
-    console.error('Create ticket error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(201).json({ success: true, ticket });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.get('/api/v1/support/tickets', authenticate, async (req, res) => {
+app.get('/api/v1/support/tickets', protect, async (req, res) => {
   try {
     const { status, limit = 10, page = 1 } = req.query;
     
-    const query = { userId: req.user._id };
+    const query = { user: req.user._id };
     if (status) query.status = status;
-    
-    const tickets = await SupportTicket.find(query)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-    
-    res.json({ tickets });
-  } catch (error) {
-    console.error('Get tickets error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    const options = {
+      limit: parseInt(limit),
+      skip: (parseInt(page) - 1) * parseInt(limit),
+      sort: { createdAt: -1 }
+    };
+
+    const tickets = await SupportTicket.find(query, null, options);
+    const total = await SupportTicket.countDocuments(query);
+
+    res.status(200).json({ 
+      success: true, 
+      tickets,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.get('/api/v1/support/tickets/:id', authenticate, async (req, res) => {
+app.get('/api/v1/support/tickets/:id', protect, async (req, res) => {
   try {
     const ticket = await SupportTicket.findOne({
       _id: req.params.id,
-      userId: req.user._id
+      user: req.user._id
     });
-    
+
     if (!ticket) {
-      return res.status(404).json({ error: 'Ticket not found' });
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
-    
-    res.json({ ticket });
-  } catch (error) {
-    console.error('Get ticket error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(200).json({ success: true, ticket });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.post('/api/v1/support/tickets/:id/reply', authenticate, async (req, res) => {
+app.post('/api/v1/support/tickets/:id/reply', protect, upload.array('attachments', 3), async (req, res) => {
   try {
     const { message } = req.body;
-    
+    const attachments = req.files;
+
     if (!message) {
-      return res.status(400).json({ error: 'Message is required' });
+      return res.status(400).json({ success: false, message: 'Message is required' });
     }
-    
+
     const ticket = await SupportTicket.findOne({
       _id: req.params.id,
-      userId: req.user._id
+      user: req.user._id
     });
-    
+
     if (!ticket) {
-      return res.status(404).json({ error: 'Ticket not found' });
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
-    
-    ticket.responses.push({
+
+    if (ticket.status === 'closed') {
+      return res.status(400).json({ success: false, message: 'Cannot reply to closed ticket' });
+    }
+
+    const reply = {
+      from: 'user',
       message,
-      fromAdmin: false
-    });
-    
-    ticket.status = 'open'; // Reopen if closed
+      attachments: attachments ? attachments.map(file => file.path) : [],
+      createdAt: new Date()
+    };
+
+    ticket.replies.push(reply);
+    ticket.status = 'open'; // Re-open if it was pending
     await ticket.save();
-    
-    // Notify admin about ticket reply
-    broadcast({
-      type: 'TICKET_REPLY',
+
+    // Log activity
+    await logActivity(req.user._id, 'support_ticket_replied', { ticketId: ticket._id });
+
+    // Notify admins
+    broadcastToAdmins({
+      type: 'SUPPORT_TICKET_REPLY',
+      message: 'User replied to support ticket',
       ticketId: ticket._id,
-      userId: req.user._id
-    }, null, true);
-    
-    res.json({ 
-      message: 'Reply added successfully',
-      ticket: {
-        id: ticket._id,
-        status: ticket.status,
-        responses: ticket.responses
-      }
+      userId: req.user._id,
+      userName: `${req.user.firstName} ${req.user.lastName}`
     });
-  } catch (error) {
-    console.error('Ticket reply error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(200).json({ success: true, ticket });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 app.get('/api/v1/support/faqs', async (req, res) => {
   try {
-    // In a real app, you would fetch FAQs from database
-    // For this example, we'll return mock data
-    const mockFaqs = [
+    // In a real app, these would come from a database
+    const faqs = [
       {
+        id: 1,
         category: 'Account',
         question: 'How do I create an account?',
-        answer: 'Click on the Sign Up button and fill in your details.'
+        answer: 'Click on the "Sign Up" button and follow the instructions to create your account.'
       },
       {
+        id: 2,
         category: 'Account',
-        question: 'How do I reset my password?',
-        answer: 'Go to the Forgot Password page and follow the instructions.'
+        question: 'How do I verify my identity?',
+        answer: 'Go to your account settings and submit the required documents for KYC verification.'
       },
       {
+        id: 3,
         category: 'Trading',
-        question: 'How does arbitrage trading work?',
-        answer: 'Our platform identifies price differences across exchanges and executes trades to capture profits.'
+        question: 'What is the minimum trade amount?',
+        answer: 'The minimum trade amount is $10 equivalent in any supported cryptocurrency.'
       },
       {
-        category: 'Deposits',
+        id: 4,
+        category: 'Trading',
+        question: 'How do I execute an arbitrage trade?',
+        answer: 'Navigate to the arbitrage section, select an opportunity, and click "Execute Trade".'
+      },
+      {
+        id: 5,
+        category: 'Deposits & Withdrawals',
         question: 'How long do deposits take?',
-        answer: 'Deposits are usually processed within 1-3 network confirmations.'
+        answer: 'Deposits typically take 1-3 network confirmations before appearing in your account.'
+      },
+      {
+        id: 6,
+        category: 'Deposits & Withdrawals',
+        question: 'What are the withdrawal fees?',
+        answer: 'Withdrawal fees vary by cryptocurrency and are displayed before you confirm the withdrawal.'
       }
     ];
-    
-    res.json({ faqs: mockFaqs });
-  } catch (error) {
-    console.error('Get FAQs error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(200).json({ success: true, faqs });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Stats Routes
+app.get('/api/v1/stats', async (req, res) => {
+  try {
+    // In a real app, these would be calculated from database records
+    const stats = {
+      activeUsers: 12453,
+      totalTrades: 892456,
+      tradingVolume: 125000000,
+      arbitrageOpportunities: 342,
+      activeSupportTickets: 87
+    };
+
+    res.status(200).json({ success: true, stats });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
@@ -1224,80 +1388,106 @@ app.get('/api/v1/support/faqs', async (req, res) => {
 app.post('/api/v1/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
+
+    // Check if admin exists
+    const admin = await Admin.findOne({ email }).select('+password');
+    if (!admin) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
-    
-    const user = await User.findOne({ email, isAdmin: true });
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-    
-    const isMatch = await bcrypt.compare(password, user.password);
+
+    // Check password
+    const isMatch = await bcrypt.compare(password, admin.password);
     if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
-    
-    // Update last login
-    user.lastLogin = new Date();
-    await user.save();
-    
+
     // Generate token
-    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
-    
-    res.json({ 
+    const token = generateAuthToken(admin._id);
+
+    res.status(200).json({
+      success: true,
       token,
-      user: {
-        id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        isAdmin: user.isAdmin
+      admin: {
+        id: admin._id,
+        email: admin.email,
+        firstName: admin.firstName,
+        lastName: admin.lastName,
+        role: admin.role
       }
     });
-  } catch (error) {
-    console.error('Admin login error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.get('/api/v1/admin/dashboard-stats', authenticateAdmin, async (req, res) => {
+app.get('/api/v1/admin/dashboard-stats', adminProtect, async (req, res) => {
   try {
+    // Count users
     const totalUsers = await User.countDocuments();
-    const verifiedUsers = await User.countDocuments({ kycStatus: 'verified' });
-    const totalTrades = await Trade.countDocuments();
-    const totalVolume = await Trade.aggregate([
-      { $group: { _id: null, total: { $sum: '$amount' } } }
-    ]);
-    
-    // Recent activity
-    const recentUsers = await User.find()
-      .sort({ createdAt: -1 })
-      .limit(5);
-    
-    const recentTrades = await Trade.find()
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .populate('userId', 'firstName lastName email');
-    
-    res.json({
-      stats: {
-        totalUsers,
-        verifiedUsers,
-        totalTrades,
-        totalVolume: totalVolume[0]?.total || 0
-      },
-      recentUsers,
-      recentTrades
+    const newUsersToday = await User.countDocuments({
+      createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) }
     });
-  } catch (error) {
-    console.error('Get admin stats error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    // Count trades and volume
+    const totalTrades = await Trade.countDocuments();
+    const tradesToday = await Trade.countDocuments({
+      createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) }
+    });
+    const tradeVolumeToday = await Trade.aggregate([
+      { $match: { createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } } },
+      { $group: { _id: null, total: { $sum: { $multiply: ['$fromAmount', '$rate'] } } } }
+    ]);
+
+    // Count arbitrage
+    const totalArbitrage = await ArbitrageOpportunity.countDocuments();
+    const arbitrageToday = await ArbitrageOpportunity.countDocuments({
+      createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) }
+    });
+    const arbitrageProfitToday = await ArbitrageOpportunity.aggregate([
+      { $match: { createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } } },
+      { $group: { _id: null, total: { $sum: '$profit' } } }
+    ]);
+
+    // Support tickets
+    const openTickets = await SupportTicket.countDocuments({ status: 'open' });
+    const pendingTickets = await SupportTicket.countDocuments({ status: 'pending' });
+
+    // KYC
+    const pendingKYC = await KYC.countDocuments({ status: 'pending' });
+
+    const stats = {
+      users: {
+        total: totalUsers,
+        newToday: newUsersToday
+      },
+      trades: {
+        total: totalTrades,
+        today: tradesToday,
+        volumeToday: tradeVolumeToday[0]?.total || 0
+      },
+      arbitrage: {
+        total: totalArbitrage,
+        today: arbitrageToday,
+        profitToday: arbitrageProfitToday[0]?.total || 0
+      },
+      support: {
+        openTickets,
+        pendingTickets
+      },
+      kyc: {
+        pending: pendingKYC
+      }
+    };
+
+    res.status(200).json({ success: true, stats });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.get('/api/v1/admin/users', authenticateAdmin, async (req, res) => {
+app.get('/api/v1/admin/users', adminProtect, async (req, res) => {
   try {
     const { search, status, limit = 10, page = 1 } = req.query;
     
@@ -1310,440 +1500,813 @@ app.get('/api/v1/admin/users', authenticateAdmin, async (req, res) => {
         { walletAddress: { $regex: search, $options: 'i' } }
       ];
     }
-    if (status) query.kycStatus = status;
-    
-    const users = await User.find(query)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit))
-      .select('-password -apiKey');
-    
+    if (status) query.status = status;
+
+    const options = {
+      limit: parseInt(limit),
+      skip: (parseInt(page) - 1) * parseInt(limit),
+      sort: { createdAt: -1 }
+    };
+
+    const users = await User.find(query, '-password', options);
     const total = await User.countDocuments(query);
-    
-    res.json({ users, total });
-  } catch (error) {
-    console.error('Get users error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(200).json({ 
+      success: true, 
+      users,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.get('/api/v1/admin/users/:id', authenticateAdmin, async (req, res) => {
+app.get('/api/v1/admin/users/:id', adminProtect, async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select('-password -apiKey');
+    const user = await User.findById(req.params.id).select('-password');
+    
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
-    
-    // Get user's trades
-    const trades = await Trade.find({ userId: user._id })
-      .sort({ createdAt: -1 })
-      .limit(5);
-    
-    // Get user's transactions
-    const transactions = await Transaction.find({ userId: user._id })
-      .sort({ createdAt: -1 })
-      .limit(5);
-    
-    res.json({ user, trades, transactions });
-  } catch (error) {
-    console.error('Get user details error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    // Get user's trades, transactions, etc.
+    const [trades, transactions, arbitrages, tickets] = await Promise.all([
+      Trade.find({ user: user._id }).sort({ createdAt: -1 }).limit(5),
+      Transaction.find({ user: user._id }).sort({ createdAt: -1 }).limit(5),
+      ArbitrageOpportunity.find({ user: user._id }).sort({ createdAt: -1 }).limit(5),
+      SupportTicket.find({ user: user._id }).sort({ createdAt: -1 }).limit(5)
+    ]);
+
+    const kyc = await KYC.findOne({ user: user._id }).sort({ createdAt: -1 });
+
+    res.status(200).json({ 
+      success: true, 
+      user,
+      kyc,
+      recentActivity: {
+        trades,
+        transactions,
+        arbitrages,
+        tickets
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.patch('/api/v1/admin/users/:id/status', authenticateAdmin, async (req, res) => {
+app.patch('/api/v1/admin/users/:id/status', adminProtect, async (req, res) => {
   try {
     const { status } = req.body;
     
-    if (!status) {
-      return res.status(400).json({ error: 'Status is required' });
+    if (!['active', 'suspended', 'banned'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid status' });
     }
-    
-    const user = await User.findById(req.params.id);
+
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { status },
+      { new: true }
+    ).select('-password');
+
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
-    
-    user.active = status === 'active';
-    await user.save();
-    
-    // Log admin action
-    const log = new AdminLog({
-      adminId: req.user._id,
-      action: 'UPDATE_USER_STATUS',
-      target: `User ${user._id}`,
-      details: { status: user.active ? 'active' : 'inactive' }
+
+    // Log admin activity
+    await ActivityLog.create({
+      admin: req.admin._id,
+      activityType: 'user_status_change',
+      details: {
+        userId: user._id,
+        previousStatus: user.status,
+        newStatus: status
+      },
+      ipAddress: 'req.ip' // In real app, you'd get this from req.ip
     });
-    
-    await log.save();
-    
-    res.json({ 
-      message: 'User status updated successfully',
-      user: {
-        id: user._id,
-        active: user.active
-      }
+
+    // Notify user via WebSocket if they're online
+    broadcastToUser(user._id, {
+      type: 'ACCOUNT_STATUS_CHANGED',
+      message: `Your account status has been changed to ${status}`,
+      status
     });
-  } catch (error) {
-    console.error('Update user status error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(200).json({ success: true, user });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.patch('/api/v1/admin/users/:id/kyc', authenticateAdmin, async (req, res) => {
-  try {
-    const { status } = req.body;
-    
-    if (!status || !['verified', 'rejected'].includes(status)) {
-      return res.status(400).json({ error: 'Valid status is required' });
-    }
-    
-    const user = await User.findById(req.params.id);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
-    user.kycStatus = status;
-    await user.save();
-    
-    // Log admin action
-    const log = new AdminLog({
-      adminId: req.user._id,
-      action: 'UPDATE_KYC_STATUS',
-      target: `User ${user._id}`,
-      details: { status }
-    });
-    
-    await log.save();
-    
-    // Notify user about KYC status update
-    broadcast({
-      type: 'KYC_STATUS_UPDATE',
-      status,
-      userId: user._id
-    }, user._id);
-    
-    res.json({ 
-      message: 'KYC status updated successfully',
-      user: {
-        id: user._id,
-        kycStatus: user.kycStatus
-      }
-    });
-  } catch (error) {
-    console.error('Update KYC status error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-app.get('/api/v1/admin/trades', authenticateAdmin, async (req, res) => {
+app.get('/api/v1/admin/trades', adminProtect, async (req, res) => {
   try {
     const { userId, fromCoin, toCoin, limit = 10, page = 1 } = req.query;
     
     const query = {};
-    if (userId) query.userId = userId;
+    if (userId) query.user = userId;
     if (fromCoin) query.fromCoin = fromCoin;
     if (toCoin) query.toCoin = toCoin;
-    
-    const trades = await Trade.find(query)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit))
-      .populate('userId', 'firstName lastName email');
-    
+
+    const options = {
+      limit: parseInt(limit),
+      skip: (parseInt(page) - 1) * parseInt(limit),
+      sort: { createdAt: -1 }
+    };
+
+    const trades = await Trade.find(query, null, options).populate('user', 'firstName lastName email');
     const total = await Trade.countDocuments(query);
-    
-    res.json({ trades, total });
-  } catch (error) {
-    console.error('Get trades error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(200).json({ 
+      success: true, 
+      trades,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.get('/api/v1/admin/transactions', authenticateAdmin, async (req, res) => {
+app.get('/api/v1/admin/transactions', adminProtect, async (req, res) => {
   try {
-    const { userId, type, coin, limit = 10, page = 1 } = req.query;
+    const { userId, type, coin, status, limit = 10, page = 1 } = req.query;
     
     const query = {};
-    if (userId) query.userId = userId;
+    if (userId) query.user = userId;
     if (type) query.type = type;
     if (coin) query.coin = coin;
-    
-    const transactions = await Transaction.find(query)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit))
-      .populate('userId', 'firstName lastName email');
-    
-    const total = await Transaction.countDocuments(query);
-    
-    res.json({ transactions, total });
-  } catch (error) {
-    console.error('Get transactions error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-app.get('/api/v1/admin/tickets', authenticateAdmin, async (req, res) => {
-  try {
-    const { status, userId, limit = 10, page = 1 } = req.query;
-    
-    const query = {};
     if (status) query.status = status;
-    if (userId) query.userId = userId;
-    
-    const tickets = await SupportTicket.find(query)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit))
-      .populate('userId', 'firstName lastName email');
-    
-    const total = await SupportTicket.countDocuments(query);
-    
-    res.json({ tickets, total });
-  } catch (error) {
-    console.error('Get tickets error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
 
-app.get('/api/v1/admin/tickets/:id', authenticateAdmin, async (req, res) => {
-  try {
-    const ticket = await SupportTicket.findById(req.params.id)
-      .populate('userId', 'firstName lastName email');
-    
-    if (!ticket) {
-      return res.status(404).json({ error: 'Ticket not found' });
-    }
-    
-    res.json({ ticket });
-  } catch (error) {
-    console.error('Get ticket error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+    const options = {
+      limit: parseInt(limit),
+      skip: (parseInt(page) - 1) * parseInt(limit),
+      sort: { createdAt: -1 }
+    };
 
-app.post('/api/v1/admin/tickets/:id/reply', authenticateAdmin, async (req, res) => {
-  try {
-    const { message } = req.body;
-    
-    if (!message) {
-      return res.status(400).json({ error: 'Message is required' });
-    }
-    
-    const ticket = await SupportTicket.findById(req.params.id);
-    if (!ticket) {
-      return res.status(404).json({ error: 'Ticket not found' });
-    }
-    
-    ticket.responses.push({
-      message,
-      fromAdmin: true
+    const transactions = await Transaction.find(query, null, options).populate('user', 'firstName lastName email');
+    const total = await Transaction.countDocuments(query);
+
+    res.status(200).json({ 
+      success: true, 
+      transactions,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
     });
-    
-    ticket.status = 'in_progress';
-    await ticket.save();
-    
-    // Notify user about ticket reply
-    broadcast({
-      type: 'TICKET_REPLY',
-      ticketId: ticket._id,
-      adminId: req.user._id
-    }, ticket.userId);
-    
-    res.json({ 
-      message: 'Reply added successfully',
-      ticket: {
-        id: ticket._id,
-        status: ticket.status,
-        responses: ticket.responses
-      }
-    });
-  } catch (error) {
-    console.error('Ticket reply error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.patch('/api/v1/admin/tickets/:id/status', authenticateAdmin, async (req, res) => {
+app.patch('/api/v1/admin/transactions/:id/status', adminProtect, async (req, res) => {
   try {
     const { status } = req.body;
     
-    if (!status || !['open', 'in_progress', 'resolved'].includes(status)) {
-      return res.status(400).json({ error: 'Valid status is required' });
+    if (!['pending', 'completed', 'failed', 'cancelled'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid status' });
     }
-    
-    const ticket = await SupportTicket.findById(req.params.id);
-    if (!ticket) {
-      return res.status(404).json({ error: 'Ticket not found' });
+
+    const transaction = await Transaction.findById(req.params.id).populate('user', 'firstName lastName email');
+    if (!transaction) {
+      return res.status(404).json({ success: false, message: 'Transaction not found' });
     }
-    
-    ticket.status = status;
-    await ticket.save();
-    
-    // Log admin action
-    const log = new AdminLog({
-      adminId: req.user._id,
-      action: 'UPDATE_TICKET_STATUS',
-      target: `Ticket ${ticket._id}`,
-      details: { status }
-    });
-    
-    await log.save();
-    
-    // Notify user about ticket status update
-    if (ticket.userId) {
-      broadcast({
-        type: 'TICKET_STATUS_UPDATE',
-        ticketId: ticket._id,
-        status
-      }, ticket.userId);
-    }
-    
-    res.json({ 
-      message: 'Ticket status updated successfully',
-      ticket: {
-        id: ticket._id,
-        status: ticket.status
+
+    // If completing a withdrawal, we've already deducted the amount during creation
+    // If cancelling a withdrawal, we need to refund the user
+    if (status === 'cancelled' && transaction.type === 'withdrawal' && transaction.status === 'pending') {
+      const user = await User.findById(transaction.user);
+      if (user) {
+        user.balances[transaction.coin] = parseFloat((user.balances[transaction.coin] + transaction.amount).toFixed(8));
+        await user.save();
+
+        // Notify user
+        broadcastToUser(user._id, {
+          type: 'WITHDRAWAL_CANCELLED',
+          message: 'Withdrawal cancelled and funds returned',
+          transactionId: transaction._id,
+          coin: transaction.coin,
+          amount: transaction.amount
+        });
       }
+    }
+
+    transaction.status = status;
+    await transaction.save();
+
+    // Log admin activity
+    await ActivityLog.create({
+      admin: req.admin._id,
+      activityType: 'transaction_status_change',
+      details: {
+        transactionId: transaction._id,
+        previousStatus: transaction.status,
+        newStatus: status
+      },
+      ipAddress: 'req.ip' // In real app, you'd get this from req.ip
     });
-  } catch (error) {
-    console.error('Update ticket status error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(200).json({ success: true, transaction });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.get('/api/v1/admin/kyc', authenticateAdmin, async (req, res) => {
+app.get('/api/v1/admin/arbitrage', adminProtect, async (req, res) => {
+  try {
+    const { userId, limit = 10, page = 1 } = req.query;
+    
+    const query = {};
+    if (userId) query.user = userId;
+
+    const options = {
+      limit: parseInt(limit),
+      skip: (parseInt(page) - 1) * parseInt(limit),
+      sort: { createdAt: -1 }
+    };
+
+    const arbitrages = await ArbitrageOpportunity.find(query, null, options).populate('user', 'firstName lastName email');
+    const total = await ArbitrageOpportunity.countDocuments(query);
+
+    res.status(200).json({ 
+      success: true, 
+      arbitrages,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/v1/admin/support/tickets', adminProtect, async (req, res) => {
+  try {
+    const { status, search, limit = 10, page = 1 } = req.query;
+    
+    const query = {};
+    if (status) query.status = status;
+    if (search) {
+      query.$or = [
+        { subject: { $regex: search, $options: 'i' } },
+        { message: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const options = {
+      limit: parseInt(limit),
+      skip: (parseInt(page) - 1) * parseInt(limit),
+      sort: { createdAt: -1 }
+    };
+
+    const tickets = await SupportTicket.find(query, null, options)
+      .populate('user', 'firstName lastName email');
+    const total = await SupportTicket.countDocuments(query);
+
+    res.status(200).json({ 
+      success: true, 
+      tickets,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/v1/admin/support/tickets/:id', adminProtect, async (req, res) => {
+  try {
+    const ticket = await SupportTicket.findById(req.params.id)
+      .populate('user', 'firstName lastName email');
+
+    if (!ticket) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+
+    res.status(200).json({ success: true, ticket });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.post('/api/v1/admin/support/tickets/:id/reply', adminProtect, upload.array('attachments', 3), async (req, res) => {
+  try {
+    const { message } = req.body;
+    const attachments = req.files;
+
+    if (!message) {
+      return res.status(400).json({ success: false, message: 'Message is required' });
+    }
+
+    const ticket = await SupportTicket.findById(req.params.id)
+      .populate('user', 'firstName lastName email');
+
+    if (!ticket) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+
+    const reply = {
+      from: 'admin',
+      adminId: req.admin._id,
+      adminName: `${req.admin.firstName} ${req.admin.lastName}`,
+      message,
+      attachments: attachments ? attachments.map(file => file.path) : [],
+      createdAt: new Date()
+    };
+
+    ticket.replies.push(reply);
+    ticket.status = 'pending'; // Set to pending for user response
+    await ticket.save();
+
+    // Log admin activity
+    await ActivityLog.create({
+      admin: req.admin._id,
+      activityType: 'support_ticket_replied',
+      details: {
+        ticketId: ticket._id,
+        userId: ticket.user._id
+      },
+      ipAddress: 'req.ip' // In real app, you'd get this from req.ip
+    });
+
+    // Notify user via WebSocket
+    if (ticket.user) {
+      broadcastToUser(ticket.user._id, {
+        type: 'SUPPORT_TICKET_REPLY',
+        message: 'Admin replied to your support ticket',
+        ticketId: ticket._id,
+        subject: ticket.subject
+      });
+    }
+
+    res.status(200).json({ success: true, ticket });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.patch('/api/v1/admin/support/tickets/:id/status', adminProtect, async (req, res) => {
+  try {
+    const { status } = req.body;
+    
+    if (!['open', 'pending', 'closed'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid status' });
+    }
+
+    const ticket = await SupportTicket.findByIdAndUpdate(
+      req.params.id,
+      { status },
+      { new: true }
+    ).populate('user', 'firstName lastName email');
+
+    if (!ticket) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+
+    // Log admin activity
+    await ActivityLog.create({
+      admin: req.admin._id,
+      activityType: 'support_ticket_status_change',
+      details: {
+        ticketId: ticket._id,
+        previousStatus: ticket.status,
+        newStatus: status,
+        userId: ticket.user?._id
+      },
+      ipAddress: 'req.ip' // In real app, you'd get this from req.ip
+    });
+
+    // Notify user if ticket is closed
+    if (status === 'closed' && ticket.user) {
+      broadcastToUser(ticket.user._id, {
+        type: 'SUPPORT_TICKET_CLOSED',
+        message: 'Your support ticket has been closed',
+        ticketId: ticket._id,
+        subject: ticket.subject
+      });
+    }
+
+    res.status(200).json({ success: true, ticket });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/v1/admin/kyc', adminProtect, async (req, res) => {
   try {
     const { status, limit = 10, page = 1 } = req.query;
     
     const query = {};
-    if (status) query.kycStatus = status;
-    else query.kycStatus = 'pending';
-    
-    const users = await User.find(query)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit))
-      .select('firstName lastName email walletAddress kycStatus kycDocuments createdAt');
-    
-    const total = await User.countDocuments(query);
-    
-    res.json({ users, total });
-  } catch (error) {
-    console.error('Get KYC submissions error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    if (status) query.status = status;
+
+    const options = {
+      limit: parseInt(limit),
+      skip: (parseInt(page) - 1) * parseInt(limit),
+      sort: { createdAt: -1 }
+    };
+
+    const kycSubmissions = await KYC.find(query, null, options)
+      .populate('user', 'firstName lastName email');
+    const total = await KYC.countDocuments(query);
+
+    res.status(200).json({ 
+      success: true, 
+      kycSubmissions,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.get('/api/v1/admin/logs', authenticateAdmin, async (req, res) => {
+app.get('/api/v1/admin/kyc/:id', adminProtect, async (req, res) => {
   try {
-    const { action, adminId, limit = 10, page = 1 } = req.query;
+    const kyc = await KYC.findById(req.params.id)
+      .populate('user', 'firstName lastName email');
+
+    if (!kyc) {
+      return res.status(404).json({ success: false, message: 'KYC submission not found' });
+    }
+
+    res.status(200).json({ success: true, kyc });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.patch('/api/v1/admin/kyc/:id/status', adminProtect, async (req, res) => {
+  try {
+    const { status, rejectionReason } = req.body;
+    
+    if (!['approved', 'rejected', 'pending'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid status' });
+    }
+
+    if (status === 'rejected' && !rejectionReason) {
+      return res.status(400).json({ success: false, message: 'Rejection reason is required' });
+    }
+
+    const kyc = await KYC.findById(req.params.id)
+      .populate('user', 'firstName lastName email');
+
+    if (!kyc) {
+      return res.status(404).json({ success: false, message: 'KYC submission not found' });
+    }
+
+    kyc.status = status;
+    if (status === 'rejected') {
+      kyc.rejectionReason = rejectionReason;
+    }
+    await kyc.save();
+
+    // Update user's KYC status
+    await User.findByIdAndUpdate(kyc.user._id, { 
+      kycStatus: status,
+      ...(status === 'approved' ? { isVerified: true } : {})
+    });
+
+    // Log admin activity
+    await ActivityLog.create({
+      admin: req.admin._id,
+      activityType: 'kyc_status_change',
+      details: {
+        kycId: kyc._id,
+        userId: kyc.user._id,
+        previousStatus: kyc.status,
+        newStatus: status
+      },
+      ipAddress: 'req.ip' // In real app, you'd get this from req.ip
+    });
+
+    // Notify user via WebSocket
+    broadcastToUser(kyc.user._id, {
+      type: 'KYC_STATUS_UPDATE',
+      message: `Your KYC verification has been ${status}`,
+      status,
+      ...(status === 'rejected' ? { rejectionReason } : {})
+    });
+
+    // Send email notification
+    try {
+      await emailTransporter.sendMail({
+        from: '"Crypto Trading Market" <support@cryptotradingmarket.com>',
+        to: kyc.user.email,
+        subject: `KYC Verification ${status.charAt(0).toUpperCase() + status.slice(1)}`,
+        html: `
+          <p>Your KYC verification has been <strong>${status}</strong>.</p>
+          ${status === 'rejected' ? `<p>Reason: ${rejectionReason}</p><p>Please correct the issues and submit again.</p>` : ''}
+          ${status === 'approved' ? `<p>Your account is now fully verified.</p>` : ''}
+        `
+      });
+    } catch (emailErr) {
+      console.error('Failed to send KYC status email:', emailErr);
+    }
+
+    res.status(200).json({ success: true, kyc });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/v1/admin/logs', adminProtect, async (req, res) => {
+  try {
+    const { type, userId, adminId, limit = 10, page = 1 } = req.query;
     
     const query = {};
-    if (action) query.action = action;
-    if (adminId) query.adminId = adminId;
-    
-    const logs = await AdminLog.find(query)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit))
-      .populate('adminId', 'firstName lastName email');
-    
-    const total = await AdminLog.countDocuments(query);
-    
-    res.json({ logs, total });
-  } catch (error) {
-    console.error('Get admin logs error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    if (type) query.activityType = type;
+    if (userId) query.user = userId;
+    if (adminId) query.admin = adminId;
+
+    const options = {
+      limit: parseInt(limit),
+      skip: (parseInt(page) - 1) * parseInt(limit),
+      sort: { createdAt: -1 }
+    };
+
+    const logs = await ActivityLog.find(query, null, options)
+      .populate('user', 'firstName lastName email')
+      .populate('admin', 'firstName lastName email');
+    const total = await ActivityLog.countDocuments(query);
+
+    res.status(200).json({ 
+      success: true, 
+      logs,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.post('/api/v1/admin/broadcast', authenticateAdmin, async (req, res) => {
+app.post('/api/v1/admin/broadcast', adminProtect, async (req, res) => {
   try {
-    const { message } = req.body;
+    const { title, message, target } = req.body;
     
-    if (!message) {
-      return res.status(400).json({ error: 'Message is required' });
+    if (!title || !message) {
+      return res.status(400).json({ success: false, message: 'Title and message are required' });
     }
-    
-    // Broadcast to all connected clients
-    broadcast({
-      type: 'ADMIN_BROADCAST',
-      message,
-      adminId: req.user._id,
-      adminName: `${req.user.firstName} ${req.user.lastName}`
+
+    // In a real app, you might save this broadcast to the database
+    // For now, we'll just broadcast it to all connected clients
+
+    if (target === 'all' || target === 'users') {
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN && client.userType === 'user') {
+          client.send(JSON.stringify({
+            type: 'BROADCAST_MESSAGE',
+            title,
+            message,
+            timestamp: new Date().toISOString()
+          }));
+        }
+      });
+    }
+
+    if (target === 'all' || target === 'admins') {
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN && client.userType === 'admin') {
+          client.send(JSON.stringify({
+            type: 'BROADCAST_MESSAGE',
+            title,
+            message,
+            timestamp: new Date().toISOString()
+          }));
+        }
+      });
+    }
+
+    // Log admin activity
+    await ActivityLog.create({
+      admin: req.admin._id,
+      activityType: 'broadcast_sent',
+      details: {
+        title,
+        message,
+        target
+      },
+      ipAddress: 'req.ip' // In real app, you'd get this from req.ip
     });
-    
-    // Log admin action
-    const log = new AdminLog({
-      adminId: req.user._id,
-      action: 'SEND_BROADCAST',
-      details: { message }
-    });
-    
-    await log.save();
-    
-    res.json({ message: 'Broadcast sent successfully' });
-  } catch (error) {
-    console.error('Broadcast error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(200).json({ success: true, message: 'Broadcast sent successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// Static Pages (for frontend routes)
-app.get('/about.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'about.html'));
+app.get('/api/v1/admin/settings', adminProtect, async (req, res) => {
+  try {
+    // In a real app, these would come from a database
+    const settings = {
+      platformFees: {
+        trading: 0.0025,
+        arbitrage: 0.2,
+        withdrawal: {
+          BTC: 0.0005,
+          ETH: 0.01,
+          USDT: 10,
+          BNB: 0.05,
+          XRP: 0.25
+        }
+      },
+      minimumAmounts: {
+        trade: 10,
+        arbitrage: 100,
+        withdrawal: {
+          BTC: 0.001,
+          ETH: 0.01,
+          USDT: 50,
+          BNB: 0.1,
+          XRP: 20
+        }
+      },
+      maintenanceMode: false,
+      newRegistrations: true
+    };
+
+    res.status(200).json({ success: true, settings });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
 });
 
-app.get('/account.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'account.html'));
+app.patch('/api/v1/admin/settings', adminProtect, async (req, res) => {
+  try {
+    const { settings } = req.body;
+    
+    if (!settings) {
+      return res.status(400).json({ success: false, message: 'Settings are required' });
+    }
+
+    // In a real app, you'd save these to a database
+    // For now, we'll just return them
+
+    // Log admin activity
+    await ActivityLog.create({
+      admin: req.admin._id,
+      activityType: 'settings_updated',
+      details: settings,
+      ipAddress: 'req.ip' // In real app, you'd get this from req.ip
+    });
+
+    res.status(200).json({ 
+      success: true, 
+      message: 'Settings updated successfully',
+      settings
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
 });
 
-app.get('/admin.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
-});
+// Serve static files (for uploaded files)
+app.use('/uploads', express.static('uploads'));
 
-app.get('/dashboard.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
-});
+// Models would be defined here in a separate file, but included inline for single-file requirement
+function createModels(mongoose) {
+  const userSchema = new mongoose.Schema({
+    firstName: { type: String, required: true },
+    lastName: { type: String, required: true },
+    email: { type: String, required: true, unique: true },
+    password: { type: String, select: false },
+    walletAddress: { type: String },
+    isWalletUser: { type: Boolean, default: false },
+    country: { type: String, required: true },
+    currency: { type: String, default: 'USD' },
+    balances: {
+      BTC: { type: Number, default: 0 },
+      ETH: { type: Number, default: 0 },
+      USDT: { type: Number, default: 0 },
+      BNB: { type: Number, default: 0 },
+      XRP: { type: Number, default: 0 }
+    },
+    kycStatus: { type: String, enum: ['not_submitted', 'pending', 'approved', 'rejected'], default: 'not_submitted' },
+    isVerified: { type: Boolean, default: false },
+    status: { type: String, enum: ['active', 'suspended', 'banned'], default: 'active' },
+    resetPasswordToken: { type: String },
+    resetPasswordExpires: { type: Date },
+    lastLogin: { type: Date },
+    createdAt: { type: Date, default: Date.now }
+  });
 
-app.get('/faqs.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'faqs.html'));
-});
+  const tradeSchema = new mongoose.Schema({
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    fromCoin: { type: String, required: true },
+    toCoin: { type: String, required: true },
+    fromAmount: { type: Number, required: true },
+    toAmount: { type: Number, required: true },
+    fee: { type: Number, required: true },
+    rate: { type: Number, required: true },
+    status: { type: String, enum: ['pending', 'completed', 'failed'], default: 'completed' },
+    createdAt: { type: Date, default: Date.now }
+  });
 
-app.get('/forgot-password.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'forgot-password.html'));
-});
+  const transactionSchema = new mongoose.Schema({
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    type: { type: String, enum: ['deposit', 'withdrawal'], required: true },
+    coin: { type: String, required: true },
+    amount: { type: Number, required: true },
+    address: { type: String },
+    memo: { type: String },
+    txHash: { type: String },
+    status: { type: String, enum: ['pending', 'completed', 'failed', 'cancelled'], default: 'pending' },
+    createdAt: { type: Date, default: Date.now }
+  });
 
-app.get('/index.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+  const supportTicketSchema = new mongoose.Schema({
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    subject: { type: String, required: true },
+    message: { type: String, required: true },
+    attachments: [String],
+    replies: [{
+      from: { type: String, enum: ['user', 'admin'], required: true },
+      adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+      adminName: { type: String },
+      message: { type: String, required: true },
+      attachments: [String],
+      createdAt: { type: Date, default: Date.now }
+    }],
+    status: { type: String, enum: ['open', 'pending', 'closed'], default: 'open' },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
+  });
 
-app.get('/login.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'login.html'));
-});
+  const kycSchema = new mongoose.Schema({
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    documentType: { type: String, required: true },
+    documentNumber: { type: String, required: true },
+    documentFront: { type: String, required: true },
+    documentBack: { type: String },
+    selfie: { type: String, required: true },
+    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+    rejectionReason: { type: String },
+    reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+    reviewedAt: { type: Date },
+    createdAt: { type: Date, default: Date.now }
+  });
 
-app.get('/logout.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'logout.html'));
-});
+  const adminSchema = new mongoose.Schema({
+    firstName: { type: String, required: true },
+    lastName: { type: String, required: true },
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true, select: false },
+    role: { type: String, enum: ['admin', 'superadmin'], default: 'admin' },
+    lastLogin: { type: Date },
+    createdAt: { type: Date, default: Date.now }
+  });
 
-app.get('/signup.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'signup.html'));
-});
+  const activityLogSchema = new mongoose.Schema({
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    admin: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+    activityType: { type: String, required: true },
+    details: { type: mongoose.Schema.Types.Mixed },
+    ipAddress: { type: String },
+    createdAt: { type: Date, default: Date.now }
+  });
 
-app.get('/support.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'support.html'));
-});
+  const arbitrageOpportunitySchema = new mongoose.Schema({
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    opportunityId: { type: String, required: true },
+    pair: { type: String, required: true },
+    amount: { type: Number, required: true },
+    profit: { type: Number, required: true },
+    fee: { type: Number, required: true },
+    status: { type: String, enum: ['pending', 'completed', 'failed'], default: 'completed' },
+    createdAt: { type: Date, default: Date.now }
+  });
 
-// Serve static files
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Internal server error' });
-});
-
-// Start server
-console.log(`Server started on port ${PORT}`);
+  return {
+    User: mongoose.model('User', userSchema),
+    Trade: mongoose.model('Trade', tradeSchema),
+    Transaction: mongoose.model('Transaction', transactionSchema),
+    SupportTicket: mongoose.model('SupportTicket', supportTicketSchema),
+    KYC: mongoose.model('KYC', kycSchema),
+    Admin: mongoose.model('Admin', adminSchema),
+    ActivityLog: mongoose.model('ActivityLog', activityLogSchema),
+    ArbitrageOpportunity: mongoose.model('ArbitrageOpportunity', arbitrageOpportunitySchema)
+  };
+}
