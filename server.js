@@ -256,9 +256,20 @@ const updateCoinPrices = async () => {
   }
 };
 
-// Update coin prices every 5 minutes
-setInterval(updateCoinPrices, 5 * 60 * 1000);
+// Update coin prices every 1 minutes
+setInterval(updateCoinPrices, 1 * 60 * 1000);
 updateCoinPrices();
+app.post('/api/v1/admin/verify', adminMiddleware, async (req, res) => {
+  try {
+    // If middleware passed, token is valid
+    res.json({ 
+      verified: true,
+      admin: req.user 
+    });
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid token' });
+  }
+});
 
 // Auth Middleware
 const authMiddleware = async (req, res, next) => {
