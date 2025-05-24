@@ -19,6 +19,44 @@ const PORT = process.env.PORT || 5000;
 mongoose.connect('mongodb+srv://mosesmwainaina1994:OWlondlAbn3bJuj4@cluster0.edyueep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0',)
 .then(() => console.log('MongoDB connected successfully'))
 .catch(err => console.error('MongoDB connection error:', err));
+// ... after mongoose.connect() ...
+
+// =============================================
+// Initial Admin Setup (Safe for production)
+// =============================================
+const createInitialAdmin = async () => {
+  try {
+    // Use environment variables for security
+    const ADMIN_EMAIL = process.env.INITIAL_ADMIN_EMAIL;
+    const ADMIN_PASSWORD = process.env.INITIAL_ADMIN_PASSWORD;
+    
+    if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
+      console.log('Skipping admin creation - no credentials provided in env');
+      return;
+    }
+
+    const existingAdmin = await Admin.findOne({ email: ADMIN_EMAIL });
+    if (!existingAdmin) {
+      const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, 12);
+      const admin = new Admin({
+        email: ADMIN_EMAIL,
+        password: hashedPassword,
+        isSuperAdmin: true
+      });
+      await admin.save();
+      console.log('✅ Initial admin account created');
+    } else {
+      console.log('ℹ️ Admin account already exists');
+    }
+  } catch (err) {
+    console.error('❌ Error creating initial admin:', err.message);
+  }
+};
+
+// Call the function (use setTimeout to avoid blocking server startup)
+setTimeout(createInitialAdmin, 2000);
+
+// ... your routes start here ...
 
 // Middleware
 app.use(cors({
