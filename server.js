@@ -1,117 +1,82 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const morgan = require('morgan');
 const nodemailer = require('nodemailer');
 const WebSocket = require('ws');
 const { v4: uuidv4 } = require('uuid');
-const rateLimit = require('express-rate-limit');
-const helmet = require('helmet');
-const mongoSanitize = require('express-mongo-sanitize');
-const { body, validationResult } = require('express-validator');
+const axios = require('axios');
 
-// Initialize Express app
 const app = express();
+const PORT = process.env.PORT || 5000;
 
-// Middleware
-app.use(helmet());
-app.use(mongoSanitize());
-app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
-
-// CORS configuration
-const corsOptions = {
-  origin: ['https://website-xi-ten-52.vercel.app', 'https://website-xi-ten-52.vercel.app/'],
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  optionsSuccessStatus: 200
-};
-
-app.use(cors(corsOptions));
-
-// Rate limiting
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
-  message: 'Too many requests from this IP, please try again later.'
-});
-app.use('/api/', apiLimiter);
-
-// Database connection
-const DB = process.env.MONGODB_URI || 'mongodb+srv://mosesmwainaina1994:<password>@cluster0.edyueep.mongodb.net/crypto_trading?retryWrites=true&w=majority';
-
-mongoose.connect(DB, {
+// MongoDB connection
+const MONGODB_URI = 'mongodb+srv://mosesmwainaina1994:OWlondlAbn3bJuj4@cluster0.edyueep.mongodb.net/crypto_trading?retryWrites=true&w=majority&appName=Cluster0';
+mongoose.connect(MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-  auth: {
-    username: process.env.MONGODB_USERNAME || 'mosesmwainaina1994',
-    password: process.env.MONGODB_PASSWORD || 'OWlondlAbn3bJuj4'
-  }
-}).then(() => console.log('DB connection successful!'))
-  .catch(err => console.error('DB connection error:', err));
+})
+.then(() => console.log('MongoDB connected successfully'))
+.catch(err => console.error('MongoDB connection error:', err));
 
-// Schemas
-const userSchema = new mongoose.Schema({
-  firstName: { type: String, required: [true, 'First name is required'] },
-  lastName: { type: String, required: [true, 'Last name is required'] },
-  email: { type: String, required: [true, 'Email is required'], unique: true, lowercase: true },
-  password: { type: String, select: false },
-  country: { type: String, required: [true, 'Country is required'] },
+// Middleware
+app.use(cors({
+  origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000'],
+  credentials: true
+}));
+app.use(helmet());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(morgan('combined'));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+});
+app.use(limiter);
+
+// JWT Secret
+const JWT_SECRET = '17581758Na.%';
+
+// Email configuration
+const transporter = nodemailer.createTransport({
+  host: 'sandbox.smtp.mailtrap.io',
+  port: 2525,
+  auth: {
+    user: '7c707ac161af1c',
+    pass: '6c08aa4f2c679a'
+  }
+});
+
+// MongoDB Schemas
+const UserSchema = new mongoose.Schema({
+  firstName: { type: String, required: true },
+  lastName: { type: String, required: true },
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+  country: { type: String, required: true },
   currency: { type: String, default: 'USD' },
+  isVerified: { type: Boolean, default: false },
+  verificationToken: { type: String },
+  resetPasswordToken: { type: String },
+  resetPasswordExpires: { type: Date },
   walletAddress: { type: String },
   walletProvider: { type: String },
   balance: { type: Number, default: 0 },
-  isVerified: { type: Boolean, default: true }, // Changed to true as per your requirement
+  portfolio: { type: Map, of: Number, default: {} },
   isAdmin: { type: Boolean, default: false },
-  registrationCompleted: { type: Boolean, default: false },
-  kycStatus: { type: String, enum: ['none', 'pending', 'verified', 'rejected'], default: 'none' },
-  kycDetails: {
-    documentType: String,
-    documentNumber: String,
-    documentImage: String,
-    selfieImage: String
-  },
   createdAt: { type: Date, default: Date.now },
-  lastLogin: Date,
-  active: { type: Boolean, default: true }
+  lastLogin: { type: Date }
 });
 
-userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
-  this.password = await bcrypt.hash(this.password, 12);
-  next();
-});
-
-userSchema.methods.correctPassword = async function(candidatePassword, userPassword) {
-  return await bcrypt.compare(candidatePassword, userPassword);
-};
-
-const User = mongoose.model('User', userSchema);
-
-const adminSchema = new mongoose.Schema({
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true, select: false },
-  firstName: { type: String, required: true },
-  lastName: { type: String, required: true },
-  role: { type: String, enum: ['super', 'support', 'kyc'], default: 'support' },
-  lastLogin: Date,
-  active: { type: Boolean, default: true }
-});
-
-adminSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
-  this.password = await bcrypt.hash(this.password, 12);
-  next();
-});
-
-const Admin = mongoose.model('Admin', adminSchema);
-
-const tradeSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['buy', 'sell', 'arbitrage'], required: true },
+const TradeSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   fromCoin: { type: String, required: true },
   toCoin: { type: String, required: true },
   amount: { type: Number, required: true },
@@ -121,85 +86,34 @@ const tradeSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-const Trade = mongoose.model('Trade', tradeSchema);
-
-const transactionSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['deposit', 'withdrawal', 'trade', 'fee', 'bonus'], required: true },
-  amount: { type: Number, required: true },
-  currency: { type: String, required: true },
-  status: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },
-  reference: { type: String, required: true },
-  description: String,
-  createdAt: { type: Date, default: Date.now }
-});
-
-const Transaction = mongoose.model('Transaction', transactionSchema);
-
-const supportTicketSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.ObjectId, ref: 'User' },
+const SupportTicketSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  name: { type: String, required: true },
   email: { type: String, required: true },
   subject: { type: String, required: true },
   message: { type: String, required: true },
   status: { type: String, enum: ['open', 'in-progress', 'resolved'], default: 'open' },
-  attachments: [String],
-  responses: [{
-    message: String,
-    fromAdmin: Boolean,
-    adminId: { type: mongoose.Schema.ObjectId, ref: 'Admin' },
-    createdAt: { type: Date, default: Date.now }
-  }],
-  createdAt: { type: Date, default: Date.now }
+  attachments: { type: [String], default: [] },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
 });
 
-const SupportTicket = mongoose.model('SupportTicket', supportTicketSchema);
-
-// Email transporter
-const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST || 'sandbox.smtp.mailtrap.io',
-  port: process.env.EMAIL_PORT || 2525,
-  auth: {
-    user: process.env.EMAIL_USER || '7c707ac161af1c',
-    pass: process.env.EMAIL_PASS || '6c08aa4f2c679a'
-  }
+const FAQSchema = new mongoose.Schema({
+  question: { type: String, required: true },
+  answer: { type: String, required: true },
+  category: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
 });
 
-// JWT
-const signToken = (id, isAdmin = false) => {
-  return jwt.sign({ id, isAdmin }, process.env.JWT_SECRET || '17581758Na.%', {
-    expiresIn: process.env.JWT_EXPIRES_IN || '30d'
-  });
-};
-
-const createSendToken = (user, statusCode, res, isAdmin = false) => {
-  const token = signToken(user._id, isAdmin);
-  
-  const cookieOptions = {
-    expires: new Date(
-      Date.now() + (process.env.JWT_COOKIE_EXPIRES_IN || 30) * 24 * 60 * 60 * 1000
-    ),
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'none'
-  };
-
-  res.cookie('jwt', token, cookieOptions);
-
-  // Remove password from output
-  user.password = undefined;
-
-  res.status(statusCode).json({
-    status: 'success',
-    token,
-    data: {
-      user
-    }
-  });
-};
+const User = mongoose.model('User', UserSchema);
+const Trade = mongoose.model('Trade', TradeSchema);
+const SupportTicket = mongoose.model('SupportTicket', SupportTicketSchema);
+const FAQ = mongoose.model('FAQ', FAQSchema);
 
 // WebSocket Server
-const server = app.listen(process.env.PORT || 3000, () => {
-  console.log(`App running on port ${process.env.PORT || 3000}`);
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
 
 const wss = new WebSocket.Server({ server });
@@ -207,25 +121,28 @@ const wss = new WebSocket.Server({ server });
 wss.on('connection', (ws) => {
   console.log('New WebSocket connection');
   
-  ws.on('message', (message) => {
+  ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
       
-      if (data.type === 'auth' && data.token) {
-        jwt.verify(data.token, process.env.JWT_SECRET || '17581758Na.%', (err, decoded) => {
-          if (err) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Invalid token' }));
-            return ws.close();
+      if (data.type === 'auth') {
+        try {
+          const decoded = jwt.verify(data.token, JWT_SECRET);
+          const user = await User.findById(decoded.id);
+          
+          if (user) {
+            ws.userId = user._id;
+            ws.isAdmin = user.isAdmin;
+            ws.send(JSON.stringify({ type: 'auth', status: 'success' }));
+          } else {
+            ws.send(JSON.stringify({ type: 'auth', status: 'failed', message: 'User not found' }));
           }
-          
-          ws.userId = decoded.id;
-          ws.isAdmin = decoded.isAdmin;
-          
-          ws.send(JSON.stringify({ type: 'auth', status: 'success' }));
-        });
+        } catch (err) {
+          ws.send(JSON.stringify({ type: 'auth', status: 'failed', message: 'Invalid token' }));
+        }
       }
     } catch (err) {
-      ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format' }));
+      console.error('WebSocket message error:', err);
     }
   });
   
@@ -234,1566 +151,1143 @@ wss.on('connection', (ws) => {
   });
 });
 
-const broadcastToUser = (userId, data) => {
+// Broadcast function for WebSocket
+function broadcast(userId, data) {
   wss.clients.forEach((client) => {
-    if (client.userId === userId.toString() && client.readyState === WebSocket.OPEN) {
+    if (client.readyState === WebSocket.OPEN && client.userId && client.userId.toString() === userId.toString()) {
       client.send(JSON.stringify(data));
     }
   });
-};
+}
 
-const broadcastToAdmins = (data) => {
+// Broadcast to admin
+function broadcastToAdmin(data) {
   wss.clients.forEach((client) => {
-    if (client.isAdmin && client.readyState === WebSocket.OPEN) {
+    if (client.readyState === WebSocket.OPEN && client.isAdmin) {
       client.send(JSON.stringify(data));
     }
   });
+}
+
+// Helper functions
+const generateToken = (user) => {
+  return jwt.sign(
+    { id: user._id, email: user.email, isAdmin: user.isAdmin },
+    JWT_SECRET,
+    { expiresIn: '30d' }
+  );
 };
 
-// Routes
-app.get('/api/v1/status', (req, res) => {
-  res.status(200).json({
-    status: 'success',
-    message: 'API is running'
-  });
-});
+const sendVerificationEmail = async (user) => {
+  const verificationUrl = `https://website-xi-ten-52.vercel.app/verify?token=${user.verificationToken}`;
+  
+  const mailOptions = {
+    from: '"Crypto Trading Platform" <no-reply@cryptotrading.com>',
+    to: user.email,
+    subject: 'Verify Your Email',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2d3748;">Welcome to Crypto Trading Platform</h2>
+        <p>Please click the button below to verify your email address:</p>
+        <a href="${verificationUrl}" style="display: inline-block; padding: 10px 20px; background-color: #4299e1; color: white; text-decoration: none; border-radius: 4px; margin: 20px 0;">Verify Email</a>
+        <p>If you didn't create an account with us, please ignore this email.</p>
+        <p style="margin-top: 30px; color: #718096;">© ${new Date().getFullYear()} Crypto Trading Platform. All rights reserved.</p>
+      </div>
+    `
+  };
+  
+  await transporter.sendMail(mailOptions);
+};
+
+const sendPasswordResetEmail = async (user) => {
+  const resetUrl = `https://website-xi-ten-52.vercel.app/reset-password?token=${user.resetPasswordToken}`;
+  
+  const mailOptions = {
+    from: '"Crypto Trading Platform" <no-reply@cryptotrading.com>',
+    to: user.email,
+    subject: 'Password Reset Request',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2d3748;">Password Reset Request</h2>
+        <p>We received a request to reset your password. Click the button below to reset it:</p>
+        <a href="${resetUrl}" style="display: inline-block; padding: 10px 20px; background-color: #4299e1; color: white; text-decoration: none; border-radius: 4px; margin: 20px 0;">Reset Password</a>
+        <p>If you didn't request a password reset, please ignore this email.</p>
+        <p style="margin-top: 30px; color: #718096;">© ${new Date().getFullYear()} Crypto Trading Platform. All rights reserved.</p>
+      </div>
+    `
+  };
+  
+  await transporter.sendMail(mailOptions);
+};
+
+// Get coin prices from CoinGecko API
+const getCoinPrices = async () => {
+  try {
+    const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
+      params: {
+        vs_currency: 'usd',
+        ids: 'bitcoin,ethereum,ripple,cardano,polkadot,solana,dogecoin',
+        order: 'market_cap_desc',
+        per_page: 100,
+        page: 1,
+        sparkline: false
+      }
+    });
+    
+    const prices = {};
+    response.data.forEach(coin => {
+      prices[coin.id] = coin.current_price;
+    });
+    
+    return prices;
+  } catch (err) {
+    console.error('Error fetching coin prices:', err);
+    return null;
+  }
+};
+
+// API Routes
 
 // Auth Routes
-app.post('/api/v1/auth/signup', [
-  body('firstName').notEmpty().withMessage('First name is required'),
-  body('lastName').notEmpty().withMessage('Last name is required'),
-  body('email').isEmail().withMessage('Please provide a valid email'),
-  body('password')
-    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$/)
-    .withMessage('Password must contain at least one uppercase, one lowercase, one number and one special character'),
-  body('confirmPassword').custom((value, { req }) => {
-    if (value !== req.body.password) {
-      throw new Error('Passwords do not match');
-    }
-    return true;
-  }),
-  body('country').notEmpty().withMessage('Country is required'),
-  body('currency').notEmpty().withMessage('Currency is required')
-], async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+app.post('/api/v1/auth/signup', async (req, res) => {
   try {
     const { firstName, lastName, email, password, country, currency } = req.body;
     
     // Check if user exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Email already in use'
-      });
+      return res.status(400).json({ success: false, message: 'Email already in use' });
     }
     
-    const newUser = await User.create({
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+    
+    // Create user
+    const verificationToken = uuidv4();
+    const user = new User({
       firstName,
       lastName,
       email,
-      password,
+      password: hashedPassword,
       country,
-      currency,
-      registrationCompleted: false
+      currency: currency || 'USD',
+      verificationToken,
+      portfolio: {
+        bitcoin: 0,
+        ethereum: 0,
+        ripple: 0,
+        cardano: 0,
+        polkadot: 0,
+        solana: 0,
+        dogecoin: 0
+      }
     });
     
-    createSendToken(newUser, 201, res);
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
+    await user.save();
+    
+    // Send verification email
+    await sendVerificationEmail(user);
+    
+    // Generate token
+    const token = generateToken(user);
+    
+    res.status(201).json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        country: user.country,
+        currency: user.currency,
+        isVerified: user.isVerified,
+        balance: user.balance,
+        portfolio: user.portfolio
+      }
     });
+  } catch (err) {
+    console.error('Signup error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.post('/api/v1/auth/login', [
-  body('email').isEmail().withMessage('Please provide a valid email'),
-  body('password').notEmpty().withMessage('Password is required')
-], async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+app.post('/api/v1/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     
-    const user = await User.findOne({ email }).select('+password');
-    
-    if (!user || !(await user.correctPassword(password, user.password))) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Incorrect email or password'
-      });
+    // Find user
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
     
-    if (!user.active) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Your account has been deactivated'
-      });
+    // Check password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
     
-    user.lastLogin = Date.now();
+    // Update last login
+    user.lastLogin = new Date();
     await user.save();
     
-    createSendToken(user, 200, res);
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
+    // Generate token
+    const token = generateToken(user);
+    
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        country: user.country,
+        currency: user.currency,
+        isVerified: user.isVerified,
+        balance: user.balance,
+        portfolio: user.portfolio,
+        isAdmin: user.isAdmin
+      }
     });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.post('/api/v1/auth/wallet-login', async (req, res, next) => {
+app.post('/api/v1/auth/wallet-login', async (req, res) => {
   try {
     const { walletAddress, walletProvider, signature } = req.body;
     
-    if (!walletAddress || !walletProvider || !signature) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Please provide wallet address, provider and signature'
-      });
-    }
-    
-    // In a real app, you would verify the signature here
-    // For demo purposes, we'll skip that
-    
+    // Find user by wallet address
     let user = await User.findOne({ walletAddress });
     
     if (!user) {
       // Create new user if not exists
-      user = await User.create({
+      user = new User({
         walletAddress,
         walletProvider,
         isVerified: true,
-        registrationCompleted: true
+        balance: 0,
+        portfolio: {
+          bitcoin: 0,
+          ethereum: 0,
+          ripple: 0,
+          cardano: 0,
+          polkadot: 0,
+          solana: 0,
+          dogecoin: 0
+        }
       });
+      await user.save();
     }
     
-    if (!user.active) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Your account has been deactivated'
-      });
-    }
-    
-    user.lastLogin = Date.now();
+    // Update last login
+    user.lastLogin = new Date();
     await user.save();
     
-    createSendToken(user, 200, res);
+    // Generate token
+    const token = generateToken(user);
+    
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        walletAddress: user.walletAddress,
+        walletProvider: user.walletProvider,
+        isVerified: user.isVerified,
+        balance: user.balance,
+        portfolio: user.portfolio,
+        isAdmin: user.isAdmin
+      }
+    });
   } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
+    console.error('Wallet login error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.post('/api/v1/auth/logout', (req, res) => {
-  res.cookie('jwt', 'loggedout', {
-    expires: new Date(Date.now() + 10 * 1000),
-    httpOnly: true
-  });
-  
-  res.status(200).json({ status: 'success' });
+app.get('/api/v1/auth/verify', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No token provided' });
+    }
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.id);
+    
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'User not found' });
+    }
+    
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        country: user.country,
+        currency: user.currency,
+        isVerified: user.isVerified,
+        balance: user.balance,
+        portfolio: user.portfolio,
+        isAdmin: user.isAdmin
+      }
+    });
+  } catch (err) {
+    console.error('Token verification error:', err);
+    res.status(401).json({ success: false, message: 'Invalid token' });
+  }
 });
 
-app.post('/api/v1/auth/forgot-password', [
-  body('email').isEmail().withMessage('Please provide a valid email')
-], async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
+app.post('/api/v1/auth/verify-email', async (req, res) => {
+  try {
+    const { token } = req.body;
+    
+    const user = await User.findOne({ verificationToken: token });
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Invalid verification token' });
+    }
+    
+    user.isVerified = true;
+    user.verificationToken = undefined;
+    await user.save();
+    
+    res.json({ success: true, message: 'Email verified successfully' });
+  } catch (err) {
+    console.error('Email verification error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
+});
 
+app.post('/api/v1/auth/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
     
     const user = await User.findOne({ email });
-    
     if (!user) {
-      // Don't reveal if user exists or not
-      return res.status(200).json({
-        status: 'success',
-        message: 'If your email is registered, you will receive a password reset link'
-      });
+      // Return success even if email doesn't exist to prevent email enumeration
+      return res.json({ success: true, message: 'If your email is registered, you will receive a password reset link' });
     }
     
     // Generate reset token
-    const resetToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET || '17581758Na.%', {
-      expiresIn: '10m'
-    });
+    user.resetPasswordToken = uuidv4();
+    user.resetPasswordExpires = Date.now() + 3600000; // 1 hour
+    await user.save();
     
-    // Send email
-    const resetURL = `https://website-xi-ten-52.vercel.app/reset-password?token=${resetToken}`;
+    // Send reset email
+    await sendPasswordResetEmail(user);
     
-    const message = `Forgot your password? Submit a PATCH request with your new password to: ${resetURL}.\nIf you didn't forget your password, please ignore this email!`;
-    
-    try {
-      await transporter.sendMail({
-        from: 'support@cryptotradingmarket.com',
-        to: user.email,
-        subject: 'Your password reset token (valid for 10 minutes)',
-        text: message
-      });
-      
-      res.status(200).json({
-        status: 'success',
-        message: 'Token sent to email!'
-      });
-    } catch (err) {
-      user.passwordResetToken = undefined;
-      user.passwordResetExpires = undefined;
-      await user.save();
-      
-      return res.status(500).json({
-        status: 'error',
-        message: 'There was an error sending the email. Try again later!'
-      });
-    }
+    res.json({ success: true, message: 'Password reset link sent to your email' });
   } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
+    console.error('Forgot password error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.patch('/api/v1/auth/reset-password/:token', [
-  body('password')
-    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$/)
-    .withMessage('Password must contain at least one uppercase, one lowercase, one number and one special character'),
-  body('confirmPassword').custom((value, { req }) => {
-    if (value !== req.body.password) {
-      throw new Error('Passwords do not match');
-    }
-    return true;
-  })
-], async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+app.post('/api/v1/auth/reset-password', async (req, res) => {
   try {
-    const { token } = req.params;
-    const { password } = req.body;
+    const { token, newPassword } = req.body;
     
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || '17581758Na.%');
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: Date.now() }
+    });
     
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired token' });
+    }
+    
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
+    
+    res.json({ success: true, message: 'Password reset successfully' });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.post('/api/v1/auth/logout', (req, res) => {
+  // Since we're using JWT, logout is handled client-side by removing the token
+  res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// User Routes
+app.get('/api/v1/users/me', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No token provided' });
+    }
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
     const user = await User.findById(decoded.id);
     
     if (!user) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'User no longer exists'
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
     
-    user.password = password;
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        country: user.country,
+        currency: user.currency,
+        isVerified: user.isVerified,
+        balance: user.balance,
+        portfolio: user.portfolio,
+        isAdmin: user.isAdmin,
+        walletAddress: user.walletAddress,
+        walletProvider: user.walletProvider
+      }
+    });
+  } catch (err) {
+    console.error('Get user error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.patch('/api/v1/users/me', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No token provided' });
+    }
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.id);
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    const { firstName, lastName, country, currency } = req.body;
+    
+    if (firstName) user.firstName = firstName;
+    if (lastName) user.lastName = lastName;
+    if (country) user.country = country;
+    if (currency) user.currency = currency;
+    
     await user.save();
     
-    createSendToken(user, 200, res);
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.get('/api/v1/auth/verify', async (req, res, next) => {
-  try {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    } else if (req.cookies.jwt) {
-      token = req.cookies.jwt;
-    }
-    
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || '17581758Na.%');
-    
-    const currentUser = await User.findById(decoded.id);
-    if (!currentUser) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'The user belonging to this token no longer exists.'
-      });
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        user: currentUser
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        country: user.country,
+        currency: user.currency,
+        isVerified: user.isVerified,
+        balance: user.balance,
+        portfolio: user.portfolio,
+        isAdmin: user.isAdmin
       }
     });
   } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
+    console.error('Update user error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// Protect middleware
-const protect = async (req, res, next) => {
+app.patch('/api/v1/users/change-password', async (req, res) => {
   try {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    } else if (req.cookies.jwt) {
-      token = req.cookies.jwt;
-    }
+    const token = req.headers.authorization?.split(' ')[1];
     
     if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
+      return res.status(401).json({ success: false, message: 'No token provided' });
     }
     
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || '17581758Na.%');
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.id);
     
-    const currentUser = await User.findById(decoded.id);
-    if (!currentUser) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'The user belonging to this token no longer exists.'
-      });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
     
-    if (!currentUser.active) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Your account has been deactivated'
-      });
-    }
-    
-    req.user = currentUser;
-    next();
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-};
-
-// Admin protect middleware
-const adminProtect = async (req, res, next) => {
-  try {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    } else if (req.cookies.jwt) {
-      token = req.cookies.jwt;
-    }
-    
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || '17581758Na.%');
-    
-    if (!decoded.isAdmin) {
-      return res.status(403).json({
-        status: 'fail',
-        message: 'You do not have permission to perform this action'
-      });
-    }
-    
-    const currentAdmin = await Admin.findById(decoded.id);
-    if (!currentAdmin) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'The admin belonging to this token no longer exists.'
-      });
-    }
-    
-    if (!currentAdmin.active) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Your account has been deactivated'
-      });
-    }
-    
-    req.admin = currentAdmin;
-    next();
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-};
-
-// User Routes
-app.get('/api/v1/users/me', protect, async (req, res, next) => {
-  try {
-    const user = await User.findById(req.user.id);
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        user
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.patch('/api/v1/users/complete-registration', protect, async (req, res, next) => {
-  try {
-    const user = await User.findByIdAndUpdate(
-      req.user.id,
-      { registrationCompleted: true },
-      { new: true, runValidators: true }
-    );
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        user
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.patch('/api/v1/users/update-password', protect, [
-  body('currentPassword').notEmpty().withMessage('Current password is required'),
-  body('newPassword')
-    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$/)
-    .withMessage('Password must contain at least one uppercase, one lowercase, one number and one special character'),
-  body('confirmPassword').custom((value, { req }) => {
-    if (value !== req.body.newPassword) {
-      throw new Error('Passwords do not match');
-    }
-    return true;
-  })
-], async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
     const { currentPassword, newPassword } = req.body;
     
-    const user = await User.findById(req.user.id).select('+password');
-    
-    if (!(await user.correctPassword(currentPassword, user.password))) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Your current password is wrong'
-      });
+    // Verify current password
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ success: false, message: 'Current password is incorrect' });
     }
     
-    user.password = newPassword;
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
     await user.save();
     
-    createSendToken(user, 200, res);
+    res.json({ success: true, message: 'Password changed successfully' });
   } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.patch('/api/v1/users/update-me', protect, [
-  body('firstName').notEmpty().withMessage('First name is required'),
-  body('lastName').notEmpty().withMessage('Last name is required'),
-  body('email').isEmail().withMessage('Please provide a valid email'),
-  body('country').notEmpty().withMessage('Country is required'),
-  body('currency').notEmpty().withMessage('Currency is required')
-], async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { firstName, lastName, email, country, currency } = req.body;
-    
-    if (email !== req.user.email) {
-      const existingUser = await User.findOne({ email });
-      if (existingUser) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'Email already in use'
-        });
-      }
-    }
-    
-    const updatedUser = await User.findByIdAndUpdate(
-      req.user.id,
-      { firstName, lastName, email, country, currency },
-      { new: true, runValidators: true }
-    );
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        user: updatedUser
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.post('/api/v1/users/kyc', protect, async (req, res, next) => {
-  try {
-    const { documentType, documentNumber, documentImage, selfieImage } = req.body;
-    
-    if (!documentType || !documentNumber || !documentImage || !selfieImage) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Please provide all required KYC details'
-      });
-    }
-    
-    const user = await User.findByIdAndUpdate(
-      req.user.id,
-      {
-        kycStatus: 'pending',
-        kycDetails: {
-          documentType,
-          documentNumber,
-          documentImage,
-          selfieImage
-        }
-      },
-      { new: true }
-    );
-    
-    // Notify admins
-    broadcastToAdmins({
-      type: 'KYC_SUBMITTED',
-      userId: user._id,
-      message: 'New KYC submission'
-    });
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        user
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
+    console.error('Change password error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // Trade Routes
-app.get('/api/v1/trades', protect, async (req, res, next) => {
+app.get('/api/v1/market/prices', async (req, res) => {
   try {
-    const trades = await Trade.find({ userId: req.user.id }).sort('-createdAt');
+    const prices = await getCoinPrices();
     
-    res.status(200).json({
-      status: 'success',
-      results: trades.length,
-      data: {
-        trades
-      }
-    });
+    if (!prices) {
+      return res.status(500).json({ success: false, message: 'Failed to fetch prices' });
+    }
+    
+    res.json({ success: true, prices });
   } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
+    console.error('Get market prices error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.post('/api/v1/trades/buy', protect, [
-  body('fromCoin').notEmpty().withMessage('From coin is required'),
-  body('toCoin').notEmpty().withMessage('To coin is required'),
-  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0')
-], async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+app.post('/api/v1/trades/convert', async (req, res) => {
   try {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No token provided' });
+    }
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.id);
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
     const { fromCoin, toCoin, amount } = req.body;
     
-    // In a real app, you would fetch the current rate from an exchange API
-    // For demo purposes, we'll use a fixed rate
-    const rate = 0.85; // Example rate
+    // Get current prices
+    const prices = await getCoinPrices();
+    if (!prices) {
+      return res.status(500).json({ success: false, message: 'Failed to fetch prices' });
+    }
     
-    // Calculate fee (1% of amount)
-    const fee = amount * 0.01;
-    const totalAmount = amount + fee;
+    // Check if coins exist in our system
+    if (!prices[fromCoin] || !prices[toCoin]) {
+      return res.status(400).json({ success: false, message: 'Invalid coin selection' });
+    }
+    
+    // Calculate conversion rate with arbitrage logic
+    const fromPrice = prices[fromCoin];
+    const toPrice = prices[toCoin];
+    const rate = fromPrice / toPrice;
+    
+    // Apply arbitrage logic (5% spread)
+    const spread = 0.05;
+    const effectiveRate = rate * (1 - spread);
+    
+    // Calculate amount to receive
+    const receiveAmount = amount * effectiveRate;
     
     // Check if user has enough balance
-    const user = await User.findById(req.user.id);
-    
-    if (user.balance < totalAmount) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Insufficient balance'
-      });
+    if (user.portfolio[fromCoin] < amount) {
+      return res.status(400).json({ success: false, message: 'Insufficient balance' });
     }
     
-    // Deduct from balance
-    user.balance -= totalAmount;
-    await user.save();
+    // Update user portfolio
+    user.portfolio[fromCoin] -= amount;
+    user.portfolio[toCoin] = (user.portfolio[toCoin] || 0) + receiveAmount;
     
-    // Create trade
-    const trade = await Trade.create({
-      userId: req.user.id,
-      type: 'buy',
+    // Create trade record
+    const trade = new Trade({
+      userId: user._id,
       fromCoin,
       toCoin,
       amount,
-      rate,
-      fee,
+      rate: effectiveRate,
+      fee: amount * spread,
       status: 'completed'
     });
     
-    // Create transaction record
-    await Transaction.create({
-      userId: req.user.id,
-      type: 'trade',
-      amount: -totalAmount,
-      currency: fromCoin,
-      status: 'completed',
-      reference: `TRADE-${trade._id}`,
-      description: `Buy ${toCoin} with ${fromCoin}`
+    await trade.save();
+    await user.save();
+    
+    // Broadcast balance update via WebSocket
+    broadcast(user._id, {
+      type: 'balance_update',
+      balance: user.balance,
+      portfolio: user.portfolio
     });
     
-    // Send real-time update
-    broadcastToUser(req.user.id, {
-      type: 'TRADE_UPDATE',
-      trade,
-      balance: user.balance
-    });
+    // Broadcast to admin if it's a large trade
+    if (amount * fromPrice > 10000) { // $10,000 threshold
+      broadcastToAdmin({
+        type: 'large_trade',
+        userId: user._id,
+        fromCoin,
+        toCoin,
+        amount,
+        rate: effectiveRate,
+        timestamp: new Date()
+      });
+    }
     
-    res.status(201).json({
-      status: 'success',
-      data: {
-        trade
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.post('/api/v1/trades/sell', protect, [
-  body('fromCoin').notEmpty().withMessage('From coin is required'),
-  body('toCoin').notEmpty().withMessage('To coin is required'),
-  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0')
-], async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { fromCoin, toCoin, amount } = req.body;
-    
-    // In a real app, you would fetch the current rate from an exchange API
-    // For demo purposes, we'll use a fixed rate
-    const rate = 1.15; // Example rate
-    
-    // Calculate fee (1% of amount)
-    const fee = amount * 0.01;
-    const receivedAmount = (amount * rate) - fee;
-    
-    // Create trade
-    const trade = await Trade.create({
-      userId: req.user.id,
-      type: 'sell',
+    res.json({
+      success: true,
       fromCoin,
       toCoin,
       amount,
-      rate,
-      fee,
-      status: 'completed'
+      receiveAmount,
+      rate: effectiveRate,
+      fee: amount * spread,
+      newBalance: user.portfolio
     });
+  } catch (err) {
+    console.error('Trade conversion error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/v1/trades/history', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
     
-    // Add to balance
-    const user = await User.findById(req.user.id);
-    user.balance += receivedAmount;
-    await user.save();
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No token provided' });
+    }
     
-    // Create transaction record
-    await Transaction.create({
-      userId: req.user.id,
-      type: 'trade',
-      amount: receivedAmount,
-      currency: toCoin,
-      status: 'completed',
-      reference: `TRADE-${trade._id}`,
-      description: `Sell ${fromCoin} for ${toCoin}`
-    });
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const trades = await Trade.find({ userId: decoded.id }).sort({ createdAt: -1 }).limit(50);
     
-    // Send real-time update
-    broadcastToUser(req.user.id, {
-      type: 'TRADE_UPDATE',
-      trade,
+    res.json({ success: true, trades });
+  } catch (err) {
+    console.error('Get trade history error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Portfolio Routes
+app.get('/api/v1/portfolio', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No token provided' });
+    }
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.id);
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    // Get current prices
+    const prices = await getCoinPrices();
+    if (!prices) {
+      return res.status(500).json({ success: false, message: 'Failed to fetch prices' });
+    }
+    
+    // Calculate portfolio value
+    let totalValue = 0;
+    const portfolioWithValue = {};
+    
+    for (const [coin, amount] of Object.entries(user.portfolio)) {
+      if (prices[coin] && amount > 0) {
+        const value = amount * prices[coin];
+        portfolioWithValue[coin] = {
+          amount,
+          value,
+          price: prices[coin]
+        };
+        totalValue += value;
+      }
+    }
+    
+    res.json({
+      success: true,
+      portfolio: portfolioWithValue,
+      totalValue,
       balance: user.balance
     });
-    
-    res.status(201).json({
-      status: 'success',
-      data: {
-        trade
-      }
-    });
   } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.post('/api/v1/trades/arbitrage', protect, [
-  body('fromCoin').notEmpty().withMessage('From coin is required'),
-  body('toCoin').notEmpty().withMessage('To coin is required'),
-  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0')
-], async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { fromCoin, toCoin, amount } = req.body;
-    
-    // In a real app, you would implement actual arbitrage logic
-    // For demo purposes, we'll simulate a profitable arbitrage opportunity
-    
-    // Simulate finding a profitable arbitrage opportunity
-    const buyRate = 0.85; // Rate when buying
-    const sellRate = 1.15; // Rate when selling
-    
-    // Calculate arbitrage profit (5% of amount)
-    const profit = amount * 0.05;
-    const totalAmount = amount + profit;
-    
-    // Check if user has enough balance
-    const user = await User.findById(req.user.id);
-    
-    if (user.balance < amount) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Insufficient balance'
-      });
-    }
-    
-    // Deduct initial amount
-    user.balance -= amount;
-    
-    // Add profit
-    user.balance += totalAmount;
-    await user.save();
-    
-    // Create trade
-    const trade = await Trade.create({
-      userId: req.user.id,
-      type: 'arbitrage',
-      fromCoin,
-      toCoin,
-      amount,
-      rate: buyRate, // Using buy rate as reference
-      fee: 0, // No fee for arbitrage in this demo
-      status: 'completed'
-    });
-    
-    // Create transaction record
-    await Transaction.create({
-      userId: req.user.id,
-      type: 'trade',
-      amount: profit,
-      currency: toCoin,
-      status: 'completed',
-      reference: `ARBITRAGE-${trade._id}`,
-      description: `Arbitrage trade between ${fromCoin} and ${toCoin}`
-    });
-    
-    // Send real-time update
-    broadcastToUser(req.user.id, {
-      type: 'TRADE_UPDATE',
-      trade,
-      balance: user.balance
-    });
-    
-    res.status(201).json({
-      status: 'success',
-      data: {
-        trade,
-        profit
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-// Transaction Routes
-app.get('/api/v1/transactions', protect, async (req, res, next) => {
-  try {
-    const transactions = await Transaction.find({ userId: req.user.id }).sort('-createdAt');
-    
-    res.status(200).json({
-      status: 'success',
-      results: transactions.length,
-      data: {
-        transactions
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-// Support Routes
-app.get('/api/v1/support/tickets', protect, async (req, res, next) => {
-  try {
-    const tickets = await SupportTicket.find({ userId: req.user.id }).sort('-createdAt');
-    
-    res.status(200).json({
-      status: 'success',
-      results: tickets.length,
-      data: {
-        tickets
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.post('/api/v1/support/tickets', protect, [
-  body('subject').notEmpty().withMessage('Subject is required'),
-  body('message').notEmpty().withMessage('Message is required')
-], async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { subject, message } = req.body;
-    
-    const ticket = await SupportTicket.create({
-      userId: req.user.id,
-      email: req.user.email,
-      subject,
-      message,
-      status: 'open'
-    });
-    
-    // Notify admins
-    broadcastToAdmins({
-      type: 'NEW_TICKET',
-      ticketId: ticket._id,
-      message: 'New support ticket created'
-    });
-    
-    res.status(201).json({
-      status: 'success',
-      data: {
-        ticket
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.get('/api/v1/support/tickets/:id', protect, async (req, res, next) => {
-  try {
-    const ticket = await SupportTicket.findOne({
-      _id: req.params.id,
-      userId: req.user.id
-    });
-    
-    if (!ticket) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'No ticket found with that ID'
-      });
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        ticket
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.post('/api/v1/support/tickets/:id/reply', protect, [
-  body('message').notEmpty().withMessage('Message is required')
-], async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { message } = req.body;
-    
-    const ticket = await SupportTicket.findOneAndUpdate(
-      {
-        _id: req.params.id,
-        userId: req.user.id
-      },
-      {
-        $push: {
-          responses: {
-            message,
-            fromAdmin: false,
-            adminId: null
-          }
-        }
-      },
-      { new: true }
-    );
-    
-    if (!ticket) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'No ticket found with that ID'
-      });
-    }
-    
-    // Notify admins
-    broadcastToAdmins({
-      type: 'TICKET_REPLY',
-      ticketId: ticket._id,
-      message: 'New reply to support ticket'
-    });
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        ticket
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
+    console.error('Get portfolio error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // Admin Routes
-app.post('/api/v1/admin/login', [
-  body('email').isEmail().withMessage('Please provide a valid email'),
-  body('password').notEmpty().withMessage('Password is required')
-], async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+app.post('/api/v1/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     
-    const admin = await Admin.findOne({ email }).select('+password');
-    
-    if (!admin || !(await bcrypt.compare(password, admin.password))) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Incorrect email or password'
-      });
+    // Find admin user
+    const user = await User.findOne({ email, isAdmin: true });
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
     
-    if (!admin.active) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Your account has been deactivated'
-      });
+    // Check password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
     
-    admin.lastLogin = Date.now();
-    await admin.save();
+    // Update last login
+    user.lastLogin = new Date();
+    await user.save();
     
-    createSendToken(admin, 200, res, true);
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
+    // Generate token
+    const token = generateToken(user);
+    
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        isAdmin: user.isAdmin
+      }
     });
+  } catch (err) {
+    console.error('Admin login error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.get('/api/v1/admin/dashboard-stats', adminProtect, async (req, res, next) => {
+app.get('/api/v1/admin/dashboard-stats', async (req, res) => {
   try {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No token provided' });
+    }
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const admin = await User.findById(decoded.id);
+    
+    if (!admin || !admin.isAdmin) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    
+    // Get stats
     const totalUsers = await User.countDocuments();
     const verifiedUsers = await User.countDocuments({ isVerified: true });
     const totalTrades = await Trade.countDocuments();
     const totalVolume = await Trade.aggregate([
       {
+        $lookup: {
+          from: 'users',
+          localField: 'userId',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      {
+        $unwind: '$user'
+      },
+      {
         $group: {
           _id: null,
-          total: { $sum: '$amount' }
+          totalVolume: { $sum: '$amount' }
         }
       }
     ]);
     
-    res.status(200).json({
-      status: 'success',
-      data: {
+    // Recent users
+    const recentUsers = await User.find()
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .select('firstName lastName email createdAt');
+    
+    // Recent trades
+    const recentTrades = await Trade.find()
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .populate('userId', 'firstName lastName email');
+    
+    res.json({
+      success: true,
+      stats: {
         totalUsers,
         verifiedUsers,
         totalTrades,
-        totalVolume: totalVolume.length ? totalVolume[0].total : 0
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.get('/api/v1/admin/users', adminProtect, async (req, res, next) => {
-  try {
-    const users = await User.find().sort('-createdAt');
-    
-    res.status(200).json({
-      status: 'success',
-      results: users.length,
-      data: {
-        users
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.get('/api/v1/admin/users/:id', adminProtect, async (req, res, next) => {
-  try {
-    const user = await User.findById(req.params.id);
-    
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'No user found with that ID'
-      });
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        user
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.patch('/api/v1/admin/users/:id', adminProtect, async (req, res, next) => {
-  try {
-    const { active, balance, kycStatus } = req.body;
-    
-    const update = {};
-    if (active !== undefined) update.active = active;
-    if (balance !== undefined) update.balance = balance;
-    if (kycStatus) {
-      update.kycStatus = kycStatus;
-      if (kycStatus === 'verified') {
-        update.kycDetails = req.user.kycDetails;
-      }
-    }
-    
-    const user = await User.findByIdAndUpdate(req.params.id, update, {
-      new: true,
-      runValidators: true
-    });
-    
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'No user found with that ID'
-      });
-    }
-    
-    // Send real-time update if balance changed
-    if (balance !== undefined) {
-      broadcastToUser(user._id, {
-        type: 'BALANCE_UPDATE',
-        balance: user.balance
-      });
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        user
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.get('/api/v1/admin/trades', adminProtect, async (req, res, next) => {
-  try {
-    const trades = await Trade.find().populate('userId').sort('-createdAt');
-    
-    res.status(200).json({
-      status: 'success',
-      results: trades.length,
-      data: {
-        trades
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.get('/api/v1/admin/transactions', adminProtect, async (req, res, next) => {
-  try {
-    const transactions = await Transaction.find().populate('userId').sort('-createdAt');
-    
-    res.status(200).json({
-      status: 'success',
-      results: transactions.length,
-      data: {
-        transactions
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.get('/api/v1/admin/tickets', adminProtect, async (req, res, next) => {
-  try {
-    const tickets = await SupportTicket.find().populate('userId').sort('-createdAt');
-    
-    res.status(200).json({
-      status: 'success',
-      results: tickets.length,
-      data: {
-        tickets
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.get('/api/v1/admin/tickets/:id', adminProtect, async (req, res, next) => {
-  try {
-    const ticket = await SupportTicket.findById(req.params.id).populate('userId');
-    
-    if (!ticket) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'No ticket found with that ID'
-      });
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        ticket
-      }
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
-  }
-});
-
-app.patch('/api/v1/admin/tickets/:id/assign', adminProtect, async (req, res, next) => {
-  try {
-    const ticket = await SupportTicket.findByIdAndUpdate(
-      req.params.id,
-      {
-        status: 'in-progress',
-        $push: {
-          responses: {
-            message: `Ticket assigned to ${req.admin.firstName} ${req.admin.lastName}`,
-            fromAdmin: true,
-            adminId: req.admin._id
-          }
-        }
+        totalVolume: totalVolume[0]?.totalVolume || 0
       },
-      { new: true }
-    ).populate('userId');
-    
-    if (!ticket) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'No ticket found with that ID'
-      });
-    }
-    
-    // Notify user
-    if (ticket.userId) {
-      broadcastToUser(ticket.userId._id, {
-        type: 'TICKET_UPDATE',
-        ticketId: ticket._id,
-        message: 'Your ticket has been assigned to a support agent'
-      });
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        ticket
-      }
+      recentUsers,
+      recentTrades
     });
   } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
+    console.error('Admin dashboard stats error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.patch('/api/v1/admin/tickets/:id/resolve', adminProtect, async (req, res, next) => {
+app.get('/api/v1/admin/users', async (req, res) => {
   try {
-    const ticket = await SupportTicket.findByIdAndUpdate(
-      req.params.id,
-      {
-        status: 'resolved',
-        $push: {
-          responses: {
-            message: 'Ticket marked as resolved',
-            fromAdmin: true,
-            adminId: req.admin._id
-          }
-        }
-      },
-      { new: true }
-    ).populate('userId');
+    const token = req.headers.authorization?.split(' ')[1];
     
-    if (!ticket) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'No ticket found with that ID'
-      });
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No token provided' });
     }
     
-    // Notify user
-    if (ticket.userId) {
-      broadcastToUser(ticket.userId._id, {
-        type: 'TICKET_UPDATE',
-        ticketId: ticket._id,
-        message: 'Your ticket has been resolved'
-      });
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const admin = await User.findById(decoded.id);
+    
+    if (!admin || !admin.isAdmin) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
     }
     
-    res.status(200).json({
-      status: 'success',
-      data: {
-        ticket
-      }
+    const { page = 1, limit = 20, search = '' } = req.query;
+    const skip = (page - 1) * limit;
+    
+    const query = {
+      $or: [
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } }
+      ]
+    };
+    
+    const users = await User.find(query)
+      .skip(skip)
+      .limit(parseInt(limit))
+      .select('-password -verificationToken -resetPasswordToken -resetPasswordExpires');
+    
+    const total = await User.countDocuments(query);
+    
+    res.json({
+      success: true,
+      users,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / limit)
     });
   } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
+    console.error('Admin get users error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.post('/api/v1/admin/tickets/:id/reply', adminProtect, [
-  body('message').notEmpty().withMessage('Message is required')
-], async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+app.patch('/api/v1/admin/users/:id/balance', async (req, res) => {
   try {
-    const { message } = req.body;
+    const token = req.headers.authorization?.split(' ')[1];
     
-    const ticket = await SupportTicket.findByIdAndUpdate(
-      req.params.id,
-      {
-        $push: {
-          responses: {
-            message,
-            fromAdmin: true,
-            adminId: req.admin._id
-          }
-        }
-      },
-      { new: true }
-    ).populate('userId');
-    
-    if (!ticket) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'No ticket found with that ID'
-      });
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No token provided' });
     }
     
-    // Notify user
-    if (ticket.userId) {
-      broadcastToUser(ticket.userId._id, {
-        type: 'TICKET_UPDATE',
-        ticketId: ticket._id,
-        message: 'New reply from support'
-      });
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const admin = await User.findById(decoded.id);
+    
+    if (!admin || !admin.isAdmin) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
     }
     
-    res.status(200).json({
-      status: 'success',
-      data: {
-        ticket
-      }
+    const { amount, coin } = req.body;
+    const userId = req.params.id;
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    // Update balance
+    if (coin === 'USD') {
+      user.balance += parseFloat(amount);
+    } else {
+      user.portfolio[coin] = (user.portfolio[coin] || 0) + parseFloat(amount);
+    }
+    
+    await user.save();
+    
+    // Broadcast balance update
+    broadcast(user._id, {
+      type: 'balance_update',
+      balance: user.balance,
+      portfolio: user.portfolio
     });
+    
+    res.json({ success: true, message: 'Balance updated successfully' });
   } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
+    console.error('Admin update user balance error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.get('/api/v1/admin/kyc', adminProtect, async (req, res, next) => {
+// Support Routes
+app.post('/api/v1/support/tickets', async (req, res) => {
   try {
-    const kycSubmissions = await User.find({ kycStatus: 'pending' });
+    const { name, email, subject, message } = req.body;
     
-    res.status(200).json({
-      status: 'success',
-      results: kycSubmissions.length,
-      data: {
-        kycSubmissions
-      }
+    const ticket = new SupportTicket({
+      name,
+      email,
+      subject,
+      message
     });
+    
+    await ticket.save();
+    
+    res.json({ success: true, ticket });
   } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
+    console.error('Create support ticket error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.patch('/api/v1/admin/kyc/:id/approve', adminProtect, async (req, res, next) => {
+app.get('/api/v1/support/faqs', async (req, res) => {
   try {
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      { kycStatus: 'verified' },
-      { new: true }
-    );
+    const faqs = await FAQ.find().sort({ category: 1, createdAt: -1 });
+    
+    // Group by category
+    const faqsByCategory = {};
+    faqs.forEach(faq => {
+      if (!faqsByCategory[faq.category]) {
+        faqsByCategory[faq.category] = [];
+      }
+      faqsByCategory[faq.category].push(faq);
+    });
+    
+    res.json({ success: true, faqs: faqsByCategory });
+  } catch (err) {
+    console.error('Get FAQs error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Static page routes
+app.get('/about.html', (req, res) => {
+  res.json({ success: true, message: 'About page data would be served here' });
+});
+
+app.get('/account.html', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No token provided' });
+    }
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.id);
     
     if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'No user found with that ID'
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
     
-    // Notify user
-    broadcastToUser(user._id, {
-      type: 'KYC_UPDATE',
-      status: 'verified',
-      message: 'Your KYC has been approved'
-    });
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        user
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        country: user.country,
+        currency: user.currency,
+        isVerified: user.isVerified,
+        balance: user.balance,
+        portfolio: user.portfolio,
+        walletAddress: user.walletAddress,
+        walletProvider: user.walletProvider,
+        createdAt: user.createdAt,
+        lastLogin: user.lastLogin
       }
     });
   } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
+    console.error('Account page error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.patch('/api/v1/admin/kyc/:id/reject', adminProtect, async (req, res, next) => {
+app.get('/dashboard.html', async (req, res) => {
   try {
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      { kycStatus: 'rejected', kycDetails: null },
-      { new: true }
-    );
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No token provided' });
+    }
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.id);
     
     if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'No user found with that ID'
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
     
-    // Notify user
-    broadcastToUser(user._id, {
-      type: 'KYC_UPDATE',
-      status: 'rejected',
-      message: 'Your KYC has been rejected'
-    });
+    // Get market prices
+    const prices = await getCoinPrices();
+    if (!prices) {
+      return res.status(500).json({ success: false, message: 'Failed to fetch prices' });
+    }
     
-    res.status(200).json({
-      status: 'success',
-      data: {
-        user
+    // Calculate portfolio value
+    let totalValue = 0;
+    const portfolioWithValue = {};
+    
+    for (const [coin, amount] of Object.entries(user.portfolio)) {
+      if (prices[coin] && amount > 0) {
+        const value = amount * prices[coin];
+        portfolioWithValue[coin] = {
+          amount,
+          value,
+          price: prices[coin]
+        };
+        totalValue += value;
       }
+    }
+    
+    // Get recent trades
+    const recentTrades = await Trade.find({ userId: user._id })
+      .sort({ createdAt: -1 })
+      .limit(5);
+    
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        balance: user.balance,
+        portfolio: portfolioWithValue,
+        totalValue
+      },
+      prices,
+      recentTrades
     });
   } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Something went wrong'
-    });
+    console.error('Dashboard page error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// Error handling for unhandled routes
-app.all('*', (req, res, next) => {
-  res.status(404).json({
-    status: 'fail',
-    message: `Can't find ${req.originalUrl} on this server!`
-  });
+app.get('/faqs.html', async (req, res) => {
+  try {
+    const faqs = await FAQ.find().sort({ category: 1, createdAt: -1 });
+    
+    // Group by category
+    const faqsByCategory = {};
+    faqs.forEach(faq => {
+      if (!faqsByCategory[faq.category]) {
+        faqsByCategory[faq.category] = [];
+      }
+      faqsByCategory[faq.category].push(faq);
+    });
+    
+    res.json({ success: true, faqs: faqsByCategory });
+  } catch (err) {
+    console.error('FAQs page error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
 });
 
-// Global error handler
+app.get('/forgot-password.html', (req, res) => {
+  res.json({ success: true, message: 'Forgot password page would be served here' });
+});
+
+app.get('/index.html', async (req, res) => {
+  try {
+    // Get market prices
+    const prices = await getCoinPrices();
+    if (!prices) {
+      return res.status(500).json({ success: false, message: 'Failed to fetch prices' });
+    }
+    
+    // Get trending coins
+    const trendingResponse = await axios.get('https://api.coingecko.com/api/v3/search/trending');
+    const trendingCoins = trendingResponse.data.coins.map(coin => ({
+      id: coin.item.id,
+      name: coin.item.name,
+      symbol: coin.item.symbol,
+      price: prices[coin.item.id] || 0,
+      change24h: coin.item.data.price_change_percentage_24h.usd || 0
+    }));
+    
+    res.json({
+      success: true,
+      prices,
+      trendingCoins
+    });
+  } catch (err) {
+    console.error('Index page error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.get('/login.html', (req, res) => {
+  res.json({ success: true, message: 'Login page would be served here' });
+});
+
+app.get('/logout.html', (req, res) => {
+  res.json({ success: true, message: 'Logout page would be served here' });
+});
+
+app.get('/signup.html', (req, res) => {
+  res.json({ success: true, message: 'Signup page would be served here' });
+});
+
+app.get('/support.html', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    let userTickets = [];
+    
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const user = await User.findById(decoded.id);
+        
+        if (user) {
+          userTickets = await SupportTicket.find({ email: user.email })
+            .sort({ createdAt: -1 })
+            .limit(5);
+        }
+      } catch (err) {
+        console.error('Token verification failed for support page:', err);
+      }
+    }
+    
+    const faqs = await FAQ.find().sort({ category: 1, createdAt: -1 });
+    
+    // Group by category
+    const faqsByCategory = {};
+    faqs.forEach(faq => {
+      if (!faqsByCategory[faq.category]) {
+        faqsByCategory[faq.category] = [];
+      }
+      faqsByCategory[faq.category].push(faq);
+    });
+    
+    res.json({
+      success: true,
+      faqs: faqsByCategory,
+      userTickets
+    });
+  } catch (err) {
+    console.error('Support page error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  
-  res.status(500).json({
-    status: 'error',
-    message: 'Something went very wrong!'
-  });
+  console.error('Unhandled error:', err);
+  res.status(500).json({ success: false, message: 'Internal server error' });
 });
 
-process.on('unhandledRejection', (err) => {
-  console.error('UNHANDLED REJECTION! 💥 Shutting down...');
-  console.error(err);
-  server.close(() => {
-    process.exit(1);
-  });
-});
-
-process.on('SIGTERM', () => {
-  console.log('👋 SIGTERM RECEIVED. Shutting down gracefully');
-  server.close(() => {
-    console.log('💥 Process terminated!');
-  });
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: 'Endpoint not found' });
 });
