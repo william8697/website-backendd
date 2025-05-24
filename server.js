@@ -41,11 +41,17 @@ const apiLimiter = rateLimit({
 app.use('/api/', apiLimiter);
 
 // Database connection
-const DB = process.env.MONGODB_URI || 'mongodb+srv://mosesmwainaina1994:OWlondlAbn3bJuj4@cluster0.edyueep.mongodb.net/crypto_trading?retryWrites=true&w=majority&appName=Cluster0';
+const DB = process.env.MONGODB_URI || 'mongodb+srv://mosesmwainaina1994:<password>@cluster0.edyueep.mongodb.net/crypto_trading?retryWrites=true&w=majority';
+
 mongoose.connect(DB, {
   useNewUrlParser: true,
-  useUnifiedTopology: true
-}).then(() => console.log('DB connection successful!'));
+  useUnifiedTopology: true,
+  auth: {
+    username: process.env.MONGODB_USERNAME || 'mosesmwainaina1994',
+    password: process.env.MONGODB_PASSWORD || 'OWlondlAbn3bJuj4'
+  }
+}).then(() => console.log('DB connection successful!'))
+  .catch(err => console.error('DB connection error:', err));
 
 // Schemas
 const userSchema = new mongoose.Schema({
