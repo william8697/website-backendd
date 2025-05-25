@@ -25,7 +25,7 @@ const corsOptions = {
 
 // Apply middleware
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // Handle preflight requests
+app.options('*', cors(corsOptions));
 app.use(helmet());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -305,11 +305,8 @@ const initializeCoins = async () => {
 initializeCoins();
 
 // Routes
-app.get('/', (req, res) => {
-  res.send('Crypto Trading Platform Backend');
-});
 
-// Auth Routes
+// ====================== AUTH ROUTES ======================
 app.post('/api/v1/auth/signup', async (req, res) => {
   try {
     const { email, password, name } = req.body;
@@ -439,7 +436,30 @@ app.post('/api/v1/auth/wallet-login', async (req, res) => {
   }
 });
 
-// Changed from POST to GET for token verification
+app.get('/api/v1/auth/me', authenticate, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        isVerified: user.isVerified,
+        balance: user.balance,
+        portfolio: Object.fromEntries(user.portfolio),
+        kycStatus: user.kycStatus,
+        settings: user.settings,
+        walletAddress: user.walletAddress
+      }
+    });
+  } catch (err) {
+    console.error('Get user error:', err);
+    res.status(500).json({ success: false, message: 'Server error getting user data' });
+  }
+});
+
 app.get('/api/v1/auth/verify', authenticate, (req, res) => {
   res.json({ 
     success: true, 
@@ -522,7 +542,7 @@ app.post('/api/v1/auth/reset-password', async (req, res) => {
   }
 });
 
-// User Routes
+// ====================== USER ROUTES ======================
 app.get('/api/v1/users/me', authenticate, async (req, res) => {
   try {
     const user = req.user;
@@ -698,7 +718,7 @@ app.delete('/api/v1/users/me', authenticate, async (req, res) => {
   }
 });
 
-// Portfolio Routes
+// ====================== PORTFOLIO ROUTES ======================
 app.get('/api/v1/portfolio', authenticate, async (req, res) => {
   try {
     const user = req.user;
@@ -737,7 +757,7 @@ app.get('/api/v1/portfolio', authenticate, async (req, res) => {
   }
 });
 
-// Trade Routes
+// ====================== TRADE ROUTES ======================
 app.post('/api/v1/trades/buy', authenticate, async (req, res) => {
   try {
     const user = req.user;
@@ -889,7 +909,7 @@ app.get('/api/v1/trades/history', authenticate, async (req, res) => {
   }
 });
 
-// Exchange Routes (Arbitrage)
+// ====================== EXCHANGE ROUTES ======================
 app.get('/api/v1/exchange/coins', async (req, res) => {
   try {
     const coins = await Coin.find({}).select('symbol name price change24h');
@@ -1027,7 +1047,38 @@ app.post('/api/v1/exchange/convert', authenticate, async (req, res) => {
   }
 });
 
-// Transaction Routes
+app.get('/api/v1/exchange/history', authenticate, async (req, res) => {
+  try {
+    const user = req.user;
+    const { limit = 10, page = 1 } = req.query;
+
+    const trades = await Trade.find({ 
+      userId: user._id,
+      type: 'convert'
+    })
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit))
+      .skip((parseInt(page) - 1) * parseInt(limit));
+
+    const total = await Trade.countDocuments({ 
+      userId: user._id,
+      type: 'convert'
+    });
+
+    res.json({
+      success: true,
+      trades,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (err) {
+    console.error('Get conversion history error:', err);
+    res.status(500).json({ success: false, message: 'Server error getting conversion history' });
+  }
+});
+
+// ====================== TRANSACTION ROUTES ======================
 app.get('/api/v1/transactions/recent', authenticate, async (req, res) => {
   try {
     const user = req.user;
@@ -1075,7 +1126,7 @@ app.get('/api/v1/transactions', authenticate, async (req, res) => {
   }
 });
 
-// Wallet Routes
+// ====================== WALLET ROUTES ======================
 app.post('/api/v1/wallet/deposit', authenticate, async (req, res) => {
   try {
     const user = req.user;
@@ -1153,7 +1204,7 @@ app.post('/api/v1/wallet/withdraw', authenticate, async (req, res) => {
   }
 });
 
-// Market Data Routes
+// ====================== MARKET DATA ROUTES ======================
 app.get('/api/v1/market/data', async (req, res) => {
   try {
     const coins = await Coin.find({}).select('symbol name price change24h volume marketCap');
@@ -1180,7 +1231,7 @@ app.get('/api/v1/market/detailed/:symbol', async (req, res) => {
   }
 });
 
-// Support Routes
+// ====================== SUPPORT ROUTES ======================
 app.post('/api/v1/support/tickets', authenticate, async (req, res) => {
   try {
     const user = req.user;
@@ -1271,7 +1322,7 @@ app.post('/api/v1/support/tickets/:id/reply', authenticate, async (req, res) => 
   }
 });
 
-// Admin Routes
+// ====================== ADMIN ROUTES ======================
 app.post('/api/v1/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -1312,7 +1363,6 @@ app.post('/api/v1/admin/login', async (req, res) => {
   }
 });
 
-// Changed from POST to GET for admin token verification
 app.get('/api/v1/admin/verify', authenticateAdmin, (req, res) => {
   res.json({ 
     success: true, 
@@ -1646,13 +1696,13 @@ app.post('/api/v1/admin/tickets/:id/reply', authenticateAdmin, async (req, res) 
   }
 });
 
-// Public Routes
+// ====================== PUBLIC ROUTES ======================
 app.get('/api/v1/stats', async (req, res) => {
   try {
     const [usersCount, tradesCount, totalVolume] = await Promise.all([
       User.countDocuments(),
       Trade.countDocuments(),
-      Trade.aggregate([{ $group: { _id: null, total: { $sum: { $multiply: ['$amount', '$rate'] } } }])
+      Trade.aggregate([{ $group: { _id: null, total: { $sum: { $multiply: ['$amount', '$rate'] } } } }])
     ]);
 
     res.json({
