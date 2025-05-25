@@ -1,5 +1,5 @@
 {
-  "name": "crypto-trading-platform-backend",
+  "name": "crypto-trading-backend",
   "version": "1.0.0",
   "description": "Backend for Crypto Trading Platform",
   "main": "server.js",
@@ -9,23 +9,20 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "axios": "^1.6.7",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
-    "crypto": "^1.0.1",
-    "dotenv": "^16.3.1",
+    "dotenv": "^16.0.3",
     "express": "^4.18.2",
-    "express-rate-limit": "^6.8.1",
-    "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.0.3",
-    "nodemailer": "^6.9.5",
-    "uuid": "^9.0.1",
-    "ws": "^8.13.0"
+    "helmet": "^7.0.0",
+    "jsonwebtoken": "^9.0.0",
+    "mongoose": "^7.6.2",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.9.3",
+    "ws": "^8.13.0",
+    "express-rate-limit": "^6.7.0",
+    "crypto": "^1.0.1"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
-  },
-  "engines": {
-    "node": ">=16.0.0"
+    "nodemon": "^2.0.22"
   }
 }
