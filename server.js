@@ -10,12 +10,13 @@ const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Enhanced MongoDB connection with error handling
-const MONGODB_URI = 'mongodb+srv://mosesmwainaina1994:OWlondlAbn3bJuj4@cluster0.edyueep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://mosesmwainaina1994:OWlondlAbn3bJuj4@cluster0.edyueep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
 mongoose.connect(MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
@@ -31,11 +32,12 @@ mongoose.connect(MONGODB_URI, {
 // Security middleware
 app.use(helmet());
 app.use(morgan('combined'));
+app.use(cookieParser());
 app.use(cors({
   origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
@@ -57,13 +59,13 @@ const apiLimiter = rateLimit({
 app.use('/api/v1/auth/', authLimiter);
 app.use('/api/v1/', apiLimiter);
 
-// Email configuration with Mailtrap
+// Email configuration
 const transporter = nodemailer.createTransport({
-  host: 'sandbox.smtp.mailtrap.io',
-  port: 2525,
+  host: process.env.EMAIL_HOST || 'sandbox.smtp.mailtrap.io',
+  port: process.env.EMAIL_PORT || 2525,
   auth: {
-    user: '7c707ac161af1c',
-    pass: '6c08aa4f2c679a'
+    user: process.env.EMAIL_USER || '7c707ac161af1c',
+    pass: process.env.EMAIL_PASS || '6c08aa4f2c679a'
   }
 });
 
@@ -174,6 +176,7 @@ const SupportTicketSchema = new mongoose.Schema({
   subject: { type: String, required: true },
   message: { type: String, required: true },
   status: { type: String, enum: ['open', 'pending', 'resolved', 'closed'], default: 'open' },
+  assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
   responses: [{
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     message: { type: String, required: true },
@@ -198,15 +201,15 @@ const SupportTicket = mongoose.model('SupportTicket', SupportTicketSchema);
 const FAQ = mongoose.model('FAQ', FAQSchema);
 
 // JWT Configuration
-const JWT_SECRET = '17581758Na.%';
-const JWT_EXPIRES_IN = '7d';
+const JWT_SECRET = process.env.JWT_SECRET || '17581758Na.%';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
-// WebSocket Server with enhanced functionality
+// Create HTTP server
 const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`WebSocket server running on ws://localhost:${PORT}`);
 });
 
+// WebSocket Server with enhanced functionality
 const wss = new WebSocket.Server({ server, path: '/api/v1/ws' });
 
 const clients = new Map();
@@ -238,7 +241,6 @@ wss.on('connection', (ws, req) => {
     ws.on('message', (message) => {
       try {
         const data = JSON.parse(message);
-        // Handle ping/pong for connection keep-alive
         if (data.type === 'ping') {
           ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
         }
@@ -342,12 +344,9 @@ const authenticate = async (req, res, next) => {
   try {
     let token;
     
-    // Check Authorization header first
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
       token = req.headers.authorization.split(' ')[1];
-    }
-    // Check cookies if no header
-    else if (req.cookies && req.cookies.token) {
+    } else if (req.cookies?.token) {
       token = req.cookies.token;
     }
     
@@ -369,15 +368,13 @@ const authenticate = async (req, res, next) => {
         });
       }
       
-      // Update last login if more than 5 minutes ago
       if (!admin.lastLogin || (Date.now() - admin.lastLogin.getTime()) > 300000) {
         admin.lastLogin = new Date();
         await admin.save();
       }
       
       req.admin = admin;
-    } 
-    else if (decoded.userId) {
+    } else if (decoded.userId) {
       const user = await User.findById(decoded.userId).select('+lastLogin');
       if (!user) {
         return res.status(401).json({ 
@@ -386,15 +383,13 @@ const authenticate = async (req, res, next) => {
         });
       }
       
-      // Update last login if more than 5 minutes ago
       if (!user.lastLogin || (Date.now() - user.lastLogin.getTime()) > 300000) {
         user.lastLogin = new Date();
         await user.save();
       }
       
       req.user = user;
-    } 
-    else {
+    } else {
       return res.status(401).json({ 
         success: false,
         error: 'Not authorized, invalid token'
@@ -434,31 +429,11 @@ const authorizeUser = (req, res, next) => {
 
 // API Routes
 
-// ======================
 // Authentication Routes
-// ======================
-
-/**
- * @api {post} /api/v1/auth/signup Register a new user
- * @apiName SignupUser
- * @apiGroup Authentication
- * 
- * @apiParam {String} firstName User's first name
- * @apiParam {String} lastName User's last name
- * @apiParam {String} email User's email
- * @apiParam {String} password User's password
- * @apiParam {String} confirmPassword Password confirmation
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {String} token JWT token
- * @apiSuccess {Object} user User data
- */
 app.post('/api/v1/auth/signup', async (req, res) => {
   try {
     const { firstName, lastName, email, password, confirmPassword } = req.body;
     
-    // Validation
     if (!firstName || !lastName || !email || !password || !confirmPassword) {
       return res.status(400).json({ 
         success: false,
@@ -480,7 +455,6 @@ app.post('/api/v1/auth/signup', async (req, res) => {
       });
     }
     
-    // Check if user exists
     const existingUser = await User.findOne({ email: email.toLowerCase() });
     if (existingUser) {
       return res.status(400).json({ 
@@ -489,15 +463,12 @@ app.post('/api/v1/auth/signup', async (req, res) => {
       });
     }
     
-    // Hash password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
     
-    // Create verification token
     const verificationToken = generateToken();
-    const verificationTokenExpires = Date.now() + 3600000; // 1 hour
+    const verificationTokenExpires = Date.now() + 3600000;
     
-    // Create user
     const user = new User({
       firstName,
       lastName,
@@ -509,14 +480,11 @@ app.post('/api/v1/auth/signup', async (req, res) => {
     
     await user.save();
     
-    // Send verification email
     const emailContent = generateVerificationEmail(email, verificationToken);
     await sendEmail(email, emailContent.subject, emailContent.html);
     
-    // Generate JWT token
     const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
     
-    // Respond without sensitive data
     const userResponse = {
       id: user._id,
       firstName: user.firstName,
@@ -542,24 +510,10 @@ app.post('/api/v1/auth/signup', async (req, res) => {
   }
 });
 
-/**
- * @api {post} /api/v1/auth/login Authenticate user
- * @apiName LoginUser
- * @apiGroup Authentication
- * 
- * @apiParam {String} email User's email
- * @apiParam {String} password User's password
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {String} token JWT token
- * @apiSuccess {Object} user User data
- */
 app.post('/api/v1/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     
-    // Validation
     if (!email || !password) {
       return res.status(400).json({ 
         success: false,
@@ -567,7 +521,6 @@ app.post('/api/v1/auth/login', async (req, res) => {
       });
     }
     
-    // Check if user exists
     const user = await User.findOne({ email: email.toLowerCase() }).select('+password +lastLogin');
     if (!user) {
       return res.status(401).json({ 
@@ -576,7 +529,6 @@ app.post('/api/v1/auth/login', async (req, res) => {
       });
     }
     
-    // Check if password matches
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ 
@@ -585,7 +537,6 @@ app.post('/api/v1/auth/login', async (req, res) => {
       });
     }
     
-    // Check if email is verified
     if (!user.isVerified) {
       return res.status(401).json({ 
         success: false,
@@ -593,14 +544,11 @@ app.post('/api/v1/auth/login', async (req, res) => {
       });
     }
     
-    // Update last login
     user.lastLogin = new Date();
     await user.save();
     
-    // Generate JWT token
     const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
     
-    // Respond without sensitive data
     const userResponse = {
       id: user._id,
       firstName: user.firstName,
@@ -630,16 +578,6 @@ app.post('/api/v1/auth/login', async (req, res) => {
   }
 });
 
-/**
- * @api {get} /api/v1/auth/verify Verify email
- * @apiName VerifyEmail
- * @apiGroup Authentication
- * 
- * @apiParam {String} token Verification token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- */
 app.get('/api/v1/auth/verify', async (req, res) => {
   try {
     const { token } = req.query;
@@ -663,7 +601,6 @@ app.get('/api/v1/auth/verify', async (req, res) => {
       });
     }
     
-    // Mark as verified
     user.isVerified = true;
     user.verificationToken = undefined;
     user.verificationTokenExpires = undefined;
@@ -683,16 +620,6 @@ app.get('/api/v1/auth/verify', async (req, res) => {
   }
 });
 
-/**
- * @api {post} /api/v1/auth/forgot-password Request password reset
- * @apiName ForgotPassword
- * @apiGroup Authentication
- * 
- * @apiParam {String} email User's email
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- */
 app.post('/api/v1/auth/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
@@ -706,7 +633,6 @@ app.post('/api/v1/auth/forgot-password', async (req, res) => {
     
     const user = await User.findOne({ email: email.toLowerCase() });
     
-    // Don't reveal if user doesn't exist (security measure)
     if (!user) {
       return res.json({
         success: true,
@@ -714,13 +640,11 @@ app.post('/api/v1/auth/forgot-password', async (req, res) => {
       });
     }
     
-    // Generate reset token
     const resetToken = generateToken();
     user.resetPasswordToken = resetToken;
-    user.resetPasswordExpires = Date.now() + 3600000; // 1 hour
+    user.resetPasswordExpires = Date.now() + 3600000;
     await user.save();
     
-    // Send reset email
     const emailContent = generatePasswordResetEmail(email, resetToken);
     await sendEmail(email, emailContent.subject, emailContent.html);
     
@@ -738,18 +662,6 @@ app.post('/api/v1/auth/forgot-password', async (req, res) => {
   }
 });
 
-/**
- * @api {post} /api/v1/auth/reset-password Reset password
- * @apiName ResetPassword
- * @apiGroup Authentication
- * 
- * @apiParam {String} token Reset token
- * @apiParam {String} newPassword New password
- * @apiParam {String} confirmPassword Password confirmation
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- */
 app.post('/api/v1/auth/reset-password', async (req, res) => {
   try {
     const { token, newPassword, confirmPassword } = req.body;
@@ -787,7 +699,6 @@ app.post('/api/v1/auth/reset-password', async (req, res) => {
       });
     }
     
-    // Hash new password
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(newPassword, salt);
     user.resetPasswordToken = undefined;
@@ -808,24 +719,12 @@ app.post('/api/v1/auth/reset-password', async (req, res) => {
   }
 });
 
-/**
- * @api {post} /api/v1/auth/logout Logout user
- * @apiName LogoutUser
- * @apiGroup Authentication
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- */
 app.post('/api/v1/auth/logout', authenticate, authorizeUser, async (req, res) => {
   try {
-    // In a real app, you might want to invalidate the token
     res.json({
       success: true,
       message: 'Logged out successfully'
     });
-    
   } catch (err) {
     console.error('Logout error:', err);
     res.status(500).json({ 
@@ -835,16 +734,6 @@ app.post('/api/v1/auth/logout', authenticate, authorizeUser, async (req, res) =>
   }
 });
 
-/**
- * @api {get} /api/v1/auth/me Get current user
- * @apiName GetCurrentUser
- * @apiGroup Authentication
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object} user User data
- */
 app.get('/api/v1/auth/me', authenticate, authorizeUser, async (req, res) => {
   try {
     const user = req.user;
@@ -865,7 +754,6 @@ app.get('/api/v1/auth/me', authenticate, authorizeUser, async (req, res) => {
         createdAt: user.createdAt
       }
     });
-    
   } catch (err) {
     console.error('Get current user error:', err);
     res.status(500).json({ 
@@ -875,17 +763,6 @@ app.get('/api/v1/auth/me', authenticate, authorizeUser, async (req, res) => {
   }
 });
 
-/**
- * @api {get} /api/v1/auth/check Check authentication
- * @apiName CheckAuth
- * @apiGroup Authentication
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Boolean} isAuthenticated Authentication status
- * @apiSuccess {Object} user User data if authenticated
- */
 app.get('/api/v1/auth/check', authenticate, (req, res) => {
   try {
     if (req.user) {
@@ -923,7 +800,6 @@ app.get('/api/v1/auth/check', authenticate, (req, res) => {
         isAuthenticated: false
       });
     }
-    
   } catch (err) {
     console.error('Check auth error:', err);
     res.status(500).json({ 
@@ -933,28 +809,11 @@ app.get('/api/v1/auth/check', authenticate, (req, res) => {
   }
 });
 
-// ======================
 // Admin Authentication
-// ======================
-
-/**
- * @api {post} /api/v1/admin/login Authenticate admin
- * @apiName LoginAdmin
- * @apiGroup Admin
- * 
- * @apiParam {String} email Admin's email
- * @apiParam {String} password Admin's password
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {String} token JWT token
- * @apiSuccess {Object} admin Admin data
- */
 app.post('/api/v1/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     
-    // Validation
     if (!email || !password) {
       return res.status(400).json({ 
         success: false,
@@ -962,7 +821,6 @@ app.post('/api/v1/admin/login', async (req, res) => {
       });
     }
     
-    // Check if admin exists
     const admin = await Admin.findOne({ email: email.toLowerCase() }).select('+password +lastLogin');
     if (!admin) {
       return res.status(401).json({ 
@@ -971,7 +829,6 @@ app.post('/api/v1/admin/login', async (req, res) => {
       });
     }
     
-    // Check if password matches
     const isMatch = await bcrypt.compare(password, admin.password);
     if (!isMatch) {
       return res.status(401).json({ 
@@ -980,14 +837,11 @@ app.post('/api/v1/admin/login', async (req, res) => {
       });
     }
     
-    // Update last login
     admin.lastLogin = new Date();
     await admin.save();
     
-    // Generate JWT token
     const token = jwt.sign({ adminId: admin._id }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
     
-    // Respond without sensitive data
     const adminResponse = {
       id: admin._id,
       email: admin.email,
@@ -1002,7 +856,6 @@ app.post('/api/v1/admin/login', async (req, res) => {
       token,
       admin: adminResponse
     });
-    
   } catch (err) {
     console.error('Admin login error:', err);
     res.status(500).json({ 
@@ -1012,20 +865,7 @@ app.post('/api/v1/admin/login', async (req, res) => {
   }
 });
 
-// ======================
 // User Routes
-// ======================
-
-/**
- * @api {get} /api/v1/users/me Get current user profile
- * @apiName GetUserProfile
- * @apiGroup User
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object} user User data
- */
 app.get('/api/v1/users/me', authenticate, authorizeUser, async (req, res) => {
   try {
     const user = req.user;
@@ -1048,7 +888,6 @@ app.get('/api/v1/users/me', authenticate, authorizeUser, async (req, res) => {
         createdAt: user.createdAt
       }
     });
-    
   } catch (err) {
     console.error('Get user profile error:', err);
     res.status(500).json({ 
@@ -1058,26 +897,11 @@ app.get('/api/v1/users/me', authenticate, authorizeUser, async (req, res) => {
   }
 });
 
-/**
- * @api {patch} /api/v1/users/update-password Update user password
- * @apiName UpdateUserPassword
- * @apiGroup User
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} currentPassword Current password
- * @apiParam {String} newPassword New password
- * @apiParam {String} confirmPassword Password confirmation
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- */
 app.patch('/api/v1/users/update-password', authenticate, authorizeUser, async (req, res) => {
   try {
     const { currentPassword, newPassword, confirmPassword } = req.body;
     const user = req.user;
     
-    // Validation
     if (!currentPassword || !newPassword || !confirmPassword) {
       return res.status(400).json({ 
         success: false,
@@ -1099,7 +923,6 @@ app.patch('/api/v1/users/update-password', authenticate, authorizeUser, async (r
       });
     }
     
-    // Check current password
     const isMatch = await bcrypt.compare(currentPassword, user.password);
     if (!isMatch) {
       return res.status(400).json({ 
@@ -1108,7 +931,6 @@ app.patch('/api/v1/users/update-password', authenticate, authorizeUser, async (r
       });
     }
     
-    // Hash new password
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(newPassword, salt);
     await user.save();
@@ -1117,7 +939,6 @@ app.patch('/api/v1/users/update-password', authenticate, authorizeUser, async (r
       success: true,
       message: 'Password updated successfully'
     });
-    
   } catch (err) {
     console.error('Update password error:', err);
     res.status(500).json({ 
@@ -1127,26 +948,11 @@ app.patch('/api/v1/users/update-password', authenticate, authorizeUser, async (r
   }
 });
 
-/**
- * @api {patch} /api/v1/users/update-profile Update user profile
- * @apiName UpdateUserProfile
- * @apiGroup User
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} [firstName] First name
- * @apiParam {String} [lastName] Last name
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Object} user Updated user data
- */
 app.patch('/api/v1/users/update-profile', authenticate, authorizeUser, async (req, res) => {
   try {
     const { firstName, lastName } = req.body;
     const user = req.user;
     
-    // Validation
     if (!firstName && !lastName) {
       return res.status(400).json({ 
         success: false,
@@ -1169,7 +975,6 @@ app.patch('/api/v1/users/update-profile', authenticate, authorizeUser, async (re
         email: user.email
       }
     });
-    
   } catch (err) {
     console.error('Update profile error:', err);
     res.status(500).json({ 
@@ -1179,27 +984,11 @@ app.patch('/api/v1/users/update-profile', authenticate, authorizeUser, async (re
   }
 });
 
-/**
- * @api {patch} /api/v1/users/update-settings Update user settings
- * @apiName UpdateUserSettings
- * @apiGroup User
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} [theme] Theme preference (light/dark)
- * @apiParam {String} [currency] Currency preference
- * @apiParam {Object} [notifications] Notification preferences
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Object} settings Updated settings
- */
 app.patch('/api/v1/users/update-settings', authenticate, authorizeUser, async (req, res) => {
   try {
     const { theme, currency, notifications } = req.body;
     const user = req.user;
     
-    // Validation
     if (!theme && !currency && !notifications) {
       return res.status(400).json({ 
         success: false,
@@ -1222,7 +1011,6 @@ app.patch('/api/v1/users/update-settings', authenticate, authorizeUser, async (r
       message: 'Settings updated successfully',
       settings: user.settings
     });
-    
   } catch (err) {
     console.error('Update settings error:', err);
     res.status(500).json({ 
@@ -1232,27 +1020,11 @@ app.patch('/api/v1/users/update-settings', authenticate, authorizeUser, async (r
   }
 });
 
-/**
- * @api {post} /api/v1/users/kyc Submit KYC documents
- * @apiName SubmitKYC
- * @apiGroup User
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {Object[]} documents KYC documents
- * @apiParam {String} documents.type Document type (id/passport/driver_license/proof_of_address)
- * @apiParam {String} documents.url Document URL
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Object} kyc Updated KYC status
- */
 app.post('/api/v1/users/kyc', authenticate, authorizeUser, async (req, res) => {
   try {
     const { documents } = req.body;
     const user = req.user;
     
-    // Validation
     if (!documents || !Array.isArray(documents) || documents.length === 0) {
       return res.status(400).json({ 
         success: false,
@@ -1260,7 +1032,6 @@ app.post('/api/v1/users/kyc', authenticate, authorizeUser, async (req, res) => {
       });
     }
     
-    // Validate each document
     for (const doc of documents) {
       if (!doc.type || !doc.url) {
         return res.status(400).json({ 
@@ -1277,7 +1048,6 @@ app.post('/api/v1/users/kyc', authenticate, authorizeUser, async (req, res) => {
       }
     }
     
-    // Update KYC status
     user.kyc = {
       status: 'pending',
       submittedAt: new Date(),
@@ -1286,7 +1056,6 @@ app.post('/api/v1/users/kyc', authenticate, authorizeUser, async (req, res) => {
     
     await user.save();
     
-    // Notify admins
     broadcastToAdmins('KYC_SUBMITTED', {
       userId: user._id,
       email: user.email,
@@ -1298,7 +1067,6 @@ app.post('/api/v1/users/kyc', authenticate, authorizeUser, async (req, res) => {
       message: 'KYC documents submitted successfully',
       kyc: user.kyc
     });
-    
   } catch (err) {
     console.error('Submit KYC error:', err);
     res.status(500).json({ 
@@ -1308,21 +1076,7 @@ app.post('/api/v1/users/kyc', authenticate, authorizeUser, async (req, res) => {
   }
 });
 
-// ======================
 // Portfolio Routes
-// ======================
-
-/**
- * @api {get} /api/v1/portfolio Get user portfolio
- * @apiName GetPortfolio
- * @apiGroup Portfolio
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Number} balance User balance
- * @apiSuccess {Object[]} portfolio Portfolio items
- */
 app.get('/api/v1/portfolio', authenticate, authorizeUser, async (req, res) => {
   try {
     const user = req.user;
@@ -1332,7 +1086,6 @@ app.get('/api/v1/portfolio', authenticate, authorizeUser, async (req, res) => {
       balance: user.balance,
       portfolio: user.portfolio
     });
-    
   } catch (err) {
     console.error('Get portfolio error:', err);
     res.status(500).json({ 
@@ -1342,34 +1095,12 @@ app.get('/api/v1/portfolio', authenticate, authorizeUser, async (req, res) => {
   }
 });
 
-// ======================
 // Trading Routes
-// ======================
-
-/**
- * @api {post} /api/v1/trades/buy Buy crypto
- * @apiName BuyCrypto
- * @apiGroup Trading
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} coinId Coin ID
- * @apiParam {String} symbol Coin symbol
- * @apiParam {String} name Coin name
- * @apiParam {Number} amount Amount to buy
- * @apiParam {Number} price Price per unit
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Number} balance Updated balance
- * @apiSuccess {Object[]} portfolio Updated portfolio
- */
 app.post('/api/v1/trades/buy', authenticate, authorizeUser, async (req, res) => {
   try {
     const { coinId, symbol, name, amount, price } = req.body;
     const user = req.user;
     
-    // Validation
     if (!coinId || !symbol || !name || !amount || !price) {
       return res.status(400).json({ 
         success: false,
@@ -1393,10 +1124,8 @@ app.post('/api/v1/trades/buy', authenticate, authorizeUser, async (req, res) => 
       });
     }
     
-    // Update user balance
     user.balance -= totalCost;
     
-    // Update portfolio
     const coinIndex = user.portfolio.findIndex(item => item.coinId === coinId);
     if (coinIndex >= 0) {
       user.portfolio[coinIndex].amount += amount;
@@ -1404,7 +1133,6 @@ app.post('/api/v1/trades/buy', authenticate, authorizeUser, async (req, res) => 
       user.portfolio.push({ coinId, symbol, name, amount });
     }
     
-    // Add transaction
     user.transactions.push({
       type: 'trade',
       amount: totalCost,
@@ -1418,7 +1146,6 @@ app.post('/api/v1/trades/buy', authenticate, authorizeUser, async (req, res) => 
       }
     });
     
-    // Add trade
     user.trades.push({
       type: 'buy',
       fromCoin: 'USD',
@@ -1431,7 +1158,6 @@ app.post('/api/v1/trades/buy', authenticate, authorizeUser, async (req, res) => 
     
     await user.save();
     
-    // Send WebSocket updates
     sendToUser(user._id, 'BALANCE_UPDATE', { balance: user.balance });
     sendToUser(user._id, 'PORTFOLIO_UPDATE', { portfolio: user.portfolio });
     sendToUser(user._id, 'TRADE_EXECUTED', {
@@ -1448,7 +1174,6 @@ app.post('/api/v1/trades/buy', authenticate, authorizeUser, async (req, res) => 
       balance: user.balance,
       portfolio: user.portfolio
     });
-    
   } catch (err) {
     console.error('Buy trade error:', err);
     res.status(500).json({ 
@@ -1458,28 +1183,11 @@ app.post('/api/v1/trades/buy', authenticate, authorizeUser, async (req, res) => 
   }
 });
 
-/**
- * @api {post} /api/v1/trades/sell Sell crypto
- * @apiName SellCrypto
- * @apiGroup Trading
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} coinId Coin ID
- * @apiParam {Number} amount Amount to sell
- * @apiParam {Number} price Price per unit
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Number} balance Updated balance
- * @apiSuccess {Object[]} portfolio Updated portfolio
- */
 app.post('/api/v1/trades/sell', authenticate, authorizeUser, async (req, res) => {
   try {
     const { coinId, amount, price } = req.body;
     const user = req.user;
     
-    // Validation
     if (!coinId || !amount || !price) {
       return res.status(400).json({ 
         success: false,
@@ -1494,7 +1202,6 @@ app.post('/api/v1/trades/sell', authenticate, authorizeUser, async (req, res) =>
       });
     }
     
-    // Check if user has enough coins
     const coinIndex = user.portfolio.findIndex(item => item.coinId === coinId);
     if (coinIndex < 0 || user.portfolio[coinIndex].amount < amount) {
       return res.status(400).json({ 
@@ -1505,16 +1212,13 @@ app.post('/api/v1/trades/sell', authenticate, authorizeUser, async (req, res) =>
     
     const totalValue = amount * price;
     
-    // Update user balance
     user.balance += totalValue;
     
-    // Update portfolio
     user.portfolio[coinIndex].amount -= amount;
     if (user.portfolio[coinIndex].amount === 0) {
       user.portfolio.splice(coinIndex, 1);
     }
     
-    // Add transaction
     user.transactions.push({
       type: 'trade',
       amount: totalValue,
@@ -1528,7 +1232,6 @@ app.post('/api/v1/trades/sell', authenticate, authorizeUser, async (req, res) =>
       }
     });
     
-    // Add trade
     user.trades.push({
       type: 'sell',
       fromCoin: coinId,
@@ -1541,7 +1244,6 @@ app.post('/api/v1/trades/sell', authenticate, authorizeUser, async (req, res) =>
     
     await user.save();
     
-    // Send WebSocket updates
     sendToUser(user._id, 'BALANCE_UPDATE', { balance: user.balance });
     sendToUser(user._id, 'PORTFOLIO_UPDATE', { portfolio: user.portfolio });
     sendToUser(user._id, 'TRADE_EXECUTED', {
@@ -1558,7 +1260,6 @@ app.post('/api/v1/trades/sell', authenticate, authorizeUser, async (req, res) =>
       balance: user.balance,
       portfolio: user.portfolio
     });
-    
   } catch (err) {
     console.error('Sell trade error:', err);
     res.status(500).json({ 
@@ -1568,16 +1269,6 @@ app.post('/api/v1/trades/sell', authenticate, authorizeUser, async (req, res) =>
   }
 });
 
-/**
- * @api {get} /api/v1/trades/active Get active trades
- * @apiName GetActiveTrades
- * @apiGroup Trading
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object[]} trades List of trades
- */
 app.get('/api/v1/trades/active', authenticate, authorizeUser, async (req, res) => {
   try {
     const user = req.user;
@@ -1586,7 +1277,6 @@ app.get('/api/v1/trades/active', authenticate, authorizeUser, async (req, res) =
       success: true,
       trades: user.trades
     });
-    
   } catch (err) {
     console.error('Get active trades error:', err);
     res.status(500).json({ 
@@ -1596,21 +1286,9 @@ app.get('/api/v1/trades/active', authenticate, authorizeUser, async (req, res) =
   }
 });
 
-// ======================
 // Exchange Routes
-// ======================
-
-/**
- * @api {get} /api/v1/exchange/coins Get available coins
- * @apiName GetAvailableCoins
- * @apiGroup Exchange
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object[]} coins List of available coins
- */
 app.get('/api/v1/exchange/coins', async (req, res) => {
   try {
-    // In a real app, you would fetch this from a crypto API
     const coins = [
       { id: 'bitcoin', symbol: 'btc', name: 'Bitcoin' },
       { id: 'ethereum', symbol: 'eth', name: 'Ethereum' },
@@ -1624,7 +1302,6 @@ app.get('/api/v1/exchange/coins', async (req, res) => {
       success: true,
       coins 
     });
-    
   } catch (err) {
     console.error('Get coins error:', err);
     res.status(500).json({ 
@@ -1634,19 +1311,6 @@ app.get('/api/v1/exchange/coins', async (req, res) => {
   }
 });
 
-/**
- * @api {get} /api/v1/exchange/rate Get exchange rate
- * @apiName GetExchangeRate
- * @apiGroup Exchange
- * 
- * @apiParam {String} from Source coin
- * @apiParam {String} to Target coin
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} from Source coin
- * @apiSuccess {String} to Target coin
- * @apiSuccess {Number} rate Exchange rate
- */
 app.get('/api/v1/exchange/rate', async (req, res) => {
   try {
     const { from, to } = req.query;
@@ -1658,8 +1322,6 @@ app.get('/api/v1/exchange/rate', async (req, res) => {
       });
     }
     
-    // In a real app, you would fetch real rates from an API
-    // This is a simplified version with mock data
     const rates = {
       bitcoin: { 
         ethereum: 15, 
@@ -1720,7 +1382,6 @@ app.get('/api/v1/exchange/rate', async (req, res) => {
       to,
       rate
     });
-    
   } catch (err) {
     console.error('Get exchange rate error:', err);
     res.status(500).json({ 
@@ -1730,33 +1391,11 @@ app.get('/api/v1/exchange/rate', async (req, res) => {
   }
 });
 
-/**
- * @api {post} /api/v1/exchange/convert Convert between coins
- * @apiName ConvertCoins
- * @apiGroup Exchange
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} fromCoin Source coin
- * @apiParam {String} toCoin Target coin
- * @apiParam {Number} amount Amount to convert
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {String} fromCoin Source coin
- * @apiSuccess {String} toCoin Target coin
- * @apiSuccess {Number} amount Original amount
- * @apiSuccess {Number} convertedAmount Converted amount
- * @apiSuccess {Number} rate Conversion rate
- * @apiSuccess {Number} balance Updated balance
- * @apiSuccess {Object[]} portfolio Updated portfolio
- */
 app.post('/api/v1/exchange/convert', authenticate, authorizeUser, async (req, res) => {
   try {
     const { fromCoin, toCoin, amount } = req.body;
     const user = req.user;
     
-    // Validation
     if (!fromCoin || !toCoin || !amount) {
       return res.status(400).json({ 
         success: false,
@@ -1771,7 +1410,6 @@ app.post('/api/v1/exchange/convert', authenticate, authorizeUser, async (req, re
       });
     }
     
-    // Get conversion rate
     const rates = {
       bitcoin: { 
         ethereum: 15, 
@@ -1826,7 +1464,6 @@ app.post('/api/v1/exchange/convert', authenticate, authorizeUser, async (req, re
       });
     }
     
-    // Check if user has enough coins (if not converting from USD)
     if (fromCoin !== 'usd') {
       const fromCoinIndex = user.portfolio.findIndex(item => item.coinId === fromCoin);
       if (fromCoinIndex < 0 || user.portfolio[fromCoinIndex].amount < amount) {
@@ -1836,7 +1473,6 @@ app.post('/api/v1/exchange/convert', authenticate, authorizeUser, async (req, re
         });
       }
     } else {
-      // If converting from USD, check balance
       if (user.balance < amount) {
         return res.status(400).json({ 
           success: false,
@@ -1845,12 +1481,9 @@ app.post('/api/v1/exchange/convert', authenticate, authorizeUser, async (req, re
       }
     }
     
-    // Calculate converted amount
     const convertedAmount = amount * rate;
     
-    // Update portfolio
     if (fromCoin !== 'usd') {
-      // Remove fromCoin from portfolio
       user.portfolio = user.portfolio.map(item => {
         if (item.coinId === fromCoin) {
           return { ...item, amount: item.amount - amount };
@@ -1858,17 +1491,14 @@ app.post('/api/v1/exchange/convert', authenticate, authorizeUser, async (req, re
         return item;
       }).filter(item => item.amount > 0);
     } else {
-      // Deduct from balance if converting from USD
       user.balance -= amount;
     }
     
-    // Add toCoin to portfolio or balance
     if (toCoin !== 'usd') {
       const toCoinIndex = user.portfolio.findIndex(item => item.coinId === toCoin);
       if (toCoinIndex >= 0) {
         user.portfolio[toCoinIndex].amount += convertedAmount;
       } else {
-        // Get coin details for new portfolio item
         const coins = {
           bitcoin: { symbol: 'btc', name: 'Bitcoin' },
           ethereum: { symbol: 'eth', name: 'Ethereum' },
@@ -1886,11 +1516,9 @@ app.post('/api/v1/exchange/convert', authenticate, authorizeUser, async (req, re
         });
       }
     } else {
-      // Add to balance if converting to USD
       user.balance += convertedAmount;
     }
     
-    // Add transaction
     user.transactions.push({
       type: 'conversion',
       amount,
@@ -1905,7 +1533,6 @@ app.post('/api/v1/exchange/convert', authenticate, authorizeUser, async (req, re
       }
     });
     
-    // Add trade
     user.trades.push({
       type: 'convert',
       fromCoin,
@@ -1918,7 +1545,6 @@ app.post('/api/v1/exchange/convert', authenticate, authorizeUser, async (req, re
     
     await user.save();
     
-    // Send WebSocket updates
     sendToUser(user._id, 'BALANCE_UPDATE', { balance: user.balance });
     sendToUser(user._id, 'PORTFOLIO_UPDATE', { portfolio: user.portfolio });
     sendToUser(user._id, 'CONVERSION_COMPLETE', {
@@ -1940,7 +1566,6 @@ app.post('/api/v1/exchange/convert', authenticate, authorizeUser, async (req, re
       balance: user.balance,
       portfolio: user.portfolio
     });
-    
   } catch (err) {
     console.error('Convert coins error:', err);
     res.status(500).json({ 
@@ -1950,28 +1575,15 @@ app.post('/api/v1/exchange/convert', authenticate, authorizeUser, async (req, re
   }
 });
 
-/**
- * @api {get} /api/v1/exchange/history Get conversion history
- * @apiName GetConversionHistory
- * @apiGroup Exchange
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object[]} trades List of conversion trades
- */
 app.get('/api/v1/exchange/history', authenticate, authorizeUser, async (req, res) => {
   try {
     const user = req.user;
-    
-    // Filter conversion trades
     const conversionTrades = user.trades.filter(trade => trade.type === 'convert');
     
     res.json({
       success: true,
       trades: conversionTrades
     });
-    
   } catch (err) {
     console.error('Get conversion history error:', err);
     res.status(500).json({ 
@@ -1981,21 +1593,9 @@ app.get('/api/v1/exchange/history', authenticate, authorizeUser, async (req, res
   }
 });
 
-// ======================
 // Market Data Routes
-// ======================
-
-/**
- * @api {get} /api/v1/market/data Get market data
- * @apiName GetMarketData
- * @apiGroup Market
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object[]} marketData List of market data
- */
 app.get('/api/v1/market/data', async (req, res) => {
   try {
-    // In a real app, you would fetch this from a crypto API
     const marketData = [
       { 
         id: 'bitcoin', 
@@ -2063,7 +1663,6 @@ app.get('/api/v1/market/data', async (req, res) => {
       success: true,
       marketData 
     });
-    
   } catch (err) {
     console.error('Get market data error:', err);
     res.status(500).json({ 
@@ -2073,16 +1672,6 @@ app.get('/api/v1/market/data', async (req, res) => {
   }
 });
 
-/**
- * @api {get} /api/v1/market/detailed Get detailed market data
- * @apiName GetDetailedMarketData
- * @apiGroup Market
- * 
- * @apiParam {String} coinId Coin ID
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object} coin Detailed coin data
- */
 app.get('/api/v1/market/detailed', async (req, res) => {
   try {
     const { coinId } = req.query;
@@ -2094,7 +1683,6 @@ app.get('/api/v1/market/detailed', async (req, res) => {
       });
     }
     
-    // In a real app, you would fetch this from a crypto API
     const coins = {
       bitcoin: { 
         id: 'bitcoin', 
@@ -2163,7 +1751,6 @@ app.get('/api/v1/market/detailed', async (req, res) => {
       success: true,
       coin 
     });
-    
   } catch (err) {
     console.error('Get detailed market data error:', err);
     res.status(500).json({ 
@@ -2173,29 +1760,12 @@ app.get('/api/v1/market/detailed', async (req, res) => {
   }
 });
 
-// ======================
 // Wallet Routes
-// ======================
-
-/**
- * @api {post} /api/v1/wallet/deposit Deposit funds
- * @apiName DepositFunds
- * @apiGroup Wallet
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {Number} amount Amount to deposit
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Number} balance Updated balance
- */
 app.post('/api/v1/wallet/deposit', authenticate, authorizeUser, async (req, res) => {
   try {
     const { amount } = req.body;
     const user = req.user;
     
-    // Validation
     if (!amount || amount <= 0) {
       return res.status(400).json({ 
         success: false,
@@ -2203,10 +1773,8 @@ app.post('/api/v1/wallet/deposit', authenticate, authorizeUser, async (req, res)
       });
     }
     
-    // Update user balance
     user.balance += amount;
     
-    // Add transaction
     user.transactions.push({
       type: 'deposit',
       amount,
@@ -2220,7 +1788,6 @@ app.post('/api/v1/wallet/deposit', authenticate, authorizeUser, async (req, res)
     
     await user.save();
     
-    // Send WebSocket update
     sendToUser(user._id, 'BALANCE_UPDATE', { balance: user.balance });
     sendToUser(user._id, 'DEPOSIT_SUCCESS', { amount });
     
@@ -2229,7 +1796,6 @@ app.post('/api/v1/wallet/deposit', authenticate, authorizeUser, async (req, res)
       message: 'Deposit successful',
       balance: user.balance
     });
-    
   } catch (err) {
     console.error('Deposit error:', err);
     res.status(500).json({ 
@@ -2239,19 +1805,6 @@ app.post('/api/v1/wallet/deposit', authenticate, authorizeUser, async (req, res)
   }
 });
 
-/**
- * @api {get} /api/v1/wallet/deposit-address Get deposit address
- * @apiName GetDepositAddress
- * @apiGroup Wallet
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} coin Coin to deposit
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} address Deposit address
- * @apiSuccess {String} memo Memo (if required)
- */
 app.get('/api/v1/wallet/deposit-address', authenticate, authorizeUser, async (req, res) => {
   try {
     const { coin } = req.query;
@@ -2264,7 +1817,6 @@ app.get('/api/v1/wallet/deposit-address', authenticate, authorizeUser, async (re
       });
     }
     
-    // In a real app, you would generate or fetch a real deposit address
     const address = `DEPOSIT-${coin.toUpperCase()}-${user._id.toString().slice(-8)}`;
     const memo = coin === 'xrp' || coin === 'xlm' ? user._id.toString() : undefined;
     
@@ -2273,7 +1825,6 @@ app.get('/api/v1/wallet/deposit-address', authenticate, authorizeUser, async (re
       address,
       memo
     });
-    
   } catch (err) {
     console.error('Get deposit address error:', err);
     res.status(500).json({ 
@@ -2283,27 +1834,11 @@ app.get('/api/v1/wallet/deposit-address', authenticate, authorizeUser, async (re
   }
 });
 
-/**
- * @api {post} /api/v1/wallet/withdraw Withdraw funds
- * @apiName WithdrawFunds
- * @apiGroup Wallet
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {Number} amount Amount to withdraw
- * @apiParam {String} address Withdrawal address
- * @apiParam {String} [memo] Memo (if required)
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Number} balance Updated balance
- */
 app.post('/api/v1/wallet/withdraw', authenticate, authorizeUser, async (req, res) => {
   try {
     const { amount, address, memo } = req.body;
     const user = req.user;
     
-    // Validation
     if (!amount || amount <= 0) {
       return res.status(400).json({ 
         success: false,
@@ -2325,10 +1860,8 @@ app.post('/api/v1/wallet/withdraw', authenticate, authorizeUser, async (req, res
       });
     }
     
-    // Update user balance
     user.balance -= amount;
     
-    // Add transaction
     user.transactions.push({
       type: 'withdrawal',
       amount,
@@ -2343,18 +1876,14 @@ app.post('/api/v1/wallet/withdraw', authenticate, authorizeUser, async (req, res
     
     await user.save();
     
-    // Send WebSocket update
     sendToUser(user._id, 'BALANCE_UPDATE', { balance: user.balance });
     sendToUser(user._id, 'WITHDRAWAL_REQUESTED', { amount });
-    
-    // In a real app, you would process the withdrawal here
     
     res.json({ 
       success: true,
       message: 'Withdrawal request submitted',
       balance: user.balance
     });
-    
   } catch (err) {
     console.error('Withdraw error:', err);
     res.status(500).json({ 
@@ -2364,24 +1893,11 @@ app.post('/api/v1/wallet/withdraw', authenticate, authorizeUser, async (req, res
   }
 });
 
-/**
- * @api {get} /api/v1/transactions/recent Get recent transactions
- * @apiName GetRecentTransactions
- * @apiGroup Wallet
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {Number} [limit=10] Number of transactions to return
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object[]} transactions List of transactions
- */
 app.get('/api/v1/transactions/recent', authenticate, authorizeUser, async (req, res) => {
   try {
     const { limit = 10 } = req.query;
     const user = req.user;
     
-    // Get most recent transactions
     const transactions = user.transactions
       .sort((a, b) => b.date - a.date)
       .slice(0, parseInt(limit));
@@ -2390,7 +1906,6 @@ app.get('/api/v1/transactions/recent', authenticate, authorizeUser, async (req, 
       success: true,
       transactions
     });
-    
   } catch (err) {
     console.error('Get recent transactions error:', err);
     res.status(500).json({ 
@@ -2400,20 +1915,7 @@ app.get('/api/v1/transactions/recent', authenticate, authorizeUser, async (req, 
   }
 });
 
-// ======================
 // Support Routes
-// ======================
-
-/**
- * @api {get} /api/v1/support/faqs Get FAQs
- * @apiName GetFAQs
- * @apiGroup Support
- * 
- * @apiParam {String} [category] Filter by category
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object[]} faqs List of FAQs
- */
 app.get('/api/v1/support/faqs', async (req, res) => {
   try {
     const { category } = req.query;
@@ -2429,7 +1931,6 @@ app.get('/api/v1/support/faqs', async (req, res) => {
       success: true,
       faqs
     });
-    
   } catch (err) {
     console.error('Get FAQs error:', err);
     res.status(500).json({ 
@@ -2439,26 +1940,11 @@ app.get('/api/v1/support/faqs', async (req, res) => {
   }
 });
 
-/**
- * @api {post} /api/v1/support/tickets Create support ticket
- * @apiName CreateSupportTicket
- * @apiGroup Support
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} subject Ticket subject
- * @apiParam {String} message Ticket message
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Object} ticket Created ticket
- */
 app.post('/api/v1/support/tickets', authenticate, authorizeUser, async (req, res) => {
   try {
     const { subject, message } = req.body;
     const user = req.user;
     
-    // Validation
     if (!subject || !message) {
       return res.status(400).json({ 
         success: false,
@@ -2466,7 +1952,6 @@ app.post('/api/v1/support/tickets', authenticate, authorizeUser, async (req, res
       });
     }
     
-    // Create ticket
     const ticket = new SupportTicket({
       userId: user._id,
       subject,
@@ -2476,7 +1961,6 @@ app.post('/api/v1/support/tickets', authenticate, authorizeUser, async (req, res
     
     await ticket.save();
     
-    // Notify admins
     broadcastToAdmins('NEW_SUPPORT_TICKET', {
       ticketId: ticket._id,
       subject,
@@ -2495,7 +1979,6 @@ app.post('/api/v1/support/tickets', authenticate, authorizeUser, async (req, res
         createdAt: ticket.createdAt
       }
     });
-    
   } catch (err) {
     console.error('Create ticket error:', err);
     res.status(500).json({ 
@@ -2505,18 +1988,6 @@ app.post('/api/v1/support/tickets', authenticate, authorizeUser, async (req, res
   }
 });
 
-/**
- * @api {get} /api/v1/support/tickets Get user support tickets
- * @apiName GetSupportTickets
- * @apiGroup Support
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} [status] Filter by status
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object[]} tickets List of tickets
- */
 app.get('/api/v1/support/tickets', authenticate, authorizeUser, async (req, res) => {
   try {
     const { status } = req.query;
@@ -2535,7 +2006,6 @@ app.get('/api/v1/support/tickets', authenticate, authorizeUser, async (req, res)
       success: true,
       tickets
     });
-    
   } catch (err) {
     console.error('Get tickets error:', err);
     res.status(500).json({ 
@@ -2545,17 +2015,6 @@ app.get('/api/v1/support/tickets', authenticate, authorizeUser, async (req, res)
   }
 });
 
-/**
- * @api {get} /api/v1/support/tickets/:id Get ticket details
- * @apiName GetTicketDetails
- * @apiGroup Support
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object} ticket Ticket details
- * @apiSuccess {Object[]} responses Ticket responses
- */
 app.get('/api/v1/support/tickets/:id', authenticate, authorizeUser, async (req, res) => {
   try {
     const ticket = await SupportTicket.findOne({
@@ -2582,7 +2041,6 @@ app.get('/api/v1/support/tickets/:id', authenticate, authorizeUser, async (req, 
       },
       responses: ticket.responses
     });
-    
   } catch (err) {
     console.error('Get ticket details error:', err);
     res.status(500).json({ 
@@ -2592,19 +2050,6 @@ app.get('/api/v1/support/tickets/:id', authenticate, authorizeUser, async (req, 
   }
 });
 
-/**
- * @api {post} /api/v1/support/tickets/:id/reply Reply to ticket
- * @apiName ReplyToTicket
- * @apiGroup Support
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} message Reply message
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Object} response New response
- */
 app.post('/api/v1/support/tickets/:id/reply', authenticate, authorizeUser, async (req, res) => {
   try {
     const { message } = req.body;
@@ -2635,7 +2080,6 @@ app.post('/api/v1/support/tickets/:id/reply', authenticate, authorizeUser, async
       });
     }
     
-    // Add response
     ticket.responses.push({
       userId: req.user._id,
       message,
@@ -2643,13 +2087,11 @@ app.post('/api/v1/support/tickets/:id/reply', authenticate, authorizeUser, async
       createdAt: new Date()
     });
     
-    // Update status
     ticket.status = 'pending';
     ticket.updatedAt = new Date();
     
     await ticket.save();
     
-    // Notify admins
     broadcastToAdmins('TICKET_REPLY', {
       ticketId: ticket._id,
       subject: ticket.subject,
@@ -2669,7 +2111,6 @@ app.post('/api/v1/support/tickets/:id/reply', authenticate, authorizeUser, async
         createdAt: newResponse.createdAt
       }
     });
-    
   } catch (err) {
     console.error('Reply to ticket error:', err);
     res.status(500).json({ 
@@ -2679,60 +2120,33 @@ app.post('/api/v1/support/tickets/:id/reply', authenticate, authorizeUser, async
   }
 });
 
-// ======================
 // Admin Routes
-// ======================
-
-/**
- * @api {get} /api/v1/admin/dashboard-stats Get dashboard stats
- * @apiName GetDashboardStats
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Number} totalUsers Total users
- * @apiSuccess {Number} verifiedUsers Verified users
- * @apiSuccess {Number} activeUsers Active users (last 30 days)
- * @apiSuccess {Number} totalBalance Total platform balance
- * @apiSuccess {Number} totalTrades Total trades
- * @apiSuccess {Number} totalVolume Total trading volume
- * @apiSuccess {Object[]} recentSignups Recent signups
- */
 app.get('/api/v1/admin/dashboard-stats', authenticate, authorizeAdmin, async (req, res) => {
   try {
-    // Total users
     const totalUsers = await User.countDocuments();
-    
-    // Verified users
     const verifiedUsers = await User.countDocuments({ isVerified: true });
     
-    // Active users (last 30 days)
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     const activeUsers = await User.countDocuments({ lastLogin: { $gte: thirtyDaysAgo } });
     
-    // Total platform balance
     const totalBalanceResult = await User.aggregate([
       { $group: { _id: null, total: { $sum: "$balance" } } }
     ]);
     const totalBalance = totalBalanceResult[0]?.total || 0;
     
-    // Total trades
     const totalTradesResult = await User.aggregate([
       { $unwind: "$trades" },
       { $group: { _id: null, count: { $sum: 1 } } }
     ]);
     const totalTrades = totalTradesResult[0]?.count || 0;
     
-    // Total volume
     const totalVolumeResult = await User.aggregate([
       { $unwind: "$trades" },
       { $group: { _id: null, total: { $sum: "$trades.value" } } }
     ]);
     const totalVolume = totalVolumeResult[0]?.total || 0;
     
-    // Recent signups (last 7 days)
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     const recentSignups = await User.find({ 
@@ -2754,7 +2168,6 @@ app.get('/api/v1/admin/dashboard-stats', authenticate, authorizeAdmin, async (re
       },
       recentSignups
     });
-    
   } catch (err) {
     console.error('Get dashboard stats error:', err);
     res.status(500).json({ 
@@ -2764,25 +2177,6 @@ app.get('/api/v1/admin/dashboard-stats', authenticate, authorizeAdmin, async (re
   }
 });
 
-/**
- * @api {get} /api/v1/admin/users Get all users
- * @apiName GetAllUsers
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {Number} [page=1] Page number
- * @apiParam {Number} [limit=10] Users per page
- * @apiParam {String} [search] Search query
- * @apiParam {String} [sort] Sort field
- * @apiParam {String} [order=asc] Sort order (asc/desc)
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object[]} users List of users
- * @apiSuccess {Number} total Total users count
- * @apiSuccess {Number} page Current page
- * @apiSuccess {Number} pages Total pages
- */
 app.get('/api/v1/admin/users', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const { page = 1, limit = 10, search, sort, order = 'asc' } = req.query;
@@ -2790,7 +2184,6 @@ app.get('/api/v1/admin/users', authenticate, authorizeAdmin, async (req, res) =>
     let query = {};
     let sortOption = { createdAt: -1 };
     
-    // Search
     if (search) {
       query.$or = [
         { firstName: { $regex: search, $options: 'i' } },
@@ -2799,19 +2192,14 @@ app.get('/api/v1/admin/users', authenticate, authorizeAdmin, async (req, res) =>
       ];
     }
     
-    // Sort
     if (sort) {
       sortOption = { [sort]: order === 'asc' ? 1 : -1 };
     }
     
-    // Count total users
     const total = await User.countDocuments(query);
-    
-    // Calculate pagination
     const pages = Math.ceil(total / limit);
     const skip = (page - 1) * limit;
     
-    // Get users
     const users = await User.find(query)
       .sort(sortOption)
       .skip(skip)
@@ -2825,7 +2213,6 @@ app.get('/api/v1/admin/users', authenticate, authorizeAdmin, async (req, res) =>
       page: parseInt(page),
       pages
     });
-    
   } catch (err) {
     console.error('Get all users error:', err);
     res.status(500).json({ 
@@ -2835,16 +2222,6 @@ app.get('/api/v1/admin/users', authenticate, authorizeAdmin, async (req, res) =>
   }
 });
 
-/**
- * @api {get} /api/v1/admin/users/:id Get user details
- * @apiName GetUserDetails
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object} user User details
- */
 app.get('/api/v1/admin/users/:id', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const user = await User.findById(req.params.id)
@@ -2861,7 +2238,6 @@ app.get('/api/v1/admin/users/:id', authenticate, authorizeAdmin, async (req, res
       success: true,
       user
     });
-    
   } catch (err) {
     console.error('Get user details error:', err);
     res.status(500).json({ 
@@ -2871,19 +2247,6 @@ app.get('/api/v1/admin/users/:id', authenticate, authorizeAdmin, async (req, res
   }
 });
 
-/**
- * @api {patch} /api/v1/admin/users/:id/status Update user status
- * @apiName UpdateUserStatus
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {Boolean} isActive User active status
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Object} user Updated user
- */
 app.patch('/api/v1/admin/users/:id/status', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const { isActive } = req.body;
@@ -2913,7 +2276,6 @@ app.patch('/api/v1/admin/users/:id/status', authenticate, authorizeAdmin, async 
       message: 'User status updated',
       user
     });
-    
   } catch (err) {
     console.error('Update user status error:', err);
     res.status(500).json({ 
@@ -2923,19 +2285,6 @@ app.patch('/api/v1/admin/users/:id/status', authenticate, authorizeAdmin, async 
   }
 });
 
-/**
- * @api {patch} /api/v1/admin/users/:id/balance Update user balance
- * @apiName UpdateUserBalance
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {Number} balance New balance
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Object} user Updated user
- */
 app.patch('/api/v1/admin/users/:id/balance', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const { balance } = req.body;
@@ -2960,7 +2309,6 @@ app.patch('/api/v1/admin/users/:id/balance', authenticate, authorizeAdmin, async
       });
     }
     
-    // Send WebSocket update to user
     sendToUser(user._id, 'BALANCE_UPDATE', { balance: user.balance });
     
     res.json({
@@ -2968,7 +2316,6 @@ app.patch('/api/v1/admin/users/:id/balance', authenticate, authorizeAdmin, async
       message: 'User balance updated',
       user
     });
-    
   } catch (err) {
     console.error('Update user balance error:', err);
     res.status(500).json({ 
@@ -2978,16 +2325,6 @@ app.patch('/api/v1/admin/users/:id/balance', authenticate, authorizeAdmin, async
   }
 });
 
-/**
- * @api {post} /api/v1/admin/users/:id/reset-password Reset user password
- * @apiName ResetUserPassword
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- */
 app.post('/api/v1/admin/users/:id/reset-password', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
@@ -2999,14 +2336,12 @@ app.post('/api/v1/admin/users/:id/reset-password', authenticate, authorizeAdmin,
       });
     }
     
-    // Generate a random password
     const newPassword = crypto.randomBytes(8).toString('hex');
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(newPassword, salt);
     
     await user.save();
     
-    // Send email with new password
     const emailContent = {
       subject: 'Your Password Has Been Reset',
       html: `
@@ -3025,7 +2360,6 @@ app.post('/api/v1/admin/users/:id/reset-password', authenticate, authorizeAdmin,
       success: true,
       message: 'Password reset and email sent'
     });
-    
   } catch (err) {
     console.error('Reset user password error:', err);
     res.status(500).json({ 
@@ -3035,36 +2369,16 @@ app.post('/api/v1/admin/users/:id/reset-password', authenticate, authorizeAdmin,
   }
 });
 
-/**
- * @api {get} /api/v1/admin/tickets Get all support tickets
- * @apiName GetAllSupportTickets
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {Number} [page=1] Page number
- * @apiParam {Number} [limit=10] Tickets per page
- * @apiParam {String} [status] Filter by status
- * @apiParam {String} [search] Search query
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object[]} tickets List of tickets
- * @apiSuccess {Number} total Total tickets count
- * @apiSuccess {Number} page Current page
- * @apiSuccess {Number} pages Total pages
- */
 app.get('/api/v1/admin/tickets', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const { page = 1, limit = 10, status, search } = req.query;
     
     let query = {};
     
-    // Status filter
     if (status) {
       query.status = status;
     }
     
-    // Search
     if (search) {
       query.$or = [
         { subject: { $regex: search, $options: 'i' } },
@@ -3073,14 +2387,10 @@ app.get('/api/v1/admin/tickets', authenticate, authorizeAdmin, async (req, res) 
       ];
     }
     
-    // Count total tickets
     const total = await SupportTicket.countDocuments(query);
-    
-    // Calculate pagination
     const pages = Math.ceil(total / limit);
     const skip = (page - 1) * limit;
     
-    // Get tickets with user info
     const tickets = await SupportTicket.aggregate([
       { $match: query },
       { $sort: { createdAt: -1 } },
@@ -3117,7 +2427,6 @@ app.get('/api/v1/admin/tickets', authenticate, authorizeAdmin, async (req, res) 
       page: parseInt(page),
       pages
     });
-    
   } catch (err) {
     console.error('Get all tickets error:', err);
     res.status(500).json({ 
@@ -3127,18 +2436,6 @@ app.get('/api/v1/admin/tickets', authenticate, authorizeAdmin, async (req, res) 
   }
 });
 
-/**
- * @api {get} /api/v1/admin/tickets/:id Get ticket details
- * @apiName GetAdminTicketDetails
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object} ticket Ticket details
- * @apiSuccess {Object} user User details
- * @apiSuccess {Object[]} responses Ticket responses
- */
 app.get('/api/v1/admin/tickets/:id', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const ticket = await SupportTicket.findById(req.params.id);
@@ -3150,7 +2447,6 @@ app.get('/api/v1/admin/tickets/:id', authenticate, authorizeAdmin, async (req, r
       });
     }
     
-    // Get user info
     const user = await User.findById(ticket.userId)
       .select('firstName lastName email createdAt');
     
@@ -3167,7 +2463,6 @@ app.get('/api/v1/admin/tickets/:id', authenticate, authorizeAdmin, async (req, r
       user,
       responses: ticket.responses
     });
-    
   } catch (err) {
     console.error('Get ticket details error:', err);
     res.status(500).json({ 
@@ -3177,19 +2472,6 @@ app.get('/api/v1/admin/tickets/:id', authenticate, authorizeAdmin, async (req, r
   }
 });
 
-/**
- * @api {post} /api/v1/admin/tickets/:id/assign Assign ticket
- * @apiName AssignTicket
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} adminId Admin ID to assign
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Object} ticket Updated ticket
- */
 app.post('/api/v1/admin/tickets/:id/assign', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const { adminId } = req.body;
@@ -3214,7 +2496,6 @@ app.post('/api/v1/admin/tickets/:id/assign', authenticate, authorizeAdmin, async
       });
     }
     
-    // Notify user
     sendToUser(ticket.userId, 'TICKET_UPDATED', {
       ticketId: ticket._id,
       status: ticket.status,
@@ -3230,7 +2511,6 @@ app.post('/api/v1/admin/tickets/:id/assign', authenticate, authorizeAdmin, async
         assignedTo: ticket.assignedTo
       }
     });
-    
   } catch (err) {
     console.error('Assign ticket error:', err);
     res.status(500).json({ 
@@ -3240,19 +2520,6 @@ app.post('/api/v1/admin/tickets/:id/assign', authenticate, authorizeAdmin, async
   }
 });
 
-/**
- * @api {post} /api/v1/admin/tickets/:id/reply Admin reply to ticket
- * @apiName AdminReplyToTicket
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} message Reply message
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Object} response New response
- */
 app.post('/api/v1/admin/tickets/:id/reply', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const { message } = req.body;
@@ -3280,7 +2547,6 @@ app.post('/api/v1/admin/tickets/:id/reply', authenticate, authorizeAdmin, async 
       });
     }
     
-    // Add response
     ticket.responses.push({
       userId: req.admin._id,
       message,
@@ -3288,13 +2554,11 @@ app.post('/api/v1/admin/tickets/:id/reply', authenticate, authorizeAdmin, async 
       createdAt: new Date()
     });
     
-    // Update status
     ticket.status = 'pending';
     ticket.updatedAt = new Date();
     
     await ticket.save();
     
-    // Notify user
     sendToUser(ticket.userId, 'TICKET_REPLY', {
       ticketId: ticket._id,
       subject: ticket.subject
@@ -3312,7 +2576,6 @@ app.post('/api/v1/admin/tickets/:id/reply', authenticate, authorizeAdmin, async 
         createdAt: newResponse.createdAt
       }
     });
-    
   } catch (err) {
     console.error('Admin reply to ticket error:', err);
     res.status(500).json({ 
@@ -3322,19 +2585,6 @@ app.post('/api/v1/admin/tickets/:id/reply', authenticate, authorizeAdmin, async 
   }
 });
 
-/**
- * @api {patch} /api/v1/admin/tickets/:id/status Update ticket status
- * @apiName UpdateTicketStatus
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} status New status
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- * @apiSuccess {Object} ticket Updated ticket
- */
 app.patch('/api/v1/admin/tickets/:id/status', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const { status } = req.body;
@@ -3359,7 +2609,6 @@ app.patch('/api/v1/admin/tickets/:id/status', authenticate, authorizeAdmin, asyn
       });
     }
     
-    // Notify user if status changed to resolved or closed
     if (status === 'resolved' || status === 'closed') {
       sendToUser(ticket.userId, 'TICKET_UPDATED', {
         ticketId: ticket._id,
@@ -3375,7 +2624,6 @@ app.patch('/api/v1/admin/tickets/:id/status', authenticate, authorizeAdmin, asyn
         status: ticket.status
       }
     });
-    
   } catch (err) {
     console.error('Update ticket status error:', err);
     res.status(500).json({ 
@@ -3385,44 +2633,22 @@ app.patch('/api/v1/admin/tickets/:id/status', authenticate, authorizeAdmin, asyn
   }
 });
 
-/**
- * @api {get} /api/v1/admin/kyc Get KYC submissions
- * @apiName GetKYCSubmissions
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} [status] Filter by status
- * @apiParam {Number} [page=1] Page number
- * @apiParam {Number} [limit=10] Items per page
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object[]} submissions List of KYC submissions
- * @apiSuccess {Number} total Total submissions count
- * @apiSuccess {Number} page Current page
- * @apiSuccess {Number} pages Total pages
- */
 app.get('/api/v1/admin/kyc', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const { status, page = 1, limit = 10 } = req.query;
     
     let query = {};
     
-    // Status filter
     if (status) {
       query['kyc.status'] = status;
     } else {
       query['kyc.status'] = { $ne: 'none' };
     }
     
-    // Count total submissions
     const total = await User.countDocuments(query);
-    
-    // Calculate pagination
     const pages = Math.ceil(total / limit);
     const skip = (page - 1) * limit;
     
-    // Get submissions with user info
     const submissions = await User.find(query)
       .sort({ 'kyc.submittedAt': -1 })
       .skip(skip)
@@ -3436,7 +2662,6 @@ app.get('/api/v1/admin/kyc', authenticate, authorizeAdmin, async (req, res) => {
       page: parseInt(page),
       pages
     });
-    
   } catch (err) {
     console.error('Get KYC submissions error:', err);
     res.status(500).json({ 
@@ -3446,17 +2671,6 @@ app.get('/api/v1/admin/kyc', authenticate, authorizeAdmin, async (req, res) => {
   }
 });
 
-/**
- * @api {get} /api/v1/admin/kyc/:id Get KYC details
- * @apiName GetKYCDetails
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object} user User details
- * @apiSuccess {Object} kyc KYC details
- */
 app.get('/api/v1/admin/kyc/:id', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const user = await User.findById(req.params.id)
@@ -3487,7 +2701,6 @@ app.get('/api/v1/admin/kyc/:id', authenticate, authorizeAdmin, async (req, res) 
       },
       kyc: user.kyc
     });
-    
   } catch (err) {
     console.error('Get KYC details error:', err);
     res.status(500).json({ 
@@ -3497,16 +2710,6 @@ app.get('/api/v1/admin/kyc/:id', authenticate, authorizeAdmin, async (req, res) 
   }
 });
 
-/**
- * @api {post} /api/v1/admin/kyc/:id/approve Approve KYC
- * @apiName ApproveKYC
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- */
 app.post('/api/v1/admin/kyc/:id/approve', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
@@ -3525,13 +2728,11 @@ app.post('/api/v1/admin/kyc/:id/approve', authenticate, authorizeAdmin, async (r
       });
     }
     
-    // Update KYC status
     user.kyc.status = 'verified';
     user.kyc.verifiedAt = new Date();
     
     await user.save();
     
-    // Notify user
     sendToUser(user._id, 'KYC_APPROVED', {
       status: user.kyc.status,
       verifiedAt: user.kyc.verifiedAt
@@ -3541,7 +2742,6 @@ app.post('/api/v1/admin/kyc/:id/approve', authenticate, authorizeAdmin, async (r
       success: true,
       message: 'KYC approved successfully'
     });
-    
   } catch (err) {
     console.error('Approve KYC error:', err);
     res.status(500).json({ 
@@ -3551,18 +2751,6 @@ app.post('/api/v1/admin/kyc/:id/approve', authenticate, authorizeAdmin, async (r
   }
 });
 
-/**
- * @api {post} /api/v1/admin/kyc/:id/reject Reject KYC
- * @apiName RejectKYC
- * @apiGroup Admin
- * 
- * @apiHeader {String} Authorization Bearer token
- * 
- * @apiParam {String} reason Rejection reason
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {String} message Success message
- */
 app.post('/api/v1/admin/kyc/:id/reject', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const { reason } = req.body;
@@ -3590,13 +2778,11 @@ app.post('/api/v1/admin/kyc/:id/reject', authenticate, authorizeAdmin, async (re
       });
     }
     
-    // Update KYC status
     user.kyc.status = 'rejected';
     user.kyc.rejectionReason = reason;
     
     await user.save();
     
-    // Notify user
     sendToUser(user._id, 'KYC_REJECTED', {
       status: user.kyc.status,
       rejectionReason: user.kyc.rejectionReason
@@ -3606,7 +2792,6 @@ app.post('/api/v1/admin/kyc/:id/reject', authenticate, authorizeAdmin, async (re
       success: true,
       message: 'KYC rejected successfully'
     });
-    
   } catch (err) {
     console.error('Reject KYC error:', err);
     res.status(500).json({ 
@@ -3616,35 +2801,23 @@ app.post('/api/v1/admin/kyc/:id/reject', authenticate, authorizeAdmin, async (re
   }
 });
 
-// ======================
 // About Page Routes
-// ======================
-
-/**
- * @api {get} /api/v1/about Get about page data
- * @apiName GetAboutData
- * @apiGroup About
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object} stats Platform statistics
- * @apiSuccess {Object[]} team Team members
- */
 app.get('/api/v1/about', async (req, res) => {
   try {
-    // Platform statistics
     const totalUsers = await User.countDocuments();
     const verifiedUsers = await User.countDocuments({ isVerified: true });
+    
     const totalBalanceResult = await User.aggregate([
       { $group: { _id: null, total: { $sum: "$balance" } } }
     ]);
     const totalBalance = totalBalanceResult[0]?.total || 0;
+    
     const totalTradesResult = await User.aggregate([
       { $unwind: "$trades" },
       { $group: { _id: null, count: { $sum: 1 } } }
     ]);
     const totalTrades = totalTradesResult[0]?.count || 0;
     
-    // Team members (hardcoded for this example)
     const team = [
       {
         id: 1,
@@ -3679,7 +2852,6 @@ app.get('/api/v1/about', async (req, res) => {
       },
       team
     });
-    
   } catch (err) {
     console.error('Get about data error:', err);
     res.status(500).json({ 
@@ -3689,20 +2861,7 @@ app.get('/api/v1/about', async (req, res) => {
   }
 });
 
-// ======================
 // FAQ Routes
-// ======================
-
-/**
- * @api {get} /api/v1/faqs Get all FAQs
- * @apiName GetFAQs
- * @apiGroup FAQ
- * 
- * @apiParam {String} [category] Filter by category
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object[]} faqs List of FAQs
- */
 app.get('/api/v1/faqs', async (req, res) => {
   try {
     const { category } = req.query;
@@ -3718,7 +2877,6 @@ app.get('/api/v1/faqs', async (req, res) => {
       success: true,
       faqs
     });
-    
   } catch (err) {
     console.error('Get FAQs error:', err);
     res.status(500).json({ 
@@ -3728,10 +2886,7 @@ app.get('/api/v1/faqs', async (req, res) => {
   }
 });
 
-// ======================
 // Initialize Admin Account
-// ======================
-
 const initializeAdmin = async () => {
   try {
     const adminExists = await Admin.findOne({ email: 'admin@cryptotrading.com' });
