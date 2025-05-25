@@ -9,23 +9,23 @@ const rateLimit = require('express-rate-limit');
 const { WebSocketServer } = require('ws');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
-const multer = require('multer');
-const path = require('path');
 
+// Initialize Express app
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// MongoDB connection
-const MONGODB_URI = 'mongodb+srv://mosesmwainaina1994:OWlondlAbn3bJuj4@cluster0.edyueep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
-mongoose.connect(MONGODB_URI)
-  .then(() => console.log('MongoDB connected'))
-  .catch(err => console.error('MongoDB connection error:', err));
-
-// Middleware
-app.use(cors({
+// Enhanced CORS configuration
+const corsOptions = {
   origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000'],
-  credentials: true
-}));
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+
+// Apply middleware
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // Handle preflight requests
 app.use(helmet());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -33,9 +33,19 @@ app.use(express.urlencoded({ extended: true }));
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100
+  max: 100,
+  message: 'Too many requests from this IP, please try again later'
 });
 app.use(limiter);
+
+// MongoDB connection
+const MONGODB_URI = 'mongodb+srv://mosesmwainaina1994:OWlondlAbn3bJuj4@cluster0.edyueep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+mongoose.connect(MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+})
+.then(() => console.log('MongoDB connected successfully'))
+.catch(err => console.error('MongoDB connection error:', err));
 
 // Email configuration
 const transporter = nodemailer.createTransport({
@@ -429,32 +439,22 @@ app.post('/api/v1/auth/wallet-login', async (req, res) => {
   }
 });
 
-app.get('/api/v1/auth/me', authenticate, async (req, res) => {
-  try {
-    const user = req.user;
-    
-    res.json({
-      success: true,
-      user: {
-        id: user._id,
-        email: user.email,
-        name: user.name,
-        isVerified: user.isVerified,
-        balance: user.balance,
-        portfolio: Object.fromEntries(user.portfolio),
-        kycStatus: user.kycStatus,
-        settings: user.settings,
-        walletAddress: user.walletAddress
-      }
-    });
-  } catch (err) {
-    console.error('Get user error:', err);
-    res.status(500).json({ success: false, message: 'Server error getting user data' });
-  }
-});
-
+// Changed from POST to GET for token verification
 app.get('/api/v1/auth/verify', authenticate, (req, res) => {
-  res.json({ success: true, message: 'Token is valid', user: req.user });
+  res.json({ 
+    success: true, 
+    message: 'Token is valid', 
+    user: {
+      id: req.user._id,
+      email: req.user.email,
+      name: req.user.name,
+      isVerified: req.user.isVerified,
+      balance: req.user.balance,
+      kycStatus: req.user.kycStatus,
+      settings: req.user.settings,
+      walletAddress: req.user.walletAddress
+    }
+  });
 });
 
 app.post('/api/v1/auth/logout', authenticate, (req, res) => {
@@ -1028,6 +1028,25 @@ app.post('/api/v1/exchange/convert', authenticate, async (req, res) => {
 });
 
 // Transaction Routes
+app.get('/api/v1/transactions/recent', authenticate, async (req, res) => {
+  try {
+    const user = req.user;
+    const { limit = 5 } = req.query;
+
+    const transactions = await Transaction.find({ userId: user._id })
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit));
+
+    res.json({
+      success: true,
+      transactions
+    });
+  } catch (err) {
+    console.error('Get recent transactions error:', err);
+    res.status(500).json({ success: false, message: 'Server error getting recent transactions' });
+  }
+});
+
 app.get('/api/v1/transactions', authenticate, async (req, res) => {
   try {
     const user = req.user;
@@ -1131,6 +1150,33 @@ app.post('/api/v1/wallet/withdraw', authenticate, async (req, res) => {
   } catch (err) {
     console.error('Withdrawal error:', err);
     res.status(500).json({ success: false, message: 'Server error during withdrawal' });
+  }
+});
+
+// Market Data Routes
+app.get('/api/v1/market/data', async (req, res) => {
+  try {
+    const coins = await Coin.find({}).select('symbol name price change24h volume marketCap');
+    res.json({ success: true, data: coins });
+  } catch (err) {
+    console.error('Get market data error:', err);
+    res.status(500).json({ success: false, message: 'Server error getting market data' });
+  }
+});
+
+app.get('/api/v1/market/detailed/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const coin = await Coin.findOne({ symbol });
+    
+    if (!coin) {
+      return res.status(404).json({ success: false, message: 'Coin not found' });
+    }
+
+    res.json({ success: true, data: coin });
+  } catch (err) {
+    console.error('Get detailed market data error:', err);
+    res.status(500).json({ success: false, message: 'Server error getting detailed market data' });
   }
 });
 
@@ -1266,8 +1312,18 @@ app.post('/api/v1/admin/login', async (req, res) => {
   }
 });
 
+// Changed from POST to GET for admin token verification
 app.get('/api/v1/admin/verify', authenticateAdmin, (req, res) => {
-  res.json({ success: true, message: 'Admin token is valid', admin: req.admin });
+  res.json({ 
+    success: true, 
+    message: 'Admin token is valid', 
+    admin: {
+      id: req.admin._id,
+      email: req.admin.email,
+      name: req.admin.name,
+      role: req.admin.role
+    }
+  });
 });
 
 app.get('/api/v1/admin/dashboard-stats', authenticateAdmin, async (req, res) => {
