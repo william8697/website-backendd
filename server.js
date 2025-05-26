@@ -37,7 +37,7 @@ const apiLimiter = rateLimit({
 app.use('/api/', apiLimiter);
 
 // MongoDB Connection
-mongoose.connect('mongodb+srv://butlerdavidfur:<NxxhbUv6pBEB7nML>@cluster0.cm9eibh.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
+mongoose.connect(mongodb+srv://butlerdavidfur:<NxxhbUv6pBEB7nML>@cluster0.cm9eibh.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0, {
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000
 })
