@@ -37,15 +37,13 @@ const apiLimiter = rateLimit({
 app.use('/api/', apiLimiter);
 
 // MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/crypto-exchange', {
-  serverSelectionTimeoutMS: 5000,
-  socketTimeoutMS: 45000
+const MONGODB_URI = "mongodb+srv://butlerdavidfur:NxxhbUv6pBEB7nML@cluster0.cm9eibh.mongodb.net/crypto-exchange?retryWrites=true&w=majority";
+
+mongoose.connect(MONGODB_URI, {
+  serverSelectionTimeoutMS: 5000
 })
 .then(() => console.log('MongoDB connected successfully'))
-.catch(err => {
-  console.error('MongoDB connection error:', err);
-  process.exit(1); // Exit process with failure
-});
+.catch(err => console.error('MongoDB connection error:', err));
 
 // JWT Configuration
 const JWT_SECRET = '17581758Na.%';
