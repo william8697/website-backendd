@@ -28,8 +28,7 @@ const adminWss = new WebSocket.Server({ noServer: true });
 
 // Environment variables
 const PORT = process.env.PORT || 5000;
-// IMPORTANT: Replace with your actual MongoDB credentials in environment variables
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://username:password@cluster0.edyueep.mongodb.net/databaseName?retryWrites=true&w=majority';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://mosesmwainaina1994:<OWlondlAbn3bJuj4>@cluster0.edyueep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
 const JWT_SECRET = process.env.JWT_SECRET || '17581758Na.%';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
 const COOKIE_EXPIRES = process.env.COOKIE_EXPIRES || 30;
@@ -40,9 +39,6 @@ const EMAIL_PASS = process.env.EMAIL_PASS || '6c08aa4f2c679a';
 const EMAIL_HOST = process.env.EMAIL_HOST || 'sandbox.sandbox.smtp.mailtrap.io';
 const EMAIL_PORT = process.env.EMAIL_PORT || 2525;
 
-// Configure mongoose to prepare for upcoming changes
-mongoose.set('strictQuery', false); // This suppresses the deprecation warning
-
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -50,19 +46,12 @@ const limiter = rateLimit({
   message: 'Too many requests from this IP, please try again later'
 });
 
-// Enhanced CORS configuration
-const corsOptions = {
-  origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000'],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-  optionsSuccessStatus: 200
-};
-
 // Middleware
 app.use(helmet());
-app.options('*', cors(corsOptions)); // Enable preflight for all routes
-app.use(cors(corsOptions));
+app.use(cors({
+  origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000'],
+  credentials: true
+}));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(cookieParser());
@@ -71,23 +60,15 @@ app.use(xss());
 app.use(hpp());
 app.use('/api', limiter);
 
-// Database connection with improved error handling
-const connectDB = async () => {
-  try {
-    await mongoose.connect(MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
-    console.log('MongoDB connected successfully');
-    
-    // Initialize default data after successful connection
-    await initializeCoins();
-    await initializeSystemSettings();
-  } catch (err) {
-    console.error('MongoDB connection error:', err.message);
-    // Exit process with failure
-    process.exit(1);
-  }
+// Database connection
+mongoose.connect(MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+  useCreateIndex: true,
+  useFindAndModify: false
+}).then(() => console.log('MongoDB connected successfully'))
+  .catch(err => console.error('MongoDB connection error:', err));
+
 // Email transporter
 const transporter = nodemailer.createTransport({
   host: EMAIL_HOST,
