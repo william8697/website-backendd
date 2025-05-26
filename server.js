@@ -74,10 +74,7 @@ app.use('/api', limiter);
 // Database connection with improved error handling
 const connectDB = async () => {
   try {
-    await mongoose.connect(MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
+    await mongoose.connect(MONGODB_URI, );
     console.log('MongoDB connected successfully');
     
     // Initialize default data after successful connection
