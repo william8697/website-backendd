@@ -2596,7 +2596,32 @@ app.all('*', (req, res) => {
     message: `Can't find ${req.originalUrl} on this server!`
   });
 });
+// WebSocket upgrade handler for admin route
+server.on('upgrade', (request, socket, head) => {
+  if (request.url === '/api/v1/admin/ws') {
+    const token = request.headers['sec-websocket-protocol'];
+    
+    if (!token) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
 
+    jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+      if (err || !decoded.isAdmin) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+
+      adminWss.handleUpgrade(request, socket, head, (ws) => {
+        adminWss.emit('connection', ws, request);
+      });
+    });
+  } else {
+    socket.destroy();
+  }
+});
 // Start server
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
