@@ -74,7 +74,10 @@ app.use('/api', limiter);
 // Database connection with improved error handling
 const connectDB = async () => {
   try {
-    await mongoose.connect(MONGODB_URI, );
+    await mongoose.connect(MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
     console.log('MongoDB connected successfully');
     
     // Initialize default data after successful connection
@@ -85,11 +88,6 @@ const connectDB = async () => {
     // Exit process with failure
     process.exit(1);
   }
-};
-
-// Connect to MongoDB
-connectDB();
-
 // Email transporter
 const transporter = nodemailer.createTransport({
   host: EMAIL_HOST,
