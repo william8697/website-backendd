@@ -41,15 +41,10 @@ const server = require('http').createServer(app);
 const wss = new WebSocket.Server({ 
   server,
   verifyClient: (info, done) => {
-    // Verify WebSocket connections
     const token = info.req.url.split('token=')[1];
-    if (!token) {
-      return done(false, 401, 'Unauthorized');
-    }
+    if (!token) return done(false, 401, 'Unauthorized');
     jwt.verify(token, JWT_SECRET, (err, decoded) => {
-      if (err) {
-        return done(false, 401, 'Unauthorized');
-      }
+      if (err) return done(false, 401, 'Unauthorized');
       info.req.userId = decoded.id;
       done(true);
     });
@@ -70,15 +65,25 @@ const EMAIL_PASS = process.env.EMAIL_PASS || '6c08aa4f2c679a';
 const EMAIL_HOST = process.env.EMAIL_HOST || 'sandbox.sandbox.smtp.mailtrap.io';
 const EMAIL_PORT = process.env.EMAIL_PORT || 2525;
 
-// MongoDB connection with updated options
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://mosesmwainaina1994:<OWlondlAbn3bJuj4>@cluster0.edyueep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+// MongoDB connection with proper authentication
+const MONGODB_USERNAME = encodeURIComponent(process.env.MONGODB_USERNAME || 'mosesmwainaina1994');
+const MONGODB_PASSWORD = encodeURIComponent(process.env.MONGODB_PASSWORD || 'OWlondlAbn3bJuj4');
+const MONGODB_CLUSTER = process.env.MONGODB_CLUSTER || 'cluster0.edyueep.mongodb.net';
+const MONGODB_DATABASE = process.env.MONGODB_DATABASE || 'crypto-trading';
 
-mongoose.connect(MONGODB_URI)
-  .then(() => console.log('MongoDB connected successfully'))
-  .catch(err => {
-    console.error('MongoDB connection error:', err);
-    process.exit(1);
-  });
+const MONGODB_URI = `mongodb+srv://${MONGODB_USERNAME}:${MONGODB_PASSWORD}@${MONGODB_CLUSTER}/${MONGODB_DATABASE}?retryWrites=true&w=majority`;
+
+const connectWithRetry = () => {
+  mongoose.connect(MONGODB_URI)
+    .then(() => console.log('MongoDB connected successfully'))
+    .catch(err => {
+      console.error('MongoDB connection error:', err.message);
+      console.log('Retrying connection in 5 seconds...');
+      setTimeout(connectWithRetry, 5000);
+    });
+};
+
+connectWithRetry();
 
 // Rate limiting
 const limiter = rateLimit({
@@ -96,9 +101,6 @@ app.use(mongoSanitize());
 app.use(xss());
 app.use(hpp());
 app.use('/api', limiter);
-
-// Handle preflight requests
-app.options('*', cors(corsOptions));
 
 // Email transporter
 const transporter = nodemailer.createTransport({
@@ -2622,9 +2624,11 @@ server.on('upgrade', (request, socket, head) => {
     socket.destroy();
   }
 });
-// Start server
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// Start server only after initial DB connection
+mongoose.connection.once('open', () => {
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
 });
 
 // Update coin prices periodically (simulating market changes)
