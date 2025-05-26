@@ -62,8 +62,6 @@ app.use('/api', limiter);
 
 // Database connection
 mongoose.connect(MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
   useCreateIndex: true,
   useFindAndModify: false
 }).then(() => console.log('MongoDB connected successfully'))
