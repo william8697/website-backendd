@@ -40,14 +40,3 @@
     "prettier": "^3.2.4",
     "supertest": "^6.3.4"
   },
-  "keywords": [
-    "cryptocurrency",
-    "trading",
-    "backend",
-    "nodejs",
-    "express",
-    "mongodb",
-    "blockchain",
-    "wallet",
-    "authentication"
-  ],
