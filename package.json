@@ -51,14 +51,3 @@
     "wallet",
     "authentication"
   ],
-  "author": "Your Name <your.email@example.com>",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/yourusername/crypto-trading-backend.git"
-  },
-  "bugs": {
-    "url": "https://github.com/yourusername/crypto-trading-backend/issues"
-  },
-  "homepage": "https://github.com/yourusername/crypto-trading-backend#readme"
-}
