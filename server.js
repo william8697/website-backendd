@@ -44,8 +44,6 @@ app.use(limiter);
 // MongoDB Connection with Retry Logic
 const connectWithRetry = () => {
   mongoose.connect('mongodb+srv://butlerdavidfur:NxxhbUv6pBEB7nML@cluster0.cm9eibh.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
     connectTimeoutMS: 10000,
     socketTimeoutMS: 45000
   })
