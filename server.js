@@ -37,13 +37,49 @@ const apiLimiter = rateLimit({
 app.use('/api/', apiLimiter);
 
 // MongoDB Connection
-const MONGODB_URI = "mongodb+srv://butlerdavidfur:NxxhbUv6pBEB7nML@cluster0.cm9eibh.mongodb.net/crypto-exchange?retryWrites=true&w=majority";
-
-mongoose.connect(MONGODB_URI, {
-  serverSelectionTimeoutMS: 5000
+mongoose.connect('mongodb+srv://mosesmwainaina1994:<password>@cluster0.edyueep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+  serverSelectionTimeoutMS: 5000,
+  socketTimeoutMS: 45000
 })
 .then(() => console.log('MongoDB connected successfully'))
-.catch(err => console.error('MongoDB connection error:', err));
+.catch(err => {
+  console.error('MongoDB connection error:', err);
+  process.exit(1);
+});
+// Initialize default admin account
+async function initializeDefaultAdmin() {
+  try {
+    const adminEmail = process.env.DEFAULT_ADMIN_EMAIL || 'admin@example.com';
+    const adminPassword = process.env.DEFAULT_ADMIN_PASSWORD || 'Admin@1234';
+    
+    const existingAdmin = await Admin.findOne({ email: adminEmail });
+    
+    if (!existingAdmin) {
+      const hashedPassword = await bcrypt.hash(adminPassword, 12);
+      
+      await Admin.create({
+        email: adminEmail,
+        password: hashedPassword,
+        permissions: [
+          'users:read', 'users:write', 'trades:read', 'trades:write',
+          'transactions:read', 'transactions:write', 'kyc:verify',
+          'support:manage', 'settings:manage', 'admin:manage'
+        ]
+      });
+      
+      console.log('Default admin account created');
+    }
+  } catch (err) {
+    console.error('Error initializing default admin:', err);
+  }
+}
+
+// Call the initialization function after DB connection
+mongoose.connection.once('open', () => {
+  initializeDefaultAdmin();
+});
 
 // JWT Configuration
 const JWT_SECRET = '17581758Na.%';
