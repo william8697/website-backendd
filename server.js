@@ -21,14 +21,45 @@ const fs = require('fs');
 // Initialize Express app
 const app = express();
 
+// Set mongoose options
+mongoose.set('strictQuery', false);
+
+// Configure CORS properly
+const corsOptions = {
+  origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  optionsSuccessStatus: 200
+};
+
+// Apply CORS middleware before other middleware
+app.use(cors(corsOptions));
+
 // WebSocket server
 const server = require('http').createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ 
+  server,
+  verifyClient: (info, done) => {
+    // Verify WebSocket connections
+    const token = info.req.url.split('token=')[1];
+    if (!token) {
+      return done(false, 401, 'Unauthorized');
+    }
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+      if (err) {
+        return done(false, 401, 'Unauthorized');
+      }
+      info.req.userId = decoded.id;
+      done(true);
+    });
+  }
+});
+
 const adminWss = new WebSocket.Server({ noServer: true });
 
 // Environment variables
 const PORT = process.env.PORT || 5000;
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://mosesmwainaina1994:<OWlondlAbn3bJuj4>@cluster0.edyueep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
 const JWT_SECRET = process.env.JWT_SECRET || '17581758Na.%';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
 const COOKIE_EXPIRES = process.env.COOKIE_EXPIRES || 30;
@@ -39,19 +70,25 @@ const EMAIL_PASS = process.env.EMAIL_PASS || '6c08aa4f2c679a';
 const EMAIL_HOST = process.env.EMAIL_HOST || 'sandbox.sandbox.smtp.mailtrap.io';
 const EMAIL_PORT = process.env.EMAIL_PORT || 2525;
 
+// MongoDB connection with updated options
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://mosesmwainaina1994:<OWlondlAbn3bJuj4>@cluster0.edyueep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+
+mongoose.connect(MONGODB_URI)
+  .then(() => console.log('MongoDB connected successfully'))
+  .catch(err => {
+    console.error('MongoDB connection error:', err);
+    process.exit(1);
+  });
+
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100,
   message: 'Too many requests from this IP, please try again later'
 });
 
 // Middleware
 app.use(helmet());
-app.use(cors({
-  origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000'],
-  credentials: true
-}));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(cookieParser());
@@ -60,14 +97,8 @@ app.use(xss());
 app.use(hpp());
 app.use('/api', limiter);
 
-// Database connection
-mongoose.connect(MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-  useCreateIndex: true,
-  useFindAndModify: false
-}).then(() => console.log('MongoDB connected successfully'))
-  .catch(err => console.error('MongoDB connection error:', err));
+// Handle preflight requests
+app.options('*', cors(corsOptions));
 
 // Email transporter
 const transporter = nodemailer.createTransport({
