@@ -46,12 +46,19 @@ const limiter = rateLimit({
   message: 'Too many requests from this IP, please try again later'
 });
 
+// Enhanced CORS configuration
+const corsOptions = {
+  origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  optionsSuccessStatus: 200
+};
+
 // Middleware
 app.use(helmet());
-app.use(cors({
-  origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000'],
-  credentials: true
-}));
+app.options('*', cors(corsOptions)); // Enable preflight for all routes
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(cookieParser());
@@ -62,6 +69,8 @@ app.use('/api', limiter);
 
 // Database connection
 mongoose.connect(MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
   useCreateIndex: true,
   useFindAndModify: false
 }).then(() => console.log('MongoDB connected successfully'))
