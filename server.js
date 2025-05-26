@@ -37,9 +37,7 @@ const apiLimiter = rateLimit({
 app.use('/api/', apiLimiter);
 
 // MongoDB Connection
-mongoose.connect('mongodb+srv://mosesmwainaina1994:<password>@cluster0.edyueep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
+mongoose.connect('mongodb+srv://mosesmwainaina1994:<password>@cluster0.edyueep.mongodb.net/crypto-exchange?retryWrites=true&w=majority', {
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000
 })
