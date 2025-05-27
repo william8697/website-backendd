@@ -21,7 +21,7 @@ const { ethers } = require('ethers');
 
 // Constants
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = '17581758Na.##';
+const JWT_SECRET = '17581758Na.%';
 const ADMIN_EMAIL = 'Admin@youngblood.com';
 const ADMIN_PASSWORD = '17581758..';
 const FIXED_DEPOSIT_ADDRESS = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
