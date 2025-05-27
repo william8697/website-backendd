@@ -422,6 +422,22 @@ const initializeDatabase = async () => {
 };
 
 // Routes
+// Add this to your authentication routes
+app.get('/api/v1/auth/me', authenticate, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    res.json({
+      id: user._id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      isAdmin: user.isAdmin,
+      isVerified: user.isVerified
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // 1. Auth status check
 app.get('/api/v1/auth/status', authenticate, (req, res) => {
