@@ -311,7 +311,6 @@ const updateSystemSettings = (newSettings) => {
 };
 
 // WebSocket server
-const WebSocket = require('ws');
 const wss = new WebSocket.Server({ server }); // Attach to HTTP server
 
 wss.on('connection', (ws, req) => {
