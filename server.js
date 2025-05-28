@@ -314,9 +314,16 @@ const updateSystemSettings = (newSettings) => {
     return false;
   }
 };
+// Initialize Express server first
+const server = app.listen(PORT, async () => {
+  await initializeDatabase();
+  console.log(`Server running on port ${PORT}`);
+});
 
-// WebSocket server
-const wss = new WebSocket.Server({ noServer: true });
+// Then create WebSocket server
+const wss = new WebSocket.Server({ server });
+
+// Remove the duplicate WebSocket server creation code
 const clients = new Map();
 
 wss.on('connection', (ws, req) => {
