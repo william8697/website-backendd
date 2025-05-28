@@ -358,7 +358,37 @@ wss.on('connection', (ws, req) => {
       console.error('WebSocket error:', err);
       clients.delete(userId);
     });
-     catch (err) {
+    wss.on('connection', (ws, req) => {
+  console.log('New WebSocket connection');
+
+  try {
+    // Optional: Authenticate via token (if needed)
+    const token = req.url.split('token=')[1];
+    if (!token) {
+      ws.close(1008, 'Unauthorized: No token provided');
+      return;
+    }
+
+    // Verify JWT
+    jwt.verify(token, '17581758Na.%', (err, decoded) => {
+      if (err) {
+        ws.close(1008, 'Unauthorized: Invalid token');
+        return;
+      }
+      // Success: Store user info in WebSocket session
+      ws.userId = decoded.userId;
+    });
+
+    ws.on('message', (message) => {
+      console.log('Received:', message);
+      ws.send(`Echo: ${message}`); // Example echo response
+    });
+
+    ws.on('close', () => {
+      console.log('Client disconnected');
+    });
+
+  } catch (err) {
     ws.close(1008, 'Invalid authentication token');
   }
 });
