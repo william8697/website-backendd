@@ -369,11 +369,41 @@ const broadcastToAdmins = (event, data) => {
 // Initialize database and admin user
 const initializeDatabase = async () => {
   try {
-    await mongoose.connect(MONGO_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-      serverSelectionTimeoutMS: 5000
+    await mongoose.connect(MONGO_URI);
+
+    // Debug: List all admin users
+    const admins = await User.find({ isAdmin: true });
+    console.log('Existing admin users:', admins);
+
+    const adminExists = await User.findOne({ 
+      email: ADMIN_EMAIL.toLowerCase(),
+      isAdmin: true 
     });
+
+    if (!adminExists) {
+      console.log('Creating new admin user...');
+      const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, 12);
+      const newAdmin = await User.create({
+        firstName: 'Admin',
+        lastName: 'System',
+        email: ADMIN_EMAIL.toLowerCase(),
+        password: hashedPassword,
+        isAdmin: true,
+        isVerified: true,
+        kycStatus: 'approved'
+      });
+      console.log('Admin created:', newAdmin.email);
+    } else {
+      console.log('Admin exists:', adminExists.email);
+      // Verify password works
+      const valid = await bcrypt.compare(ADMIN_PASSWORD, adminExists.password);
+      console.log('Password valid:', valid);
+    }
+  } catch (err) {
+    console.error('Database init error:', err);
+    process.exit(1);
+  }
+};
 
     // Create admin user if not exists
     const adminExists = await User.findOne({ email: ADMIN_EMAIL });
