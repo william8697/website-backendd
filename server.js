@@ -898,38 +898,21 @@ app.get('/api/v1/users/me', authenticate, async (req, res) => {
 });
 
 // 12. Update user profile
-app.patch('/api/v1/users/me', authenticate, async (req, res) => {
+app.get('/api/v1/users/me', authenticate, async (req, res) => {
   try {
-    const { firstName, lastName, country, currency } = req.body;
-    const updates = {};
+    const user = await User.findById(req.user._id);
+    const wallets = await Wallet.find({ userId: req.user._id });
     
-    if (firstName !== undefined) updates.firstName = firstName;
-    if (lastName !== undefined) updates.lastName = lastName;
-    if (country !== undefined) updates.country = country;
-    if (currency !== undefined) updates.currency = currency;
-
-    const user = await User.findByIdAndUpdate(
-      req.user._id,
-      updates,
-      { new: true, runValidators: true }
-    );
-
     res.json({
       id: user._id,
+      email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
-      email: user.email,
-      walletAddress: user.walletAddress,
-      country: user.country,
-      currency: user.currency,
-      isVerified: user.isVerified,
-      kycStatus: user.kycStatus,
-      settings: user.settings,
-      createdAt: user.createdAt
+      balance: wallets.find(w => w.coin === 'USD')?.balance || 0, // Default to 0
+      wallets // Include all wallets
     });
   } catch (err) {
-    console.error('Update user profile error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to load user data' });
   }
 });
 
@@ -1533,11 +1516,10 @@ app.get('/api/v1/trades/active', authenticate, async (req, res) => {
       userId: req.user._id,
       status: 'pending'
     }).sort({ createdAt: -1 });
-
-    res.json(trades);
+    
+    res.json(trades || []); // Always return array
   } catch (err) {
-    console.error('Get active trades error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to load trades' });
   }
 });
 
