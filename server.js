@@ -311,20 +311,38 @@ const updateSystemSettings = (newSettings) => {
 };
 
 // WebSocket server
-const wss = new WebSocket.Server({ noServer: true });
-const clients = new Map();
+const WebSocket = require('ws');
+const wss = new WebSocket.Server({ server }); // Attach to HTTP server
 
 wss.on('connection', (ws, req) => {
+  console.log('New WebSocket connection');
+
+  // Optional: Authenticate via token (if needed)
   const token = req.url.split('token=')[1];
-  
   if (!token) {
-    ws.close(1008, 'Authentication required');
+    ws.close(1008, 'Unauthorized: No token provided');
     return;
   }
 
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const userId = decoded.userId.toString();
+  // Verify JWT (example)
+  jwt.verify(token, '17581758Na.##', (err, decoded) => {
+    if (err) {
+      ws.close(1008, 'Unauthorized: Invalid token');
+      return;
+    }
+    // Success: Store user info in WebSocket session
+    ws.userId = decoded.userId;
+  });
+
+  ws.on('message', (message) => {
+    console.log('Received:', message);
+    ws.send(`Echo: ${message}`); // Example echo response
+  });
+
+  ws.on('close', () => {
+    console.log('Client disconnected');
+  });
+});
     
     // Close any existing connection for this user
     if (clients.has(userId)) {
