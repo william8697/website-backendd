@@ -420,6 +420,27 @@ const initializeDatabase = async () => {
     process.exit(1);
   }
 };
+// ===== CORS CONFIG (PUT THIS BEFORE ROUTES) =====
+const allowedOrigins = [
+  'https://website-xi-ten-52.vercel.app', // Your frontend
+  'http://localhost:3000' // For local testing
+];
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (allowedOrigins.includes(origin) || !origin) { // Allow local testing (Postman, etc.)
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true, // Required for cookies/sessions
+  optionsSuccessStatus: 200 // Legacy browsers choke on 204
+};
+
+app.use(cors(corsOptions)); // Enable CORS for all routes
+app.options('*', cors(corsOptions)); // Handle preflight requests
 
 // Routes
 // Add this to your authentication routes
