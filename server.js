@@ -316,7 +316,7 @@ const updateSystemSettings = (newSettings) => {
 };
 
 // Then create WebSocket server
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ noserver=true });
 
 // Remove the duplicate WebSocket server creation code
 const clients = new Map();
