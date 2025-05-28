@@ -200,23 +200,18 @@ app.use(helmet());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-app.set('trust proxy', true);  // Trust first proxy
-// or for multiple proxies:
-// app.set('trust proxy', 2); // Trust first two proxies
-
 // Rate limiting
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 200,
-  message: 'Too many requests from this IP, please try again later',
-  validate: { trustProxy: true }  // Explicitly tell rate-limiter to trust proxy
+  message: 'Too many requests from this IP, please try again later'
 });
+app.use('/api/', apiLimiter);
 
 const authLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
+  windowMs: 60 * 60 * 1000,
   max: 20,
-  message: 'Too many login attempts, please try again later',
-  validate: { trustProxy: true }  // Explicitly tell rate-limiter to trust proxy
+  message: 'Too many login attempts, please try again later'
 });
 app.use('/api/v1/auth/', authLimiter);
 
@@ -315,10 +310,8 @@ const updateSystemSettings = (newSettings) => {
   }
 };
 
-// Then create WebSocket server
-const wss = new WebSocket.Server({ noserver=true });
-
-// Remove the duplicate WebSocket server creation code
+// WebSocket server
+const wss = new WebSocket.Server({ noServer: true });
 const clients = new Map();
 
 wss.on('connection', (ws, req) => {
