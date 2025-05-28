@@ -310,13 +310,14 @@ const updateSystemSettings = (newSettings) => {
   }
 };
 
+// Initialize server
 const server = app.listen(PORT, async () => {
   await initializeDatabase();
   console.log(`Server running on port ${PORT}`);
 });
 
-// WebSocket server
-const wss = new WebSocket.Server({ server }); // Attach to HTTP server
+// Create WebSocket server AFTER HTTP server is created
+const wss = new WebSocket.Server({ server });
 
 wss.on('connection', (ws, req) => {
   console.log('New WebSocket connection');
