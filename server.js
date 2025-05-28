@@ -447,6 +447,7 @@ app.get('/api/v1/auth/status', authenticate, (req, res) => {
       id: req.user._id,
       firstName: req.user.firstName,
       lastName: req.user.lastName,
+      username: req.user.username,
       email: req.user.email,
       walletAddress: req.user.walletAddress,
       isAdmin: req.user.isAdmin,
