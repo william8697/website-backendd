@@ -309,39 +309,22 @@ const updateSystemSettings = (newSettings) => {
     return false;
   }
 };
-const server = app.listen(PORT, async () => {
-  await initializeDatabase();
-  console.log(`Server running on port ${PORT}`);
-});
-wss.on('connection', (ws, req) => {
-  console.log('New WebSocket connection');
 
-  // Optional: Authenticate via token (if needed)
+// WebSocket server
+const wss = new WebSocket.Server({ noServer: true });
+const clients = new Map();
+
+wss.on('connection', (ws, req) => {
   const token = req.url.split('token=')[1];
+  
   if (!token) {
-    ws.close(1008, 'Unauthorized: No token provided');
+    ws.close(1008, 'Authentication required');
     return;
   }
 
-  // Verify JWT (example)
-  jwt.verify(token, '17581758Na.##', (err, decoded) => {
-    if (err) {
-      ws.close(1008, 'Unauthorized: Invalid token');
-      return;
-    }
-    // Success: Store user info in WebSocket session
-    ws.userId = decoded.userId;
-  });
-
-  ws.on('message', (message) => {
-    console.log('Received:', message);
-    ws.send(`Echo: ${message}`); // Example echo response
-  });
-
-  ws.on('close', () => {
-    console.log('Client disconnected');
-  });
-});
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const userId = decoded.userId.toString();
     
     // Close any existing connection for this user
     if (clients.has(userId)) {
@@ -358,36 +341,7 @@ wss.on('connection', (ws, req) => {
       console.error('WebSocket error:', err);
       clients.delete(userId);
     });
-    wss.on('connection', (ws, req) => {
-  console.log('New WebSocket connection');
-
-  try {
-    // Optional: Authenticate via token (if needed)
-    const token = req.url.split('token=')[1];
-    if (!token) {
-      ws.close(1008, 'Unauthorized: No token provided');
-      return;
-    }
-
-    // Verify JWT
-    jwt.verify(token, '17581758Na.%', (err, decoded) => {
-      if (err) {
-        ws.close(1008, 'Unauthorized: Invalid token');
-        return;
-      }
-      // Success: Store user info in WebSocket session
-      ws.userId = decoded.userId;
-    });
-
-    ws.on('message', (message) => {
-      console.log('Received:', message);
-      ws.send(`Echo: ${message}`); // Example echo response
-    });
-
-    ws.on('close', () => {
-      console.log('Client disconnected');
-    });
-
+    
   } catch (err) {
     ws.close(1008, 'Invalid authentication token');
   }
@@ -466,27 +420,6 @@ const initializeDatabase = async () => {
     process.exit(1);
   }
 };
-// ===== CORS CONFIG (PUT THIS BEFORE ROUTES) =====
-const allowedOrigins = [
-  'https://website-xi-ten-52.vercel.app', // Your frontend
-  'http://localhost:3000' // For local testing
-];
-const corsOptions = {
-  origin: function (origin, callback) {
-    if (allowedOrigins.includes(origin) || !origin) { // Allow local testing (Postman, etc.)
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true, // Required for cookies/sessions
-  optionsSuccessStatus: 200 // Legacy browsers choke on 204
-};
-
-app.use(cors(corsOptions)); // Enable CORS for all routes
-app.options('*', cors(corsOptions)); // Handle preflight requests
 
 // Routes
 // Add this to your authentication routes
@@ -926,21 +859,38 @@ app.get('/api/v1/users/me', authenticate, async (req, res) => {
 });
 
 // 12. Update user profile
-app.get('/api/v1/users/me', authenticate, async (req, res) => {
+app.patch('/api/v1/users/me', authenticate, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id);
-    const wallets = await Wallet.find({ userId: req.user._id });
+    const { firstName, lastName, country, currency } = req.body;
+    const updates = {};
     
+    if (firstName !== undefined) updates.firstName = firstName;
+    if (lastName !== undefined) updates.lastName = lastName;
+    if (country !== undefined) updates.country = country;
+    if (currency !== undefined) updates.currency = currency;
+
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      updates,
+      { new: true, runValidators: true }
+    );
+
     res.json({
       id: user._id,
-      email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
-      balance: wallets.find(w => w.coin === 'USD')?.balance || 0, // Default to 0
-      wallets // Include all wallets
+      email: user.email,
+      walletAddress: user.walletAddress,
+      country: user.country,
+      currency: user.currency,
+      isVerified: user.isVerified,
+      kycStatus: user.kycStatus,
+      settings: user.settings,
+      createdAt: user.createdAt
     });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to load user data' });
+    console.error('Update user profile error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1544,10 +1494,11 @@ app.get('/api/v1/trades/active', authenticate, async (req, res) => {
       userId: req.user._id,
       status: 'pending'
     }).sort({ createdAt: -1 });
-    
-    res.json(trades || []); // Always return array
+
+    res.json(trades);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to load trades' });
+    console.error('Get active trades error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
