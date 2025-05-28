@@ -313,10 +313,6 @@ const server = app.listen(PORT, async () => {
   await initializeDatabase();
   console.log(`Server running on port ${PORT}`);
 });
-
-// Now create WebSocket server using the existing server instance
-const wss = new WebSocket.Server({ server })
-
 wss.on('connection', (ws, req) => {
   console.log('New WebSocket connection');
 
