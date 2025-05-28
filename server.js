@@ -358,8 +358,7 @@ wss.on('connection', (ws, req) => {
       console.error('WebSocket error:', err);
       clients.delete(userId);
     });
-    
-  } catch (err) {
+     catch (err) {
     ws.close(1008, 'Invalid authentication token');
   }
 });
