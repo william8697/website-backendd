@@ -18,10 +18,12 @@ const WebSocket = require('ws');
 const nodemailer = require('nodemailer');
 const { v4: uuidv4 } = require('uuid');
 const { body, validationResult } = require('express-validator');
+const http = require('http');
 
 const app = express();
+const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = '17581758Na.%';
+const JWT_SECRET = '17581758Na.##';
 const DEPOSIT_WALLET = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
 
 // MongoDB Connection
@@ -175,10 +177,28 @@ app.use(mongoSanitize());
 app.use(xss());
 app.use(hpp());
 app.use(helmet());
+
+const allowedOrigins = [
+    'http://localhost:3000',
+    'https://website-xi-ten-52.vercel.app',
+    'https://yourdomain.com'
+];
+
 app.use(cors({
-    origin: ['http://localhost:3000', 'https://yourdomain.com'],
-    credentials: true
+    origin: function (origin, callback) {
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.indexOf(origin) === -1) {
+            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            return callback(new Error(msg), false);
+        }
+        return callback(null, true);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+app.options('*', cors());
 
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -206,7 +226,7 @@ const upload = multer({
             cb(new Error('Only image files are allowed'), false);
         }
     },
-    limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+    limits: { fileSize: 5 * 1024 * 1024 }
 });
 
 // Auth middleware
@@ -257,39 +277,48 @@ const adminAuth = async (req, res, next) => {
 };
 
 // WebSocket Server
-const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-const wss = new WebSocket.Server({ server, path: '/api/v1/admin/ws' });
+const wss = new WebSocket.Server({ 
+    server,
+    path: '/api/v1/admin/ws',
+    verifyClient: (info, done) => {
+        const token = info.req.url.split('token=')[1];
+        if (!token) return done(false, 401, 'Unauthorized');
+        
+        try {
+            const decoded = jwt.verify(token, JWT_SECRET);
+            info.req.userId = decoded.id;
+            done(true);
+        } catch (err) {
+            done(false, 401, 'Invalid token');
+        }
+    }
+});
 
 const clients = new Map();
 
 wss.on('connection', (ws, req) => {
-    const token = req.url.split('token=')[1];
-    
-    try {
-        if (!token) {
-            ws.close(1008, 'Authentication required');
-            return;
-        }
-
-        const decoded = jwt.verify(token, JWT_SECRET);
-        const clientId = decoded.id;
-        
-        clients.set(clientId, ws);
-        console.log(`Client connected: ${clientId}`);
-
-        ws.on('message', (message) => {
-            console.log(`Received message from ${clientId}: ${message}`);
-            // Handle incoming messages if needed
-        });
-
-        ws.on('close', () => {
-            clients.delete(clientId);
-            console.log(`Client disconnected: ${clientId}`);
-        });
-
-    } catch (err) {
-        ws.close(1008, 'Invalid token');
+    const clientId = req.userId;
+    if (!clientId) {
+        ws.close(1008, 'Authentication required');
+        return;
     }
+
+    clients.set(clientId, ws);
+    console.log(`Client connected: ${clientId}`);
+
+    ws.on('message', (message) => {
+        console.log(`Received message from ${clientId}: ${message}`);
+    });
+
+    ws.on('close', () => {
+        clients.delete(clientId);
+        console.log(`Client disconnected: ${clientId}`);
+    });
+
+    ws.on('error', (err) => {
+        console.error(`WebSocket error for client ${clientId}:`, err);
+        clients.delete(clientId);
+    });
 });
 
 function broadcastToUser(userId, data) {
@@ -301,21 +330,17 @@ function broadcastToUser(userId, data) {
 
 function broadcastToAdmins(data) {
     clients.forEach((ws, userId) => {
-        if (ws.readyState === WebSocket.OPEN) {
+        const user = User.findById(userId);
+        if (user && user.isAdmin && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(data));
         }
     });
 }
 
-// Routes
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
 // Serve static files
 app.use(express.static('public'));
 
-// Authentication Endpoints
+// Authentication Endpoints (10 endpoints)
 app.post('/api/v1/auth/signup', [
     body('firstName').notEmpty().trim().escape(),
     body('lastName').notEmpty().trim().escape(),
@@ -350,7 +375,6 @@ app.post('/api/v1/auth/signup', [
 
         const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '30d' });
 
-        // Send welcome email
         await transporter.sendMail({
             from: '"Crypto Platform" <support@cryptoplatform.com>',
             to: email,
@@ -361,7 +385,7 @@ app.post('/api/v1/auth/signup', [
         res.cookie('token', token, {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
-            maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+            maxAge: 30 * 24 * 60 * 60 * 1000
         });
 
         res.status(201).json({
@@ -375,7 +399,6 @@ app.post('/api/v1/auth/signup', [
                 isAdmin: user.isAdmin
             }
         });
-
     } catch (err) {
         console.error(err);
         res.status(500).json({ success: false, message: 'Server error' });
@@ -412,7 +435,7 @@ app.post('/api/v1/auth/login', [
         res.cookie('token', token, {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
-            maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+            maxAge: 30 * 24 * 60 * 60 * 1000
         });
 
         res.json({
@@ -426,7 +449,6 @@ app.post('/api/v1/auth/login', [
                 isAdmin: user.isAdmin
             }
         });
-
     } catch (err) {
         console.error(err);
         res.status(500).json({ success: false, message: 'Server error' });
@@ -449,8 +471,6 @@ app.post('/api/v1/auth/wallet-signup', [
     try {
         const { walletAddress, signature, firstName, lastName, email, country, currency } = req.body;
 
-        // Verify signature (simplified for example)
-        // In production, you would verify the signature matches the wallet address
         const existingUser = await User.findOne({ $or: [{ email }, { walletAddress }] });
         if (existingUser) {
             return res.status(400).json({ success: false, message: 'Email or wallet already in use' });
@@ -469,7 +489,6 @@ app.post('/api/v1/auth/wallet-signup', [
 
         const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '30d' });
 
-        // Send welcome email
         await transporter.sendMail({
             from: '"Crypto Platform" <support@cryptoplatform.com>',
             to: email,
@@ -480,7 +499,7 @@ app.post('/api/v1/auth/wallet-signup', [
         res.cookie('token', token, {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
-            maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+            maxAge: 30 * 24 * 60 * 60 * 1000
         });
 
         res.status(201).json({
@@ -495,7 +514,6 @@ app.post('/api/v1/auth/wallet-signup', [
                 isAdmin: user.isAdmin
             }
         });
-
     } catch (err) {
         console.error(err);
         res.status(500).json({ success: false, message: 'Server error' });
@@ -513,8 +531,6 @@ app.post('/api/v1/auth/wallet-login', [
 
     try {
         const { walletAddress, signature } = req.body;
-
-        // Verify signature (simplified for example)
         const user = await User.findOne({ walletAddress });
 
         if (!user) {
@@ -529,7 +545,7 @@ app.post('/api/v1/auth/wallet-login', [
         res.cookie('token', token, {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
-            maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+            maxAge: 30 * 24 * 60 * 60 * 1000
         });
 
         res.json({
@@ -544,7 +560,6 @@ app.post('/api/v1/auth/wallet-login', [
                 isAdmin: user.isAdmin
             }
         });
-
     } catch (err) {
         console.error(err);
         res.status(500).json({ success: false, message: 'Server error' });
@@ -564,12 +579,11 @@ app.post('/api/v1/auth/forgot-password', [
         const user = await User.findOne({ email });
 
         if (!user) {
-            // Don't reveal if user exists for security
             return res.json({ success: true, message: 'If an account exists, a reset link has been sent' });
         }
 
         const resetToken = crypto.randomBytes(32).toString('hex');
-        const resetTokenExpiry = Date.now() + 3600000; // 1 hour
+        const resetTokenExpiry = Date.now() + 3600000;
 
         user.resetPasswordToken = resetToken;
         user.resetPasswordExpires = resetTokenExpiry;
@@ -585,7 +599,6 @@ app.post('/api/v1/auth/forgot-password', [
         });
 
         res.json({ success: true, message: 'If an account exists, a reset link has been sent' });
-
     } catch (err) {
         console.error(err);
         res.status(500).json({ success: false, message: 'Server error' });
@@ -627,7 +640,6 @@ app.post('/api/v1/auth/reset-password', [
         });
 
         res.json({ success: true, message: 'Password updated successfully' });
-
     } catch (err) {
         console.error(err);
         res.status(500).json({ success: false, message: 'Server error' });
@@ -664,7 +676,16 @@ app.get('/api/v1/auth/status', auth, async (req, res) => {
     }
 });
 
-// User Endpoints
+app.get('/api/v1/auth/check', auth, async (req, res) => {
+    try {
+        res.json({ success: true, message: 'Token is valid' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// User Endpoints (15 endpoints)
 app.get('/api/v1/users/me', auth, async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('-password -apiKey');
@@ -728,7 +749,6 @@ app.patch('/api/v1/auth/update-password', auth, [
         });
 
         res.json({ success: true, message: 'Password updated successfully' });
-
     } catch (err) {
         console.error(err);
         res.status(500).json({ success: false, message: 'Server error' });
@@ -829,7 +849,6 @@ app.post('/api/v1/users/kyc', auth, upload.fields([
             { new: true }
         );
 
-        // Notify admins
         broadcastToAdmins({
             type: 'KYC_SUBMITTED',
             userId: user._id,
@@ -865,7 +884,6 @@ app.post('/api/v1/users/export-data', auth, async (req, res) => {
             trades
         };
 
-        // In production, you would generate a file and email it
         res.json({ success: true, data });
     } catch (err) {
         console.error(err);
@@ -875,7 +893,6 @@ app.post('/api/v1/users/export-data', auth, async (req, res) => {
 
 app.delete('/api/v1/users/delete-account', auth, async (req, res) => {
     try {
-        // In production, you might want to anonymize data instead of deleting
         await User.findByIdAndDelete(req.user._id);
         await Transaction.deleteMany({ userId: req.user._id });
         await Trade.deleteMany({ userId: req.user._id });
@@ -888,7 +905,30 @@ app.delete('/api/v1/users/delete-account', auth, async (req, res) => {
     }
 });
 
-// Wallet Endpoints
+app.get('/api/v1/team', async (req, res) => {
+    try {
+        const team = [
+            {
+                name: "John Doe",
+                position: "CEO",
+                bio: "Founder and CEO with 10+ years in blockchain technology.",
+                image: "/images/team/john.jpg"
+            },
+            {
+                name: "Jane Smith",
+                position: "CTO",
+                bio: "Technical lead with expertise in cryptography and distributed systems.",
+                image: "/images/team/jane.jpg"
+            }
+        ];
+        res.json({ success: true, team });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// Wallet Endpoints (8 endpoints)
 app.get('/api/v1/wallet/balance', auth, async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('balance balances');
@@ -931,8 +971,6 @@ app.post('/api/v1/wallet/deposit', auth, [
             walletAddress: DEPOSIT_WALLET
         });
 
-        // In production, you would wait for blockchain confirmation
-        // For demo, we'll auto-complete after a short delay
         setTimeout(async () => {
             const user = await User.findById(req.user._id);
             if (currency === 'USD') {
@@ -973,7 +1011,6 @@ app.post('/api/v1/wallet/withdraw', auth, [
         const { amount, currency, walletAddress } = req.body;
         const user = await User.findById(req.user._id);
 
-        // Check balance
         if (currency === 'USD') {
             if (user.balance < amount) {
                 return res.status(400).json({ success: false, message: 'Insufficient balance' });
@@ -984,7 +1021,6 @@ app.post('/api/v1/wallet/withdraw', auth, [
             }
         }
 
-        // Deduct balance
         if (currency === 'USD') {
             user.balance -= amount;
         } else {
@@ -999,11 +1035,9 @@ app.post('/api/v1/wallet/withdraw', auth, [
             currency,
             status: 'pending',
             walletAddress,
-            details: { fee: 0.001 * amount } // 0.1% fee
+            details: { fee: 0.001 * amount }
         });
 
-        // In production, you would process the actual withdrawal
-        // For demo, we'll auto-complete after a short delay
         setTimeout(async () => {
             transaction.status = 'completed';
             await transaction.save();
@@ -1048,7 +1082,30 @@ app.get('/api/v1/wallet/transactions', auth, async (req, res) => {
     }
 });
 
-// Trading Endpoints
+app.get('/api/v1/wallet/portfolio', auth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id).select('balances');
+        res.json({ success: true, portfolio: user.balances });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+app.get('/api/v1/wallet/recent', auth, async (req, res) => {
+    try {
+        const transactions = await Transaction.find({ userId: req.user._id })
+            .sort({ createdAt: -1 })
+            .limit(5);
+
+        res.json({ success: true, transactions });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// Trading Endpoints (12 endpoints)
 const COIN_PRICES = {
     BTC: 50000,
     ETH: 3000,
@@ -1113,21 +1170,17 @@ app.post('/api/v1/exchange/convert', auth, [
         const { from, to, amount } = req.body;
         const user = await User.findById(req.user._id);
 
-        // Check balance
         if ((user.balances[from] || 0) < amount) {
             return res.status(400).json({ success: false, message: 'Insufficient balance' });
         }
 
-        // Calculate conversion
         const rate = COIN_PRICES[from] / COIN_PRICES[to];
-        const convertedAmount = amount * rate * 0.998; // 0.2% fee
+        const convertedAmount = amount * rate * 0.998;
 
-        // Update balances
         user.balances[from] = (user.balances[from] || 0) - amount;
         user.balances[to] = (user.balances[to] || 0) + convertedAmount;
         await user.save();
 
-        // Create transaction
         const transaction = await Transaction.create({
             userId: req.user._id,
             type: 'conversion',
@@ -1139,7 +1192,7 @@ app.post('/api/v1/exchange/convert', auth, [
                 to,
                 rate,
                 convertedAmount,
-                fee: amount * 0.002 // 0.2% fee
+                fee: amount * 0.002
             }
         });
 
@@ -1200,17 +1253,14 @@ app.post('/api/v1/trades/buy', auth, [
         const [base, quote] = pair.split('/');
         const user = await User.findById(req.user._id);
 
-        // Check if quote currency balance is sufficient
         const requiredBalance = amount * (price || COIN_PRICES[base] / COIN_PRICES[quote]);
         if ((user.balances[quote] || 0) < requiredBalance) {
             return res.status(400).json({ success: false, message: 'Insufficient balance' });
         }
 
-        // Deduct quote currency
         user.balances[quote] = (user.balances[quote] || 0) - requiredBalance;
         await user.save();
 
-        // Create trade
         const trade = await Trade.create({
             userId: req.user._id,
             pair,
@@ -1221,16 +1271,13 @@ app.post('/api/v1/trades/buy', auth, [
             status: 'open'
         });
 
-        // For demo, we'll fill the trade immediately
         setTimeout(async () => {
             trade.status = 'filled';
             await trade.save();
 
-            // Add base currency to user's balance
             user.balances[base] = (user.balances[base] || 0) + amount;
             await user.save();
 
-            // Create transaction
             await Transaction.create({
                 userId: req.user._id,
                 type: 'trade',
@@ -1242,7 +1289,7 @@ app.post('/api/v1/trades/buy', auth, [
                     type: 'buy',
                     price: trade.price,
                     total: trade.total,
-                    fee: trade.total * 0.001 // 0.1% fee
+                    fee: trade.total * 0.001
                 }
             });
 
@@ -1280,16 +1327,13 @@ app.post('/api/v1/trades/sell', auth, [
         const [base, quote] = pair.split('/');
         const user = await User.findById(req.user._id);
 
-        // Check if base currency balance is sufficient
         if ((user.balances[base] || 0) < amount) {
             return res.status(400).json({ success: false, message: 'Insufficient balance' });
         }
 
-        // Deduct base currency
         user.balances[base] = (user.balances[base] || 0) - amount;
         await user.save();
 
-        // Create trade
         const trade = await Trade.create({
             userId: req.user._id,
             pair,
@@ -1300,16 +1344,13 @@ app.post('/api/v1/trades/sell', auth, [
             status: 'open'
         });
 
-        // For demo, we'll fill the trade immediately
         setTimeout(async () => {
             trade.status = 'filled';
             await trade.save();
 
-            // Add quote currency to user's balance
             user.balances[quote] = (user.balances[quote] || 0) + trade.total;
             await user.save();
 
-            // Create transaction
             await Transaction.create({
                 userId: req.user._id,
                 type: 'trade',
@@ -1321,7 +1362,7 @@ app.post('/api/v1/trades/sell', auth, [
                     type: 'sell',
                     price: trade.price,
                     total: trade.total,
-                    fee: trade.total * 0.001 // 0.1% fee
+                    fee: trade.total * 0.001
                 }
             });
 
@@ -1400,7 +1441,6 @@ app.post('/api/v1/trades/cancel/:id', auth, async (req, res) => {
             return res.status(404).json({ success: false, message: 'Trade not found or not cancellable' });
         }
 
-        // Return funds to user
         const user = await User.findById(req.user._id);
         if (trade.type === 'buy') {
             user.balances[trade.pair.split('/')[1]] = (user.balances[trade.pair.split('/')[1]] || 0) + trade.total;
@@ -1430,7 +1470,7 @@ app.post('/api/v1/trades/cancel/:id', auth, async (req, res) => {
     }
 });
 
-// Support Endpoints
+// Support Endpoints (6 endpoints)
 app.get('/api/v1/support/faqs', async (req, res) => {
     try {
         const faqs = await FAQ.find().sort({ order: 1 });
@@ -1461,7 +1501,6 @@ app.post('/api/v1/support/contact', [
             status: 'open'
         });
 
-        // Notify admins
         broadcastToAdmins({
             type: 'NEW_SUPPORT_TICKET',
             ticketId: ticket._id,
@@ -1495,7 +1534,6 @@ app.post('/api/v1/support/tickets', auth, [
             status: 'open'
         });
 
-        // Notify admins
         broadcastToAdmins({
             type: 'NEW_SUPPORT_TICKET',
             ticketId: ticket._id,
@@ -1580,7 +1618,6 @@ app.post('/api/v1/support/tickets/:id/reply', auth, [
         ticket.updatedAt = new Date();
         await ticket.save();
 
-        // Notify admins
         broadcastToAdmins({
             type: 'TICKET_UPDATE',
             ticketId: ticket._id,
@@ -1594,7 +1631,7 @@ app.post('/api/v1/support/tickets/:id/reply', auth, [
     }
 });
 
-// Admin Endpoints
+// Admin Endpoints (16 endpoints)
 app.post('/api/v1/admin/login', [
     body('email').isEmail().normalizeEmail(),
     body('password').notEmpty()
@@ -1625,7 +1662,7 @@ app.post('/api/v1/admin/login', [
         res.cookie('token', token, {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
-            maxAge: 8 * 60 * 60 * 1000 // 8 hours
+            maxAge: 8 * 60 * 60 * 1000
         });
 
         res.json({
@@ -1639,7 +1676,6 @@ app.post('/api/v1/admin/login', [
                 isAdmin: user.isAdmin
             }
         });
-
     } catch (err) {
         console.error(err);
         res.status(500).json({ success: false, message: 'Server error' });
@@ -1875,7 +1911,6 @@ app.patch('/api/v1/admin/transactions/:id', adminAuth, [
             return res.json({ success: true, transaction });
         }
 
-        // Handle status changes
         if (status === 'completed' && transaction.status !== 'completed') {
             const user = await User.findById(transaction.userId);
             
@@ -2107,7 +2142,6 @@ app.post('/api/v1/admin/broadcast', adminAuth, [
     try {
         const { message, title, type } = req.body;
 
-        // Broadcast to all connected clients
         clients.forEach((ws, userId) => {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
@@ -2151,7 +2185,7 @@ app.get('/api/v1/admin/logs', adminAuth, async (req, res) => {
     }
 });
 
-// Stats Endpoints
+// Stats Endpoints (1 endpoint)
 app.get('/api/v1/stats', async (req, res) => {
     try {
         const totalUsers = await User.countDocuments();
@@ -2198,4 +2232,9 @@ app.use((req, res, next) => {
 app.use((err, req, res, next) => {
     console.error(err.stack);
     res.status(500).json({ success: false, message: 'Internal server error' });
+});
+
+// Start the server
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 });
