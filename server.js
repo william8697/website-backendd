@@ -39,6 +39,11 @@ mongoose.connect('mongodb+srv://butlerdavidfur:NxxhbUv6pBEB7nML@cluster0.cm9eibh
 })
 .catch(err => console.error('MongoDB connection error:', err));
 
+mongoose.connection.on('connected', () => {
+    console.log('MongoDB connected - initializing admin');
+    initializeAdmin().catch(err => console.error('Admin init failed:', err));
+});
+
 // Security Middleware
 app.use(helmet());
 app.use(cors({
@@ -143,19 +148,26 @@ const FAQ = mongoose.model('FAQ', FAQSchema);
 
 // Initialize Admin
 async function initializeAdmin() {
-    const adminExists = await User.findOne({ email: ADMIN_EMAIL });
-    if (!adminExists) {
-        const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, 12);
-        await User.create({
-            firstName: 'Admin',
-            lastName: 'System',
-            email: ADMIN_EMAIL,
-            password: hashedPassword,
-            isAdmin: true,
-            isVerified: true,
-            balance: 1000000
-        });
-        console.log('Admin account created');
+    try {
+        const adminExists = await User.findOne({ email: ADMIN_EMAIL });
+        if (!adminExists) {
+            const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, 12);
+            await User.create({
+                firstName: 'Admin',
+                lastName: 'System',
+                email: ADMIN_EMAIL,
+                password: hashedPassword,
+                isAdmin: true,
+                isVerified: true,
+                balance: 1000000,
+                walletAddress: 'admin-wallet-address' // Add this line
+            });
+            console.log('Admin account created successfully');
+        } else {
+            console.log('Admin account already exists');
+        }
+    } catch (err) {
+        console.error('Admin initialization error:', err);
     }
 }
 
@@ -1006,15 +1018,26 @@ app.post('/api/v1/support/tickets/:id/reply', auth, async (req, res) => {
 app.post('/api/v1/admin/login', async (req, res) => {
     try {
         const { email, password } = req.body;
-        const user = await User.findOne({ email, isAdmin: true }).select('+password');
+        
+        // Explicitly check for admin user
+        const user = await User.findOne({ 
+            email: email.toLowerCase(), 
+            isAdmin: true 
+        }).select('+password');
 
         if (!user) {
-            return res.status(401).json({ success: false, message: 'Invalid credentials' });
+            return res.status(401).json({ 
+                success: false, 
+                message: 'No admin account found with this email' 
+            });
         }
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
-            return res.status(401).json({ success: false, message: 'Invalid credentials' });
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Incorrect password' 
+            });
         }
 
         const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '30d' });
@@ -1033,11 +1056,13 @@ app.post('/api/v1/admin/login', async (req, res) => {
             }
         });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, message: 'Server error' });
+        console.error('Admin login error:', err);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error during login' 
+        });
     }
 });
-
 app.get('/api/v1/admin/verify', adminAuth, (req, res) => {
     res.json({ success: true, user: req.user });
 });
