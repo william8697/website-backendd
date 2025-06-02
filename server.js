@@ -42,6 +42,25 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Track user activity middleware
+app.use((req, res, next) => {
+    if (req.user) {
+        SystemLog.create({
+            userId: req.user._id,
+            action: `${req.method} ${req.path}`,
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+            metadata: {
+                params: req.params,
+                query: req.query,
+                body: req.body // Be careful with sensitive data
+            }
+        }).catch(console.error);
+    }
+    next();
+});
+
+
 // Rate Limiting
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
@@ -411,6 +430,100 @@ async function authenticateAdmin(req, res, next) {
 }
 
 // API Routes
+
+// Active Users Now (WebSocket connections)
+app.get('/api/v1/admin/active-users', authenticateAdmin, async (req, res) => {
+    try {
+        // Get connected users from WebSocket
+        const activeUsers = Array.from(clients.keys()).map(userId => ({
+            userId,
+            lastActivity: new Date() // Track last heartbeat
+        }));
+        
+        res.json({ data: activeUsers });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to get active users' });
+    }
+});
+
+// Recent User Actions
+app.get('/api/v1/admin/recent-actions', authenticateAdmin, async (req, res) => {
+    try {
+        const actions = await SystemLog.find()
+            .sort({ createdAt: -1 })
+            .limit(50)
+            .populate('userId', 'email firstName lastName');
+        
+        res.json({ data: actions });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to get recent actions' });
+    }
+});
+
+// User Session Tracking
+app.get('/api/v1/admin/user-sessions/:userId', authenticateAdmin, async (req, res) => {
+    try {
+        const sessions = await SystemLog.find({ 
+            userId: req.params.userId,
+            action: /login|logout/
+        }).sort({ createdAt: -1 });
+        
+        res.json({ data: sessions });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to get user sessions' });
+    }
+});
+// Real-time Dashboard Stats
+app.get('/api/v1/admin/live-stats', authenticateAdmin, async (req, res) => {
+    try {
+        const stats = {
+            activeUsers: Array.from(clients.keys()).length,
+            recentTrades: await Trade.find()
+                .sort({ createdAt: -1 })
+                .limit(5)
+                .populate('userId', 'email'),
+            pendingActions: await SupportTicket.countDocuments({ status: 'open' }),
+            systemHealth: {
+                memoryUsage: process.memoryUsage(),
+                uptime: process.uptime()
+            }
+        };
+        
+        res.json({ data: stats });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to get live stats' });
+    }
+});
+
+// User Flow Tracking
+app.get('/api/v1/admin/user-flows', authenticateAdmin, async (req, res) => {
+    try {
+        const flows = await SystemLog.aggregate([
+            { $match: { action: /pageview|navigate/ } },
+            { $group: { 
+                _id: "$userId",
+                paths: { $push: "$metadata.path" },
+                lastActivity: { $max: "$createdAt" }
+            }},
+            { $lookup: {
+                from: "users",
+                localField: "_id",
+                foreignField: "_id",
+                as: "user"
+            }},
+            { $unwind: "$user" }
+        ]);
+        
+        res.json({ data: flows });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to get user flows' });
+    }
+});
 
 // Authentication Routes
 app.post('/api/v1/auth/signup', async (req, res) => {
