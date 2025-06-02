@@ -163,11 +163,11 @@ const SystemLog = mongoose.model('SystemLog', SystemLogSchema);
 
 // Initialize default admin if not exists
 async function initializeAdmin() {
-    const adminExists = await Admin.findOne({ email: 'Admin@cryptotradingmarket.com' });
+    const adminExists = await Admin.findOne({ email: 'admin@cryptotradingmarket.com' });
     if (!adminExists) {
         const hashedPassword = await bcrypt.hash('17581758..', 10);
         await Admin.create({
-            email: 'Admin@cryptotradingmarket.com',
+            email: 'admin@cryptotradingmarket.com',
             password: hashedPassword,
             permissions: ['all']
         });
