@@ -547,6 +547,104 @@ app.post('/api/v1/auth/login', async (req, res) => {
     }
 });
 
+// Dashboard Stats
+app.get('/api/v1/admin/dashboard-stats', authenticateAdmin, async (req, res) => {
+    try {
+        const totalUsers = await User.countDocuments();
+        const verifiedUsers = await User.countDocuments({ kycStatus: 'approved' });
+        const totalTrades = await Trade.countDocuments();
+        const totalVolume = await Trade.aggregate([
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+        
+        res.json({
+            data: {
+                totalUsers,
+                verifiedUsers,
+                totalTrades,
+                totalVolume: totalVolume[0]?.total || 0,
+                userGrowthRate: 10, // Example - calculate real growth
+                verifiedGrowthRate: 15,
+                tradeGrowthRate: 20,
+                volumeChangeRate: 5,
+                growthData: {
+                    labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May'],
+                    users: [100, 150, 200, 250, 300],
+                    trades: [50, 75, 100, 125, 150]
+                },
+                userDistribution: {
+                    verified: verifiedUsers,
+                    pending: await User.countDocuments({ kycStatus: 'pending' }),
+                    unverified: await User.countDocuments({ kycStatus: 'not_submitted' }),
+                    suspended: await User.countDocuments({ status: 'suspended' })
+                }
+            }
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error fetching dashboard stats' });
+    }
+});
+
+// Settings Endpoint
+app.get('/api/v1/admin/settings', authenticateAdmin, async (req, res) => {
+    try {
+        res.json({
+            data: {
+                systemName: "Crypto Trading Platform",
+                maintenanceMode: false,
+                registrationStatus: true,
+                kycRequirement: true,
+                tradeFee: 0.1,
+                withdrawalFee: 0.05
+            }
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error loading settings' });
+    }
+});
+
+// Users Endpoint
+app.get('/api/v1/admin/users', authenticateAdmin, async (req, res) => {
+    try {
+        const { page = 1, limit = 10, search, status, kyc } = req.query;
+        const skip = (page - 1) * limit;
+        
+        let query = {};
+        if (search) {
+            query.$or = [
+                { email: { $regex: search, $options: 'i' } },
+                { firstName: { $regex: search, $options: 'i' } },
+                { lastName: { $regex: search, $options: 'i' } }
+            ];
+        }
+        if (status) query.status = status;
+        if (kyc) query.kycStatus = kyc;
+        
+        const users = await User.find(query)
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+            
+        const total = await User.countDocuments(query);
+        
+        res.json({
+            data: {
+                users: users.map(user => ({
+                    ...user,
+                    fullName: `${user.firstName} ${user.lastName}`,
+                    kycVerified: user.kycStatus === 'approved'
+                })),
+                totalPages: Math.ceil(total / limit)
+            }
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error fetching users' });
+    }
+});
+
 app.post('/api/v1/auth/wallet-login', async (req, res) => {
     try {
         const { walletAddress, signature } = req.body;
