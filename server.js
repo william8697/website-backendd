@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
+app.set('trust proxy', 1); // Trust 1 proxy (Render.com)
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = '17581758Na.%';
 const DEPOSIT_ADDRESS = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
