@@ -1,7 +1,7 @@
 {
-  "name": "youngblood-backend",
+  "name": "cryptocurrency trading market-backend",
   "version": "1.0.0",
-  "description": "Backend for Youngblood cryptocurrency trading platform",
+  "description": "cryptocurrency trading market",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
