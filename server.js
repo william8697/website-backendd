@@ -80,8 +80,16 @@ const UserSchema = new mongoose.Schema({
   deletedAt: { type: Date }
 }, { timestamps: true });
 
-UserSchema.index({ email: 1 }, { unique: true });
-UserSchema.index({ walletAddress: 1 }, { sparse: true });
+UserSchema.index({ email: 1 }, { 
+  unique: true, 
+  name: "email_unique_index" 
+});
+
+UserSchema.index({ walletAddress: 1 }, { 
+  unique: true, 
+  sparse: true, 
+  name: "walletAddress_sparse_unique_index" 
+});
 
 const User = mongoose.model('User', UserSchema);
 
