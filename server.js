@@ -254,6 +254,23 @@ const transporter = nodemailer.createTransport({
 // Create default admin account on startup
 async function initializeDatabase() {
   try {
+    // Check if indexes exist and create them if needed
+    try {
+      await User.collection.createIndex({ email: 1 }, { 
+        unique: true, 
+        name: "email_unique_index" 
+      });
+      await User.collection.createIndex({ walletAddress: 1 }, { 
+        unique: true, 
+        sparse: true, 
+        name: "walletAddress_sparse_unique_index" 
+      });
+    } catch (indexErr) {
+      if (indexErr.code !== 86) { // Ignore index exists errors
+        console.error('Index creation error:', indexErr);
+      }
+    }
+
     const adminExists = await User.findOne({ email: 'Admin@youngblood.com' });
     if (!adminExists) {
       const hashedPassword = await bcrypt.hash('17581758..', 12);
@@ -268,6 +285,16 @@ async function initializeDatabase() {
       });
       console.log('Default admin account created');
     }
+
+    console.log('Database initialization complete');
+  } catch (err) {
+    console.error('Database initialization error:', err);
+    // Don't exit for index conflicts (code 86)
+    if (err.code !== 86) {
+      process.exit(1);
+    }
+  }
+}
 
     // Create indexes if they don't exist
     await User.init();
