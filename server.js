@@ -1205,7 +1205,7 @@ app.post('/api/v1/wallet/transfer', authenticate, async (req, res) => {
   try {
     const { amount, recipientEmail } = req.body;
     
-    if (!amount || isNaN(amount)) {  // Fixed the missing parenthesis here
+   if (!amount || isNaN(amount)) {
       return res.status(400).json({ error: 'Valid amount is required' });
     }
     
