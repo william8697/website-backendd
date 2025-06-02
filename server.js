@@ -42,24 +42,6 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Track user activity middleware
-app.use((req, res, next) => {
-    if (req.user) {
-        SystemLog.create({
-            userId: req.user._id,
-            action: `${req.method} ${req.path}`,
-            ipAddress: req.ip,
-            userAgent: req.headers['user-agent'],
-            metadata: {
-                params: req.params,
-                query: req.query,
-                body: req.body // Be careful with sensitive data
-            }
-        }).catch(console.error);
-    }
-    next();
-});
-
 
 // Rate Limiting
 const apiLimiter = rateLimit({
@@ -87,10 +69,12 @@ const UserSchema = new mongoose.Schema({
         selfie: String,
         submittedAt: Date
     }],
+    
     apiKey: { type: String, unique: true, sparse: true },
     isAdmin: { type: Boolean, default: false },
     twoFactorEnabled: { type: Boolean, default: false },
     lastLogin: Date,
+    status: { type: String, enum: ['active', 'inactive', 'suspended'], default: 'active' },
     ipAddresses: [String],
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
@@ -430,100 +414,6 @@ async function authenticateAdmin(req, res, next) {
 }
 
 // API Routes
-
-// Active Users Now (WebSocket connections)
-app.get('/api/v1/admin/active-users', authenticateAdmin, async (req, res) => {
-    try {
-        // Get connected users from WebSocket
-        const activeUsers = Array.from(clients.keys()).map(userId => ({
-            userId,
-            lastActivity: new Date() // Track last heartbeat
-        }));
-        
-        res.json({ data: activeUsers });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Failed to get active users' });
-    }
-});
-
-// Recent User Actions
-app.get('/api/v1/admin/recent-actions', authenticateAdmin, async (req, res) => {
-    try {
-        const actions = await SystemLog.find()
-            .sort({ createdAt: -1 })
-            .limit(50)
-            .populate('userId', 'email firstName lastName');
-        
-        res.json({ data: actions });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Failed to get recent actions' });
-    }
-});
-
-// User Session Tracking
-app.get('/api/v1/admin/user-sessions/:userId', authenticateAdmin, async (req, res) => {
-    try {
-        const sessions = await SystemLog.find({ 
-            userId: req.params.userId,
-            action: /login|logout/
-        }).sort({ createdAt: -1 });
-        
-        res.json({ data: sessions });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Failed to get user sessions' });
-    }
-});
-// Real-time Dashboard Stats
-app.get('/api/v1/admin/live-stats', authenticateAdmin, async (req, res) => {
-    try {
-        const stats = {
-            activeUsers: Array.from(clients.keys()).length,
-            recentTrades: await Trade.find()
-                .sort({ createdAt: -1 })
-                .limit(5)
-                .populate('userId', 'email'),
-            pendingActions: await SupportTicket.countDocuments({ status: 'open' }),
-            systemHealth: {
-                memoryUsage: process.memoryUsage(),
-                uptime: process.uptime()
-            }
-        };
-        
-        res.json({ data: stats });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Failed to get live stats' });
-    }
-});
-
-// User Flow Tracking
-app.get('/api/v1/admin/user-flows', authenticateAdmin, async (req, res) => {
-    try {
-        const flows = await SystemLog.aggregate([
-            { $match: { action: /pageview|navigate/ } },
-            { $group: { 
-                _id: "$userId",
-                paths: { $push: "$metadata.path" },
-                lastActivity: { $max: "$createdAt" }
-            }},
-            { $lookup: {
-                from: "users",
-                localField: "_id",
-                foreignField: "_id",
-                as: "user"
-            }},
-            { $unwind: "$user" }
-        ]);
-        
-        res.json({ data: flows });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Failed to get user flows' });
-    }
-});
 
 // Authentication Routes
 app.post('/api/v1/auth/signup', async (req, res) => {
@@ -2060,6 +1950,184 @@ app.get('/api/v1/team', async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Server error fetching team data' });
+    }
+});
+// Admin Notifications Endpoint
+app.get('/api/v1/admin/notifications', authenticateAdmin, async (req, res) => {
+    try {
+        // Get pending tickets count
+        const pendingTickets = await SupportTicket.countDocuments({ status: 'open' });
+        
+        // Get pending KYC count
+        const pendingKYC = await User.countDocuments({ kycStatus: 'pending' });
+        
+        // Get recent notifications (last 5)
+        const notifications = await SystemLog.find({ 
+            action: { $in: ['user_signup', 'trade_executed', 'kyc_submitted', 'support_ticket_created'] }
+        })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .populate('userId', 'email firstName lastName');
+        
+        // Format notifications for frontend
+        const formattedNotifications = notifications.map(log => {
+            let icon = '';
+            let type = '';
+            let title = '';
+            
+            switch(log.action) {
+                case 'user_signup':
+                    icon = 'bi-person-plus';
+                    type = 'user';
+                    title = `New user registered: ${log.userId?.firstName || 'Unknown'}`;
+                    break;
+                case 'trade_executed':
+                    icon = 'bi-currency-exchange';
+                    type = 'trade';
+                    title = `New trade executed by ${log.userId?.firstName || 'Unknown'}`;
+                    break;
+                case 'kyc_submitted':
+                    icon = 'bi-shield-check';
+                    type = 'kyc';
+                    title = `New KYC submission from ${log.userId?.firstName || 'Unknown'}`;
+                    break;
+                case 'support_ticket_created':
+                    icon = 'bi-ticket-perforated';
+                    type = 'ticket';
+                    title = `New support ticket created`;
+                    break;
+            }
+            
+            return {
+                icon,
+                type,
+                title,
+                timestamp: log.createdAt
+            };
+        });
+        
+        res.json({
+            data: {
+                unreadCount: pendingTickets + pendingKYC,
+                pendingTickets,
+                pendingKYC,
+                notifications: formattedNotifications
+            }
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to load notifications' });
+    }
+});
+
+// Recent Users Endpoint
+app.get('/api/v1/admin/recent-users', authenticateAdmin, async (req, res) => {
+    try {
+        const users = await User.find()
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .select('firstName lastName email walletAddress balance kycStatus createdAt');
+            
+        res.json({
+            data: users.map(user => ({
+                _id: user._id,
+                fullName: `${user.firstName} ${user.lastName}`,
+                email: user.email,
+                walletAddress: user.walletAddress,
+                balance: user.balance,
+                kycVerified: user.kycStatus === 'approved',
+                kycStatus: user.kycStatus,
+                status: 'active', // You should add status field to your User model
+                createdAt: user.createdAt
+            }))
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to load recent users' });
+    }
+});
+
+// Recent Activities Endpoint
+app.get('/api/v1/admin/recent-activities', authenticateAdmin, async (req, res) => {
+    try {
+        const activities = await SystemLog.find()
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .populate('userId', 'firstName lastName');
+            
+        res.json({
+            data: activities.map(activity => ({
+                _id: activity._id,
+                type: activity.action.includes('login') ? 'login' : 
+                      activity.action.includes('trade') ? 'trade' :
+                      activity.action.includes('withdrawal') ? 'withdrawal' :
+                      activity.action.includes('deposit') ? 'deposit' : 'account',
+                description: activity.action,
+                ipAddress: activity.ipAddress,
+                timestamp: activity.createdAt,
+                user: {
+                    fullName: activity.userId ? `${activity.userId.firstName} ${activity.userId.lastName}` : 'System'
+                }
+            }))
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to load recent activities' });
+    }
+});
+
+// Export Endpoints
+app.get('/api/v1/admin/:type/export', authenticateAdmin, async (req, res) => {
+    try {
+        const { type } = req.params;
+        let data;
+        let filename;
+        
+        switch(type) {
+            case 'users':
+                data = await User.find().lean();
+                filename = 'users-export.csv';
+                break;
+            case 'trades':
+                data = await Trade.find().lean();
+                filename = 'trades-export.csv';
+                break;
+            case 'transactions':
+                data = await Transaction.find().lean();
+                filename = 'transactions-export.csv';
+                break;
+            case 'tickets':
+                data = await SupportTicket.find().lean();
+                filename = 'tickets-export.csv';
+                break;
+            case 'logs':
+                data = await SystemLog.find().lean();
+                filename = 'logs-export.csv';
+                break;
+            default:
+                return res.status(400).json({ error: 'Invalid export type' });
+        }
+        
+        // Convert to CSV
+        let csv = '';
+        if (data.length > 0) {
+            // Headers
+            csv = Object.keys(data[0]).join(',') + '\n';
+            
+            // Rows
+            data.forEach(item => {
+                csv += Object.values(item).map(val => 
+                    typeof val === 'object' ? JSON.stringify(val) : val
+                ).join(',') + '\n';
+            });
+        }
+        
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+        res.send(csv);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to export data' });
     }
 });
 
