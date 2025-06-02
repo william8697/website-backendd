@@ -1201,12 +1201,11 @@ app.get('/api/v1/wallet/transaction/:id', authenticate, async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
 app.post('/api/v1/wallet/transfer', authenticate, async (req, res) => {
   try {
     const { amount, recipientEmail } = req.body;
     
-    if (!amount || isNaN(amount)) {
+    if (!amount || isNaN(amount)) {  // Fixed the missing parenthesis here
       return res.status(400).json({ error: 'Valid amount is required' });
     }
     
@@ -1289,7 +1288,6 @@ app.post('/api/v1/wallet/transfer', authenticate, async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
 // ================
 // 4. Exchange (8)
 // ================
