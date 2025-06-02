@@ -705,7 +705,11 @@ app.post('/api/v1/admin/login', async (req, res) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        const token = jwt.sign({ userId: admin._id, email: admin.email, isAdmin: true }, JWT_SECRET, { expiresIn: '7d' });
+        const token = jwt.sign({ userId: admin._id, email: admin.email, isAdmin: true,admin: { // Add this structure
+                id: admin._id,
+                email: admin.email,
+                permissions: admin.permissions
+            } }, JWT_SECRET, { expiresIn: '7d' });
 
         await Admin.updateOne({ _id: admin._id }, { $set: { lastLogin: new Date() } });
         await logAction(admin._id, 'admin_login', { ipAddress: req.ip });
