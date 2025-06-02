@@ -1071,7 +1071,7 @@ app.post('/api/v1/wallet/deposit', authenticate, async (req, res) => {
   try {
     const { amount, txHash } = req.body;
     
-    if (!amount || isNaN(amount) {
+   if (!amount || isNaN(amount)) {  // Fixed this line
       return res.status(400).json({ error: 'Valid amount is required' });
     }
     
