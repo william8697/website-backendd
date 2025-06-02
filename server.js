@@ -733,7 +733,7 @@ app.get('/api/v1/admin/verify', authenticateAdmin, async (req, res) => {
     try {
         res.json({
             isAuthenticated: true,
-            admin: {
+            admin: { // Match this structure with frontend expectations
                 id: req.admin._id,
                 email: req.admin.email,
                 permissions: req.admin.permissions
