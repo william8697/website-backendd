@@ -21,7 +21,6 @@ const DEPOSIT_ADDRESS = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4z
 
 // MongoDB Connection
 mongoose.connect('mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
-    useNewUrlParser: true,
     useUnifiedTopology: true,
     retryWrites: true
 }).then(() => console.log('MongoDB connected'))
