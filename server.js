@@ -348,8 +348,17 @@ adminWss.on('connection', (ws, req) => {
     } catch (err) {
         ws.close(1008, 'Invalid token');
     }
-});
+    server.on('upgrade', (request, socket, head) => {
+    const pathname = url.parse(request.url).pathname;
 
+    if (pathname === '/ws') {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+            wss.emit('connection', ws, request);
+        });
+    } else {
+        socket.destroy();
+    }
+});
 // Helper Functions
 function generateApiKey() {
     return crypto.randomBytes(32).toString('hex');
@@ -512,6 +521,26 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Server error during wallet signup' });
+    }
+});
+app.post('/api/v1/auth/nonce', async (req, res) => {
+    try {
+        const { walletAddress } = req.body;
+        
+        if (!walletAddress) {
+            return res.status(400).json({ error: 'Wallet address is required' });
+        }
+
+        // Generate a random nonce
+        const nonce = crypto.randomBytes(16).toString('hex');
+        
+        // In a real application, you would store this nonce associated with the wallet address
+        // and verify it later during the login process
+        
+        res.json({ nonce });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error generating nonce' });
     }
 });
 
