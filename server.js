@@ -735,35 +735,37 @@ app.post('/api/v1/auth/forgot-password', async (req, res) => {
     }
 });
 
-app.post('/api/v1/auth/reset-password', async (req, res) => {
+app.patch('/api/v1/auth/update-password', authenticate, async (req, res) => {
     try {
-        const { token, newPassword } = req.body;
+        const { currentPassword, newPassword, newPasswordConfirm } = req.body;
 
-        if (!token || !newPassword) {
-            return res.status(400).json({ error: 'Token and new password are required' });
+        if (!currentPassword || !newPassword || !newPasswordConfirm) {
+            return res.status(400).json({ error: 'All fields are required' });
         }
 
-        const decoded = jwt.verify(token, JWT_SECRET);
-        const user = await User.findById(decoded.userId);
+        if (newPassword !== newPasswordConfirm) {
+            return res.status(400).json({ error: 'New passwords do not match' });
+        }
+
+        const user = await User.findById(req.user._id);
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
+        }
+
+        const isMatch = await bcrypt.compare(currentPassword, user.password);
+        if (!isMatch) {
+            return res.status(401).json({ error: 'Current password is incorrect' });
         }
 
         const hashedPassword = await bcrypt.hash(newPassword, 10);
         await User.updateOne({ _id: user._id }, { $set: { password: hashedPassword } });
 
-        await logAction(user._id, 'password_reset_completed', { ipAddress: req.ip });
+        await logAction(user._id, 'password_changed');
 
-        res.json({ message: 'Password reset successfully' });
+        res.json({ message: 'Password updated successfully' });
     } catch (err) {
-        if (err.name === 'TokenExpiredError') {
-            return res.status(400).json({ error: 'Reset token has expired' });
-        }
-        if (err.name === 'JsonWebTokenError') {
-            return res.status(400).json({ error: 'Invalid reset token' });
-        }
         console.error(err);
-        res.status(500).json({ error: 'Server error during password reset' });
+        res.status(500).json({ error: 'Server error updating password' });
     }
 });
 
@@ -856,22 +858,87 @@ app.get('/api/v1/admin/verify', authenticateAdmin, async (req, res) => {
 app.get('/api/v1/users/me', authenticate, async (req, res) => {
     try {
         res.json({
-            id: req.user._id,
-            email: req.user.email,
-            walletAddress: req.user.walletAddress,
-            firstName: req.user.firstName,
-            lastName: req.user.lastName,
-            country: req.user.country,
-            currency: req.user.currency,
-            balance: req.user.balance,
-            kycStatus: req.user.kycStatus,
-            apiKey: req.user.apiKey,
-            twoFactorEnabled: req.user.twoFactorEnabled,
-            createdAt: req.user.createdAt
+            data: {  // Wrap user object in data property
+                user: {
+                    id: req.user._id,
+                    email: req.user.email,
+                    walletAddress: req.user.walletAddress,
+                    firstName: req.user.firstName,
+                    lastName: req.user.lastName,
+                    country: req.user.country,
+                    currency: req.user.currency,
+                    balance: req.user.balance,
+                    kycStatus: req.user.kycStatus,
+                    apiKey: req.user.apiKey,
+                    twoFactorEnabled: req.user.twoFactorEnabled,
+                    createdAt: req.user.createdAt,
+                    isVerified: req.user.kycStatus === 'approved', // Add isVerified field
+                    lastLogin: req.user.lastLogin
+                }
+            }
         });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Server error fetching user data' });
+    }
+});
+
+app.post('/api/v1/users/kyc', authenticate, upload.fields([
+    { name: 'idFront', maxCount: 1 },
+    { name: 'idBack', maxCount: 1 },
+    { name: 'selfie', maxCount: 1 }
+]), async (req, res) => {
+    try {
+        const { fullName, dob, country, address, address2, city, postalCode, idType, idNumber } = req.body;
+        const files = req.files;
+
+        if (!fullName || !dob || !country || !address || !city || !postalCode || !idType || !idNumber || !files?.idFront || !files?.selfie) {
+            return res.status(400).json({ error: 'All required fields must be provided' });
+        }
+
+        const kycDocument = {
+            documentType: idType,
+            documentNumber: idNumber,
+            frontImage: files.idFront[0].path,
+            selfie: files.selfie[0].path,
+            submittedAt: new Date(),
+            personalDetails: {
+                fullName,
+                dob,
+                country,
+                address,
+                address2,
+                city,
+                postalCode
+            }
+        };
+
+        if (files.idBack) {
+            kycDocument.backImage = files.idBack[0].path;
+        }
+
+        await User.updateOne(
+            { _id: req.user._id },
+            { 
+                $set: { kycStatus: 'pending' },
+                $push: { kycDocuments: kycDocument }
+            }
+        );
+
+        await logAction(req.user._id, 'kyc_submitted');
+        notifyAdmins({
+            type: 'kyc_submitted',
+            userId: req.user._id,
+            message: `New KYC submission from ${req.user.email}`
+        });
+
+        res.json({ 
+            message: 'KYC documents submitted successfully',
+            kycStatus: 'pending'
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error submitting KYC documents' });
     }
 });
 
