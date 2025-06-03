@@ -7,6 +7,7 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const upload = multer({ dest: 'uploads/' });
 const WebSocket = require('ws');
 const nodemailer = require('nodemailer');
 const rateLimit = require('express-rate-limit');
