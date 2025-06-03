@@ -21,7 +21,11 @@ const DEPOSIT_ADDRESS = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4z
 
 // MongoDB Connection
 mongoose.connect('mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
-});
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+    retryWrites: true
+}).then(() => console.log('MongoDB connected'))
+.catch(err => console.error('MongoDB connection error:', err));
 
 // Email Transport Configuration
 const transporter = nodemailer.createTransport({
@@ -36,7 +40,7 @@ const transporter = nodemailer.createTransport({
 // Security Middleware
 app.use(helmet());
 app.use(cors({
-    origin: 'https://website-xi-ten-52.vercel.app',
+    origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000'],
     credentials: true,
     exposedHeaders: ['Content-Disposition'] // Add this for file downloads
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
@@ -424,10 +428,21 @@ async function authenticateAdmin(req, res, next) {
 // Authentication Routes
 app.post('/api/v1/auth/signup', async (req, res) => {
     try {
-        const { email, password, firstName, lastName, country, currency } = req.body;
+        const { email, password, firstName, lastName, country, currency, confirmPassword } = req.body;
 
-        if (!email || !password || !firstName || !lastName || !country || !currency) {
+        // Enhanced validation
+        if (!email || !password || !firstName || !lastName || !country || !currency || !confirmPassword) {
             return res.status(400).json({ error: 'All fields are required' });
+        }
+
+        if (password !== confirmPassword) {
+            return res.status(400).json({ error: 'Passwords do not match' });
+        }
+
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({ error: 'Invalid email format' });
         }
 
         const existingUser = await User.findOne({ email });
@@ -463,8 +478,20 @@ app.post('/api/v1/auth/signup', async (req, res) => {
             }
         });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Server error during signup' });
+        console.error('Signup error:', err);
+        
+        // Handle duplicate key errors
+        if (err.code === 11000) {
+            return res.status(400).json({ error: 'Email already in use' });
+        }
+        
+        // Handle validation errors
+        if (err.name === 'ValidationError') {
+            const errors = Object.values(err.errors).map(el => el.message);
+            return res.status(400).json({ error: errors.join(', ') });
+        }
+        
+        res.status(500).json({ error: 'Server error during signup. Please try again.' });
     }
 });
 
@@ -2238,8 +2265,10 @@ app.use((err, req, res, next) => {
 });
 
 // 404 Handler
-app.use((req, res) => {
-    res.status(404).json({ error: 'Endpoint not found' });
+app.use((req, res, next) => {
+    console.log(`${req.method} ${req.url}`);
+    console.log('Body:', req.body);
+    next();
 });
 
 // Start Server
