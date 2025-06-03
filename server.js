@@ -69,14 +69,6 @@ const UserSchema = new mongoose.Schema({
         backImage: String,
         selfie: String,
         submittedAt: Date
-        notificationPreferences: {
-    email: { type: Boolean, default: true },
-    sms: { type: Boolean, default: false }
-},
-language: { type: String, default: 'en' },
-theme: { type: String, default: 'light' },
-lastLogin: Date,
-isVerified: { type: Boolean, default: false }
     }],
     
     apiKey: { type: String, unique: true, sparse: true },
