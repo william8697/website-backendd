@@ -38,6 +38,7 @@ app.use(helmet());
 app.use(cors({
     origin: 'https://website-xi-ten-52.vercel.app',
     credentials: true
+    exposedHeaders: ['Content-Disposition'] // Add this for file downloads
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -68,6 +69,14 @@ const UserSchema = new mongoose.Schema({
         backImage: String,
         selfie: String,
         submittedAt: Date
+        notificationPreferences: {
+    email: { type: Boolean, default: true },
+    sms: { type: Boolean, default: false }
+},
+language: { type: String, default: 'en' },
+theme: { type: String, default: 'light' },
+lastLogin: Date,
+isVerified: { type: Boolean, default: false }
     }],
     
     apiKey: { type: String, unique: true, sparse: true },
@@ -945,9 +954,13 @@ app.post('/api/v1/users/kyc', authenticate, upload.fields([
 app.get('/api/v1/users/settings', authenticate, async (req, res) => {
     try {
         res.json({
-            currency: req.user.currency,
-            twoFactorEnabled: req.user.twoFactorEnabled,
-            notificationPreferences: req.user.notificationPreferences || {}
+            preferredCurrency: req.user.currency,
+            language: 'en', // Default, can be added to user model
+            theme: 'light', // Default, can be added to user model
+            emailNotifications: true, // Default, can be added to user model
+            smsNotifications: false, // Default, can be added to user model
+            twoFactorAuth: req.user.twoFactorEnabled,
+            apiKey: req.user.apiKey
         });
     } catch (err) {
         console.error(err);
@@ -957,12 +970,12 @@ app.get('/api/v1/users/settings', authenticate, async (req, res) => {
 
 app.patch('/api/v1/users/settings', authenticate, async (req, res) => {
     try {
-        const { currency, twoFactorEnabled, notificationPreferences } = req.body;
+        const { preferredCurrency, language, theme, emailNotifications, smsNotifications, twoFactorAuth } = req.body;
 
         const update = {};
-        if (currency) update.currency = currency;
-        if (typeof twoFactorEnabled === 'boolean') update.twoFactorEnabled = twoFactorEnabled;
-        if (notificationPreferences) update.notificationPreferences = notificationPreferences;
+        if (preferredCurrency) update.currency = preferredCurrency;
+        if (typeof twoFactorAuth === 'boolean') update.twoFactorEnabled = twoFactorAuth;
+        // Add other fields to user model as needed
 
         await User.updateOne({ _id: req.user._id }, { $set: update });
         await logAction(req.user._id, 'user_settings_updated', { settings: update });
