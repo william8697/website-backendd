@@ -42,7 +42,7 @@ app.use(helmet());
 app.use(cors({
     origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000'],
     credentials: true,
-    exposedHeaders: ['Content-Disposition'] // Add this for file downloads
+    exposedHeaders: ['Content-Disposition'], // Add this for file downloads
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 }));
 app.use(express.json());
