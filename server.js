@@ -73,14 +73,13 @@ const UserSchema = new mongoose.Schema({
         selfie: String,
         submittedAt: Date
     }],
-    
     apiKey: { type: String, unique: true, sparse: true },
     isAdmin: { type: Boolean, default: false },
-    email: { type: Boolean, default: true },
-    sms: { type: Boolean, default: false },
+    emailNotifications: { type: Boolean, default: true },  // Fixed field name
+    smsNotifications: { type: Boolean, default: false },
     language: { type: String, default: 'en' },
-theme: { type: String, default: 'light' },
-isVerified: { type: Boolean, default: false },
+    theme: { type: String, default: 'light' },
+    isVerified: { type: Boolean, default: false },
     twoFactorEnabled: { type: Boolean, default: false },
     lastLogin: Date,
     status: { type: String, enum: ['active', 'inactive', 'suspended'], default: 'active' },
@@ -421,6 +420,12 @@ async function authenticateAdmin(req, res, next) {
     }
 }
 
+app.use((req, res, next) => {
+    console.log(`${req.method} ${req.url}`);
+    console.log('Body:', req.body);
+    next();
+});
+
 // API Routes
 
 // Authentication Routes
@@ -495,10 +500,10 @@ app.post('/api/v1/auth/signup', async (req, res) => {
 
 app.post('/api/v1/auth/wallet-signup', async (req, res) => {
     try {
-        const { walletAddress, signature, firstName, lastName, country, currency } = req.body;
+        const { walletAddress, signature, walletProvider, message } = req.body;
 
-        if (!walletAddress || !signature || !firstName || !lastName || !country || !currency) {
-            return res.status(400).json({ error: 'All fields are required' });
+        if (!walletAddress || !signature || !walletProvider) {
+            return res.status(400).json({ error: 'Wallet address, signature and wallet provider are required' });
         }
 
         const existingUser = await User.findOne({ walletAddress });
@@ -506,15 +511,13 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
             return res.status(400).json({ error: 'Wallet already in use' });
         }
 
-        // In a real app, you would verify the signature against the wallet address here
-        // For this example, we'll assume the verification is successful
-
+        // Create user with default values for required fields
         const user = await User.create({
             walletAddress,
-            firstName,
-            lastName,
-            country,
-            currency,
+            firstName: 'Wallet',  // Default first name
+            lastName: 'User',    // Default last name
+            country: 'Unknown',  // Default country
+            currency: 'USD',     // Default currency
             balance: 0
         });
 
@@ -2263,10 +2266,8 @@ app.use((err, req, res, next) => {
 });
 
 // 404 Handler
-app.use((req, res, next) => {
-    console.log(`${req.method} ${req.url}`);
-    console.log('Body:', req.body);
-    next();
+app.use((req, res) => {
+    res.status(404).json({ error: 'Endpoint not found' });
 });
 
 // Start Server
