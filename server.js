@@ -348,16 +348,6 @@ adminWss.on('connection', (ws, req) => {
     } catch (err) {
         ws.close(1008, 'Invalid token');
     }
-    server.on('upgrade', (request, socket, head) => {
-    const pathname = url.parse(request.url).pathname;
-
-    if (pathname === '/ws') {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-            wss.emit('connection', ws, request);
-        });
-    } else {
-        socket.destroy();
-    }
 });
 // Helper Functions
 function generateApiKey() {
