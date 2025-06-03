@@ -674,16 +674,19 @@ app.get('/api/v1/admin/users', authenticateAdmin, async (req, res) => {
     }
 });
 
+// Enhance the existing wallet-login endpoint
 app.post('/api/v1/auth/wallet-login', async (req, res) => {
     try {
-        const { walletAddress, signature } = req.body;
+        const { walletAddress, signature, walletType } = req.body;
 
-        if (!walletAddress || !signature) {
-            return res.status(400).json({ error: 'Wallet address and signature are required' });
+        if (!walletAddress || !signature || !walletType) {
+            return res.status(400).json({ error: 'Wallet address, signature and wallet type are required' });
         }
 
-        // In a real app, you would verify the signature against the wallet address here
-        // For this example, we'll assume the verification is successful
+        // In a real application, you would:
+        // 1. Retrieve the stored nonce for this wallet address
+        // 2. Verify the signature against the nonce and wallet address
+        // 3. Only proceed if verification is successful
 
         const user = await User.findOne({ walletAddress });
         if (!user) {
@@ -693,7 +696,7 @@ app.post('/api/v1/auth/wallet-login', async (req, res) => {
         const token = jwt.sign({ userId: user._id, walletAddress: user.walletAddress }, JWT_SECRET, { expiresIn: '7d' });
 
         await User.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } });
-        await logAction(user._id, 'user_login', { method: 'wallet', walletAddress, ipAddress: req.ip });
+        await logAction(user._id, 'user_login', { method: 'wallet', walletAddress, walletType, ipAddress: req.ip });
 
         res.json({
             message: 'Login successful',
@@ -712,7 +715,6 @@ app.post('/api/v1/auth/wallet-login', async (req, res) => {
         res.status(500).json({ error: 'Server error during wallet login' });
     }
 });
-
 app.post('/api/v1/auth/logout', authenticate, async (req, res) => {
     try {
         await logAction(req.user._id, 'user_logout', { ipAddress: req.ip });
