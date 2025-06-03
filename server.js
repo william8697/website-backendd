@@ -868,10 +868,7 @@ app.get('/api/v1/users/me', authenticate, async (req, res) => {
             apiKey: req.user.apiKey,
             twoFactorEnabled: req.user.twoFactorEnabled,
             createdAt: req.user.createdAt
-  } catch (err) {
-    res.status(500).json({ message: 'Server error' });
-  }    
-});
+        });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Server error fetching user data' });
