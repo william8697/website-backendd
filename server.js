@@ -69,7 +69,7 @@ const UserSchema = new mongoose.Schema({
         backImage: String,
         selfie: String,
         submittedAt: Date
-        notificationPreferences: {
+ {
     email: { type: Boolean, default: true },
     sms: { type: Boolean, default: false }
 },
