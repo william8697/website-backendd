@@ -37,7 +37,7 @@ const transporter = nodemailer.createTransport({
 app.use(helmet());
 app.use(cors({
     origin: 'https://website-xi-ten-52.vercel.app',
-    credentials: true
+    credentials: true,
     exposedHeaders: ['Content-Disposition'] // Add this for file downloads
 }));
 app.use(express.json());
