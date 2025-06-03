@@ -868,6 +868,29 @@ app.get('/api/v1/users/me', authenticate, async (req, res) => {
             apiKey: req.user.apiKey,
             twoFactorEnabled: req.user.twoFactorEnabled,
             createdAt: req.user.createdAt
+
+            // Get current user data
+router.get('/users/me', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('-password');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    res.json({ 
+      data: {
+        user: {
+          ...user._doc,
+          kycStatus: user.kycStatus || 'unverified',
+          kycDetails: user.kycDetails || null,
+          isVerified: user.isVerified || false,
+          lastLogin: user.lastLogin || new Date()
+        }
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
         });
     } catch (err) {
         console.error(err);
