@@ -39,6 +39,7 @@ app.use(cors({
     origin: 'https://website-xi-ten-52.vercel.app',
     credentials: true,
     exposedHeaders: ['Content-Disposition'] // Add this for file downloads
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
