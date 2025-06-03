@@ -69,18 +69,15 @@ const UserSchema = new mongoose.Schema({
         backImage: String,
         selfie: String,
         submittedAt: Date
- {
-    email: { type: Boolean, default: true },
-    sms: { type: Boolean, default: false }
-},
-language: { type: String, default: 'en' },
-theme: { type: String, default: 'light' },
-lastLogin: Date,
-isVerified: { type: Boolean, default: false }
     }],
     
     apiKey: { type: String, unique: true, sparse: true },
     isAdmin: { type: Boolean, default: false },
+    email: { type: Boolean, default: true },
+    sms: { type: Boolean, default: false },
+    language: { type: String, default: 'en' },
+theme: { type: String, default: 'light' },
+isVerified: { type: Boolean, default: false },
     twoFactorEnabled: { type: Boolean, default: false },
     lastLogin: Date,
     status: { type: String, enum: ['active', 'inactive', 'suspended'], default: 'active' },
