@@ -776,23 +776,24 @@ app.patch('/api/v1/auth/update-password', authenticate, async (req, res) => {
 });
 
 app.get('/api/v1/auth/status', authenticate, async (req, res) => {
-    try {
-        res.json({
-            isAuthenticated: true,
-            user: {
-                id: req.user._id,
-                email: req.user.email,
-                walletAddress: req.user.walletAddress,
-                firstName: req.user.firstName,
-                lastName: req.user.lastName,
-                balance: req.user.balance,
-                kycStatus: req.user.kycStatus
-            }
-        });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Server error checking auth status' });
-    }
+  try {
+    res.json({
+      isAuthenticated: true,
+      user: {
+        id: req.user._id,
+        email: req.user.email,
+        walletAddress: req.user.walletAddress,
+        firstName: req.user.firstName,
+        lastName: req.user.lastName,
+        username: req.user.email.split('@')[0], // Add username derived from email
+        balance: req.user.balance,
+        kycStatus: req.user.kycStatus
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error checking auth status' });
+  }
 });
 
 // Admin Authentication Routes
