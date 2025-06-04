@@ -472,7 +472,6 @@ app.get('/api/v1/auth/status', async (req, res) => {
     }
   });
 });
-}));
 
 // API Routes
 
