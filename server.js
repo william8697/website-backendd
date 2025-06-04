@@ -38,7 +38,6 @@ const transporter = nodemailer.createTransport({
 
 // Security Middleware
 app.use(helmet());
-// Update your CORS middleware to this:
 app.use(cors({
   origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
   credentials: true,
@@ -52,7 +51,8 @@ app.use((req, res, next) => {
   res.header('Access-Control-Allow-Credentials', 'true');
   next();
 });
-
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Add this with your other middleware
 app.use((req, res, next) => {
