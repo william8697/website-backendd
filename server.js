@@ -437,16 +437,6 @@ async function authenticateAdmin(req, res, next) {
         return res.status(401).json({ error: 'Invalid token' });
     }
 }
-
-app.use(express.json({
-    verify: (req, res, buf) => {
-        try {
-            JSON.parse(buf.toString());
-        } catch (e) {
-            throw new Error('Invalid JSON payload');
-        }
-    },
-    limit: '10kb'
 }));
 
 // API Routes
@@ -932,27 +922,6 @@ app.patch('/api/v1/auth/update-password', authenticate, async (req, res) => {
         console.error(err);
         res.status(500).json({ error: 'Server error updating password' });
     }
-});
-
-app.get('/api/v1/auth/status', async (req, res) => {
-  if (!req.user) return res.json({ isAuthenticated: false });
-  
-  const user = await User.findById(req.user.userId);
-  if (!user) return res.status(401).json({ isAuthenticated: false });
-  
-  res.json({
-    isAuthenticated: true,
-    user: {
-      id: user._id,
-      email: user.email,
-      walletAddress: user.walletAddress,
-      firstName: user.firstName,
-      lastName: user.lastName,
-     username: req.user.email.split('@')[0], // Add username derived from email
-balance: user.balance,
-      kycStatus: user.kycStatus
-    }
-  });
 });
 // Admin Authentication Routes
 app.post('/api/v1/admin/login', async (req, res) => {
