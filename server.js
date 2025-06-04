@@ -436,6 +436,7 @@ async function authenticateAdmin(req, res, next) {
     } catch (err) {
         return res.status(401).json({ error: 'Invalid token' });
     }
+    }
 
 // Move this authentication middleware BEFORE all routes
 app.use((req, res, next) => {
