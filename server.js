@@ -511,7 +511,7 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
         }
 
         // Verify the signature (pseudo-code - implement based on your wallet)
-        const isSignatureValid = verifySignature(walletAddress, signature, message);
+          const isSignatureValid = verifySignature(walletAddress, signature, message);
         if (!isSignatureValid && signature) {
             return res.status(401).json({ 
                 success: false,
@@ -575,11 +575,16 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
     }
 });
 
-// Add this helper function (implement proper verification for your needs)
+const { ethers } = require('ethers');
+
 function verifySignature(walletAddress, signature, message) {
-    // Implement actual verification logic here
-    // This is a placeholder - use a proper library like ethers.js or web3.js
-    return true; // Temporarily bypass for testing
+    try {
+        const recoveredAddress = ethers.utils.verifyMessage(message, signature);
+        return recoveredAddress.toLowerCase() === walletAddress.toLowerCase();
+    } catch (err) {
+        console.error('Signature verification failed:', err);
+        return false;
+    }
 }
 
 app.post('/api/v1/auth/nonce', async (req, res) => {
