@@ -1441,6 +1441,7 @@ app.get('/api/v1/exchange/rate', async (req, res) => {
 });
 
 app.post('/api/v1/exchange/convert', authenticate, async (req, res) => {
+    try {
   const { from, to, amount } = req.body; // Changed parameter names to match frontend
 
         if (!fromCurrency || !toCurrency || !amount) {
