@@ -1442,22 +1442,31 @@ app.get('/api/v1/exchange/rate', async (req, res) => {
 
 app.post('/api/v1/exchange/convert', authenticate, async (req, res) => {
     try {
-        const { from, to, amount } = req.body;
+        const { fromCurrency, toCurrency, amount } = req.body; // Changed parameter names to match frontend
 
-        if (!from || !to || !amount) {
-            return res.status(400).json({ error: 'From, to, and amount are required' });
+        if (!fromCurrency || !toCurrency || !amount) {
+            return res.status(400).json({ error: 'From currency, to currency, and amount are required' });
         }
 
         if (amount <= 0) {
             return res.status(400).json({ error: 'Amount must be positive' });
         }
 
-        // Get current rates
-        const fromCoin = await Coin.findOne({ symbol: from, isActive: true });
-        const toCoin = await Coin.findOne({ symbol: to, isActive: true });
+        // Get current rates - using case-insensitive search
+        const fromCoin = await Coin.findOne({ 
+            symbol: { $regex: new RegExp(`^${fromCurrency}$`, 'i') }, 
+            isActive: true 
+        });
+        const toCoin = await Coin.findOne({ 
+            symbol: { $regex: new RegExp(`^${toCurrency}$`, 'i') }, 
+            isActive: true 
+        });
 
         if (!fromCoin || !toCoin) {
-            return res.status(404).json({ error: 'One or both currencies not found' });
+            return res.status(404).json({ 
+                error: 'One or both currencies not found',
+                availableCurrencies: await Coin.distinct('symbol', { isActive: true })
+            });
         }
 
         // Calculate rate with spread
@@ -1468,70 +1477,114 @@ app.post('/api/v1/exchange/convert', authenticate, async (req, res) => {
         const amountAfterFee = amount - fee;
         const convertedAmount = amountAfterFee * rate;
 
-        // Check if user has enough balance
-        if (from === 'USD') {
-            if (req.user.balance < amount) {
-                return res.status(400).json({ error: 'Insufficient balance' });
-            }
-        } else {
-            // For crypto-to-crypto trades, we'd need to track individual coin balances
-            // For this example, we'll just use the USD balance
-            return res.status(400).json({ error: 'Only USD conversions are supported in this demo' });
+        // Check balance - now supports crypto-to-crypto
+        const user = await User.findById(req.user._id);
+        const fromBalance = fromCurrency === 'USD' ? 
+            user.balance : 
+            (user.balances?.[fromCurrency.toLowerCase()] || 0);
+
+        if (fromBalance < amount) {
+            return res.status(400).json({ 
+                error: `Insufficient ${fromCurrency} balance`,
+                currentBalance: fromBalance
+            });
         }
 
-        // Update balances
-        await User.updateOne(
-            { _id: req.user._id },
-            { $inc: { balance: -amount } }
-        );
+        // Update balances - atomic operation
+        const updateOps = {
+            $inc: { 
+                [`balances.${toCurrency.toLowerCase()}`]: convertedAmount,
+                ...(fromCurrency === 'USD' ? 
+                    { balance: -amount } : 
+                    { [`balances.${fromCurrency.toLowerCase()}`]: -amount }
+                )
+            }
+        };
 
-        // Create trade record
+        await User.updateOne({ _id: req.user._id }, updateOps);
+
+        // Create trade record with enhanced data
         const trade = await Trade.create({
             userId: req.user._id,
-            fromCoin: from,
-            toCoin: to,
+            fromCoin: fromCurrency,
+            toCoin: toCurrency,
             amount,
+            convertedAmount,
             rate,
             fee,
-            status: 'completed'
+            status: 'completed',
+            metadata: {
+                fromPrice: fromCoin.price,
+                toPrice: toCoin.price,
+                marketSpread: spread
+            }
         });
 
-        // Create transaction for the converted amount
-        await Transaction.create({
+        // Create transaction records for both sides
+        await Transaction.create([{
+            userId: req.user._id,
+            type: 'trade',
+            amount: -amount,
+            currency: fromCurrency,
+            status: 'completed',
+            txHash: `trade-out-${trade._id}`
+        }, {
             userId: req.user._id,
             type: 'trade',
             amount: convertedAmount,
-            currency: to,
+            currency: toCurrency,
             status: 'completed',
-            txHash: `trade-${trade._id}`
-        });
+            txHash: `trade-in-${trade._id}`
+        }]);
 
-        // Notify user via WebSocket
+        // Enhanced WebSocket notification
         notifyUser(req.user._id, {
             type: 'trade_completed',
             tradeId: trade._id,
-            from,
-            to,
+            from: fromCurrency,
+            to: toCurrency,
             amount,
             convertedAmount,
-            fee
+            fee,
+            rate,
+            newBalances: {
+                [fromCurrency]: fromCurrency === 'USD' ? 
+                    user.balance - amount : 
+                    (user.balances?.[fromCurrency.toLowerCase()] || 0) - amount,
+                [toCurrency]: (user.balances?.[toCurrency.toLowerCase()] || 0) + convertedAmount
+            }
         });
 
-        await logAction(req.user._id, 'trade_executed', { from, to, amount, convertedAmount, fee });
+        await logAction(req.user._id, 'trade_executed', { 
+            from: fromCurrency, 
+            to: toCurrency, 
+            amount, 
+            convertedAmount, 
+            fee,
+            rate 
+        });
 
         res.json({
+            success: true,
             message: 'Conversion completed successfully',
-            from,
-            to,
-            amount,
-            convertedAmount,
-            rate,
-            fee,
-            tradeId: trade._id
+            data: {
+                from: fromCurrency,
+                to: toCurrency,
+                amount,
+                convertedAmount: parseFloat(convertedAmount.toFixed(8)),
+                rate: parseFloat(rate.toFixed(8)),
+                fee: parseFloat(fee.toFixed(8)),
+                tradeId: trade._id,
+                timestamp: new Date()
+            }
         });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Server error during conversion' });
+        console.error('Conversion error:', err);
+        res.status(500).json({ 
+            success: false,
+            error: 'Server error during conversion',
+            details: process.env.NODE_ENV === 'development' ? err.message : undefined
+        });
     }
 });
 
