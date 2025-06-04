@@ -38,15 +38,20 @@ const transporter = nodemailer.createTransport({
 
 // Security Middleware
 app.use(helmet());
+// Update your CORS middleware to this:
 app.use(cors({
-    origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],    
-    exposedHeaders: ['Content-Disposition'], // Add this for file downloads
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+  origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],    
+  exposedHeaders: ['Content-Disposition'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+// Add this after CORS middleware
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Credentials', 'true');
+  next();
+});
 
 
 // Add this with your other middleware
