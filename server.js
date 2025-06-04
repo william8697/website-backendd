@@ -506,10 +506,13 @@ app.post('/api/v1/auth/signup', async (req, res) => {
 });
 app.post('/api/v1/auth/wallet-signup', async (req, res) => {
     try {
-        const { walletAddress, signature, walletType, message } = req.body;
+        console.log('Wallet signup request received:', req.body);
+        
+        const { walletAddress, signature, walletProvider, message } = req.body;
 
         // 1. Input Validation
         if (!walletAddress || !walletProvider) {
+            console.log('Missing required fields');
             return res.status(400).json({
                 success: false,
                 error: 'Wallet address and provider are required',
@@ -518,7 +521,11 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
         }
 
         // 2. Validate Ethereum address format
-        if (!ethers.utils.isAddress(walletAddress)) {
+        let normalizedAddress;
+        try {
+            normalizedAddress = ethers.utils.getAddress(walletAddress);
+        } catch (err) {
+            console.log('Invalid wallet address:', walletAddress);
             return res.status(400).json({
                 success: false,
                 error: 'Invalid wallet address format',
@@ -527,10 +534,11 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
         }
 
         // 3. Signature Verification
-        if (signature) {
+        if (signature && message) {
             try {
                 const recoveredAddress = ethers.utils.verifyMessage(message, signature);
-                if (recoveredAddress.toLowerCase() !== walletAddress.toLowerCase()) {
+                if (recoveredAddress.toLowerCase() !== normalizedAddress.toLowerCase()) {
+                    console.log('Signature verification failed');
                     return res.status(401).json({
                         success: false,
                         error: 'Signature verification failed',
@@ -538,6 +546,7 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
                     });
                 }
             } catch (sigError) {
+                console.log('Signature error:', sigError);
                 return res.status(401).json({
                     success: false,
                     error: 'Invalid signature format',
@@ -546,18 +555,13 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
             }
         }
 
-        // Normalize wallet address
-        const normalizedAddress = ethers.utils.getAddress(walletAddress);
-
         // Check for existing user
         const existingUser = await User.findOne({
-            $or: [
-                { walletAddress: { $regex: new RegExp(`^${normalizedAddress}$`, 'i') } },
-                { email: normalizedAddress } // Using address as email fallback
-            ]
+            walletAddress: normalizedAddress
         });
 
         if (existingUser) {
+            console.log('Wallet already exists:', normalizedAddress);
             return res.status(409).json({
                 success: false,
                 error: 'Wallet address already registered',
@@ -576,8 +580,10 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
             balance: 0,
             isVerified: true,
             status: 'active',
-            email: `${normalizedAddress}@walletuser.com` // Using wallet address as email
+            email: `${normalizedAddress}@walletuser.com`
         });
+
+        console.log('User created:', user._id);
 
         // Generate JWT token
         const token = jwt.sign(
@@ -617,7 +623,6 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
         return res.status(500).json({
             success: false,
             error: 'Internal server error',
-            systemError: process.env.NODE_ENV === 'development' ? err.message : undefined,
             code: 'WALLET_SIGNUP_ERROR'
         });
     }
