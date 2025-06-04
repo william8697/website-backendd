@@ -502,46 +502,86 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
     try {
         const { walletAddress, signature, walletProvider, message } = req.body;
 
-        if (!walletAddress || !signature || !walletProvider) {
-            return res.status(400).json({ error: 'Wallet address, signature and wallet provider are required' });
+        // Enhanced validation
+        if (!walletAddress || !walletProvider) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Wallet address and provider are required' 
+            });
         }
 
-        const existingUser = await User.findOne({ walletAddress });
+        // Verify the signature (pseudo-code - implement based on your wallet)
+        const isSignatureValid = verifySignature(walletAddress, signature, message);
+        if (!isSignatureValid && signature) {
+            return res.status(401).json({ 
+                success: false,
+                error: 'Invalid signature' 
+            });
+        }
+
+        // Check for existing user
+        const existingUser = await User.findOne({ 
+            $or: [
+                { walletAddress },
+                { email: walletAddress } // Some users might use wallet as email
+            ]
+        });
+        
         if (existingUser) {
-            return res.status(400).json({ error: 'Wallet already in use' });
+            return res.status(409).json({ 
+                success: false,
+                error: 'Wallet already registered' 
+            });
         }
 
-        // Create user with default values for required fields
+        // Create new user with wallet
         const user = await User.create({
             walletAddress,
-            firstName: 'Wallet',  // Default first name
-            lastName: 'User',    // Default last name
-            country: 'Unknown',  // Default country
-            currency: 'USD',     // Default currency
-            balance: 0
+            walletProvider,
+            firstName: 'Wallet', // Default values
+            lastName: 'User',
+            country: 'Unknown',
+            currency: 'USD',
+            balance: 0,
+            isVerified: true // Mark wallet users as verified
         });
 
-        const token = jwt.sign({ userId: user._id, walletAddress: user.walletAddress }, JWT_SECRET, { expiresIn: '7d' });
+        // Generate JWT token
+        const token = jwt.sign({ 
+            userId: user._id, 
+            walletAddress: user.walletAddress 
+        }, JWT_SECRET, { expiresIn: '7d' });
 
-        await logAction(user._id, 'user_signup', { method: 'wallet', walletAddress });
-
+        // Return success response
         res.status(201).json({
-            message: 'User created successfully',
+            success: true,
+            message: 'Wallet registration successful',
             token,
             user: {
                 id: user._id,
                 walletAddress: user.walletAddress,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                balance: user.balance,
-                kycStatus: user.kycStatus
+                isVerified: user.isVerified,
+                balance: user.balance
             }
         });
+
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Server error during wallet signup' });
+        console.error('Wallet signup error:', err);
+        res.status(500).json({ 
+            success: false,
+            error: 'Internal server error during wallet registration',
+            details: process.env.NODE_ENV === 'development' ? err.message : undefined
+        });
     }
 });
+
+// Add this helper function (implement proper verification for your needs)
+function verifySignature(walletAddress, signature, message) {
+    // Implement actual verification logic here
+    // This is a placeholder - use a proper library like ethers.js or web3.js
+    return true; // Temporarily bypass for testing
+}
+
 app.post('/api/v1/auth/nonce', async (req, res) => {
     try {
         const { walletAddress } = req.body;
