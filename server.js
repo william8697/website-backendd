@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const multer = require('multer');
+const { ethers } = require('ethers'); 
 const path = require('path');
 const fs = require('fs');
 const WebSocket = require('ws');
@@ -497,95 +498,121 @@ app.post('/api/v1/auth/signup', async (req, res) => {
         res.status(500).json({ error: 'Server error during signup. Please try again.' });
     }
 });
-
 app.post('/api/v1/auth/wallet-signup', async (req, res) => {
     try {
         const { walletAddress, signature, walletProvider, message } = req.body;
 
-        // Enhanced validation
+        // 1. Input Validation
         if (!walletAddress || !walletProvider) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 success: false,
-                error: 'Wallet address and provider are required' 
+                error: 'Wallet address and provider are required'
             });
         }
 
-        // Verify the signature (pseudo-code - implement based on your wallet)
-          const isSignatureValid = verifySignature(walletAddress, signature, message);
-        if (!isSignatureValid && signature) {
-            return res.status(401).json({ 
+        // 2. Validate Ethereum address format
+        if (!ethers.utils.isAddress(walletAddress)) {
+            return res.status(400).json({
                 success: false,
-                error: 'Invalid signature' 
+                error: 'Invalid wallet address format'
             });
         }
 
-        // Check for existing user
-        const existingUser = await User.findOne({ 
-            $or: [
-                { walletAddress },
-                { email: walletAddress } // Some users might use wallet as email
-            ]
-        });
-        
-        if (existingUser) {
-            return res.status(409).json({ 
-                success: false,
-                error: 'Wallet already registered' 
-            });
-        }
-
-        // Create new user with wallet
-        const user = await User.create({
-            walletAddress,
-            walletProvider,
-            firstName: 'Wallet', // Default values
-            lastName: 'User',
-            country: 'Unknown',
-            currency: 'USD',
-            balance: 0,
-            isVerified: true // Mark wallet users as verified
-        });
-
-        // Generate JWT token
-        const token = jwt.sign({ 
-            userId: user._id, 
-            walletAddress: user.walletAddress 
-        }, JWT_SECRET, { expiresIn: '7d' });
-
-        // Return success response
-        res.status(201).json({
-            success: true,
-            message: 'Wallet registration successful',
-            token,
-            user: {
-                id: user._id,
-                walletAddress: user.walletAddress,
-                isVerified: user.isVerified,
-                balance: user.balance
+        // 3. Signature Verification
+        if (signature) {
+            try {
+                const recoveredAddress = ethers.utils.verifyMessage(message, signature);
+                if (recoveredAddress.toLowerCase() !== walletAddress.toLowerCase()) {
+                    return res.status(401).json({
+                        success: false,
+                        error: 'Signature verification failed'
+                    });
+                }
+            } catch (sigError) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Invalid signature format'
+                });
             }
-        });
+        }
+
+        // 4. Check for existing user (transaction-safe)
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        
+        try {
+            const existingUser = await User.findOne({
+                $or: [
+                    { walletAddress: { $regex: new RegExp(`^${walletAddress}$`, 'i') } },
+                    { email: { $regex: new RegExp(`^${walletAddress}$`, 'i') } }
+                ]
+            }).session(session);
+
+            if (existingUser) {
+                await session.abortTransaction();
+                return res.status(409).json({
+                    success: false,
+                    error: 'Wallet address already registered'
+                });
+            }
+
+            // 5. Create new user
+            const user = await User.create([{
+                walletAddress: ethers.utils.getAddress(walletAddress), // Normalize address
+                walletProvider,
+                firstName: 'Wallet',
+                lastName: 'User',
+                country: 'Unknown',
+                currency: 'USD',
+                balance: 0,
+                isVerified: true,
+                status: 'active'
+            }], { session });
+
+            // 6. Generate JWT token
+            const token = jwt.sign(
+                {
+                    userId: user[0]._id,
+                    walletAddress: user[0].walletAddress,
+                    isVerified: user[0].isVerified
+                },
+                JWT_SECRET,
+                { expiresIn: '7d' }
+            );
+
+            await session.commitTransaction();
+
+            // 7. Return success response
+            return res.status(201).json({
+                success: true,
+                message: 'Wallet registration successful',
+                token,
+                user: {
+                    id: user[0]._id,
+                    walletAddress: user[0].walletAddress,
+                    isVerified: user[0].isVerified,
+                    balance: user[0].balance
+                }
+            });
+
+        } catch (dbError) {
+            await session.abortTransaction();
+            console.error('Database error:', dbError);
+            throw dbError;
+        } finally {
+            session.endSession();
+        }
 
     } catch (err) {
         console.error('Wallet signup error:', err);
-        res.status(500).json({ 
+        return res.status(500).json({
             success: false,
-            error: 'Internal server error during wallet registration',
-            details: process.env.NODE_ENV === 'development' ? err.message : undefined
+            error: 'Internal server error',
+            systemError: process.env.NODE_ENV === 'development' ? err.message : undefined,
+            code: 'WALLET_SIGNUP_ERROR'
         });
     }
 });
-
-const { ethers } = require('ethers');
-
-function verifySignature(walletAddress, signature, message) {
-    try {
-        const recoveredAddress = ethers.utils.verifyMessage(message, signature);
-        return recoveredAddress.toLowerCase() === walletAddress.toLowerCase();
-    } catch (err) {
-        console.error('Signature verification failed:', err);
-        return false;
-    }
-}
 
 app.post('/api/v1/auth/nonce', async (req, res) => {
     try {
