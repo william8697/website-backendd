@@ -422,11 +422,16 @@ async function authenticateAdmin(req, res, next) {
     }
 }
 
-app.use((req, res, next) => {
-    console.log(`${req.method} ${req.url}`);
-    console.log('Body:', req.body);
-    next();
-});
+app.use(express.json({
+    verify: (req, res, buf) => {
+        try {
+            JSON.parse(buf.toString());
+        } catch (e) {
+            throw new Error('Invalid JSON payload');
+        }
+    },
+    limit: '10kb'
+}));
 
 // API Routes
 
