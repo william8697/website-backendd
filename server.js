@@ -506,13 +506,14 @@ app.post('/api/v1/auth/signup', async (req, res) => {
 });
 app.post('/api/v1/auth/wallet-signup', async (req, res) => {
     try {
-        const { walletAddress, signature, walletProvider, message } = req.body;
+        const { walletAddress, signature, walletType, message } = req.body;
 
         // 1. Input Validation
         if (!walletAddress || !walletProvider) {
             return res.status(400).json({
                 success: false,
-                error: 'Wallet address and provider are required'
+                error: 'Wallet address and provider are required',
+                code: 'MISSING_FIELDS'
             });
         }
 
@@ -520,7 +521,8 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
         if (!ethers.utils.isAddress(walletAddress)) {
             return res.status(400).json({
                 success: false,
-                error: 'Invalid wallet address format'
+                error: 'Invalid wallet address format',
+                code: 'INVALID_ADDRESS'
             });
         }
 
@@ -531,86 +533,87 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
                 if (recoveredAddress.toLowerCase() !== walletAddress.toLowerCase()) {
                     return res.status(401).json({
                         success: false,
-                        error: 'Signature verification failed'
+                        error: 'Signature verification failed',
+                        code: 'SIGNATURE_MISMATCH'
                     });
                 }
             } catch (sigError) {
                 return res.status(401).json({
                     success: false,
-                    error: 'Invalid signature format'
+                    error: 'Invalid signature format',
+                    code: 'INVALID_SIGNATURE'
                 });
             }
         }
 
-        // 4. Check for existing user (transaction-safe)
-        const session = await mongoose.startSession();
-        session.startTransaction();
-        
-        try {
-            const existingUser = await User.findOne({
-                $or: [
-                    { walletAddress: { $regex: new RegExp(`^${walletAddress}$`, 'i') } },
-                    { email: { $regex: new RegExp(`^${walletAddress}$`, 'i') } }
-                ]
-            }).session(session);
+        // Normalize wallet address
+        const normalizedAddress = ethers.utils.getAddress(walletAddress);
 
-            if (existingUser) {
-                await session.abortTransaction();
-                return res.status(409).json({
-                    success: false,
-                    error: 'Wallet address already registered'
-                });
-            }
+        // Check for existing user
+        const existingUser = await User.findOne({
+            $or: [
+                { walletAddress: { $regex: new RegExp(`^${normalizedAddress}$`, 'i') } },
+                { email: normalizedAddress } // Using address as email fallback
+            ]
+        });
 
-            // 5. Create new user
-            const user = await User.create([{
-                walletAddress: ethers.utils.getAddress(walletAddress), // Normalize address
-                walletProvider,
-                firstName: 'Wallet',
-                lastName: 'User',
-                country: 'Unknown',
-                currency: 'USD',
-                balance: 0,
-                isVerified: true,
-                status: 'active'
-            }], { session });
-
-            // 6. Generate JWT token
-            const token = jwt.sign(
-                {
-                    userId: user[0]._id,
-                    walletAddress: user[0].walletAddress,
-                    isVerified: user[0].isVerified
-                },
-                JWT_SECRET,
-                { expiresIn: '7d' }
-            );
-
-            await session.commitTransaction();
-
-            // 7. Return success response
-            return res.status(201).json({
-                success: true,
-                message: 'Wallet registration successful',
-                token,
-                user: {
-                    id: user[0]._id,
-                    walletAddress: user[0].walletAddress,
-                    isVerified: user[0].isVerified,
-                    balance: user[0].balance
-                }
+        if (existingUser) {
+            return res.status(409).json({
+                success: false,
+                error: 'Wallet address already registered',
+                code: 'WALLET_EXISTS'
             });
-
-        } catch (dbError) {
-            await session.abortTransaction();
-            console.error('Database error:', dbError);
-            throw dbError;
-        } finally {
-            session.endSession();
         }
+
+        // Create new user
+        const user = await User.create({
+            walletAddress: normalizedAddress,
+            walletProvider,
+            firstName: 'Wallet',
+            lastName: 'User',
+            country: 'Unknown',
+            currency: 'USD',
+            balance: 0,
+            isVerified: true,
+            status: 'active',
+            email: `${normalizedAddress}@walletuser.com` // Using wallet address as email
+        });
+
+        // Generate JWT token
+        const token = jwt.sign(
+            {
+                userId: user._id,
+                walletAddress: user.walletAddress,
+                isVerified: user.isVerified
+            },
+            JWT_SECRET,
+            { expiresIn: '7d' }
+        );
+
+        return res.status(201).json({
+            success: true,
+            message: 'Wallet registration successful',
+            token,
+            user: {
+                id: user._id,
+                walletAddress: user.walletAddress,
+                isVerified: user.isVerified,
+                balance: user.balance
+            }
+        });
 
     } catch (err) {
         console.error('Wallet signup error:', err);
+        
+        // Handle duplicate key errors
+        if (err.code === 11000) {
+            return res.status(409).json({
+                success: false,
+                error: 'Wallet address already registered',
+                code: 'DUPLICATE_WALLET'
+            });
+        }
+        
         return res.status(500).json({
             success: false,
             error: 'Internal server error',
