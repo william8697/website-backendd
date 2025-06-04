@@ -835,18 +835,21 @@ app.post('/api/v1/auth/wallet-login', async (req, res) => {
         await User.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } });
         await logAction(user._id, 'user_login', { method: 'wallet', walletAddress, walletType, ipAddress: req.ip });
 
-        res.json({
-            message: 'Login successful',
-            token,
-            user: {
-                id: user._id,
-                walletAddress: user.walletAddress,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                balance: user.balance,
-                kycStatus: user.kycStatus
-            }
-        });
+       res.cookie('token', token, {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'strict',
+  maxAge: 7 * 24 * 60 * 60 * 1000
+}).json({
+  success: true,
+  message: 'Wallet login successful',
+  user: {
+    id: user._id,
+    walletAddress: user.walletAddress,
+    isVerified: user.isVerified,
+    balance: user.balance
+  }
+});
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Server error during wallet login' });
