@@ -49,6 +49,25 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 
+// Add this with your other middleware
+app.use((req, res, next) => {
+  // Check for token in cookies, authorization header, or query string
+  const token = req.cookies?.token || 
+                req.headers.authorization?.split(' ')[1] || 
+                req.query.token;
+  
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      req.user = decoded;
+    } catch (err) {
+      // Token is invalid - clear it
+      res.clearCookie('token');
+    }
+  }
+  next();
+});
+
 // Rate Limiting
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
