@@ -450,7 +450,6 @@ app.use((req, res, next) => {
   }
   next();
 });
-
 // Then declare your auth status route IMMEDIATELY after
 app.get('/api/v1/auth/status', async (req, res) => {
   if (!req.user) return res.json({ isAuthenticated: false });
