@@ -317,29 +317,26 @@ const clients = new Map();
 const adminClients = new Map();
 
 wss.on('connection', (ws, req) => {
-    const token = req.url.split('token=')[1];
-    if (!token) {
-        ws.close(1008, 'Unauthorized');
-        return;
-    }
+  const token = req.url.split('token=')[1] || 
+                req.headers.cookie?.split('token=')[1]?.split(';')[0];
+  
+  if (!token) {
+    ws.close(1008, 'Unauthorized');
+    return;
+  }
 
-    try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        clients.set(decoded.userId, ws);
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    clients.set(decoded.userId, ws);
 
-        ws.on('close', () => {
-            clients.delete(decoded.userId);
-        });
+    ws.on('close', () => {
+      clients.delete(decoded.userId);
+    });
 
-        ws.on('message', (message) => {
-            // Handle incoming messages from clients
-            console.log(`Received message from user ${decoded.userId}: ${message}`);
-        });
-
-        ws.send(JSON.stringify({ type: 'connection_success', message: 'WebSocket connection established' }));
-    } catch (err) {
-        ws.close(1008, 'Invalid token');
-    }
+    ws.send(JSON.stringify({ type: 'connection_success' }));
+  } catch (err) {
+    ws.close(1008, 'Invalid token');
+  }
 });
 
 adminWss.on('connection', (ws, req) => {
