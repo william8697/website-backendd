@@ -2426,6 +2426,61 @@ app.get('/api/v1/admin/:type/export', authenticateAdmin, async (req, res) => {
     }
 });
 
+// Add these routes before your error handlers
+
+// Get active trades
+app.get('/api/v1/trades/active', authenticate, async (req, res) => {
+  try {
+    const trades = await Trade.find({ 
+      userId: req.user._id,
+      status: { $in: ['pending', 'completed'] }
+    }).sort({ createdAt: -1 }).limit(5);
+    
+    res.json(trades);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error fetching active trades' });
+  }
+});
+
+// Get recent transactions
+app.get('/api/v1/transactions/recent', authenticate, async (req, res) => {
+  try {
+    const transactions = await Transaction.find({ 
+      userId: req.user._id 
+    }).sort({ createdAt: -1 }).limit(5);
+    
+    res.json(transactions);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error fetching recent transactions' });
+  }
+});
+
+// Get market data
+app.get('/api/v1/market/data', async (req, res) => {
+  try {
+    const coins = await Coin.find({ isActive: true })
+      .sort({ change24h: -1 })
+      .limit(10);
+    
+    const topGainers = coins.slice(0, 5);
+    const topLosers = coins.slice(-5).reverse();
+    
+    res.json({
+      topGainers,
+      topLosers,
+      marketCap: coins.reduce((sum, coin) => sum + coin.marketCap, 0),
+      volume: coins.reduce((sum, coin) => sum + coin.volume24h, 0),
+      btcDominance: coins.find(c => c.symbol === 'BTC')?.marketCap / 
+                   coins.reduce((sum, coin) => sum + coin.marketCap, 0) * 100 || 0
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error fetching market data' });
+  }
+});
+
 // Error Handling Middleware
 app.use((err, req, res, next) => {
     console.error(err.stack);
