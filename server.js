@@ -39,8 +39,9 @@ const transporter = nodemailer.createTransport({
 // Security Middleware
 app.use(helmet());
 app.use(cors({
-    origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000'],
+    origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
     credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],    
     exposedHeaders: ['Content-Disposition'], // Add this for file downloads
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 }));
