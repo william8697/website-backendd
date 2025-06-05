@@ -1442,7 +1442,7 @@ app.post('/api/v1/exchange/convert', authenticate, async (req, res) => {
     const { fromCurrency, toCurrency, amount, action } = req.body;
 
     // 1. Validate Inputs
-    if (!fromCurrency || !toCurrency || !amount || isNaN(amount) {
+    if (!fromCurrency || !toCurrency || !amount || isNaN(amount)) {
       return res.status(400).json({ 
         success: false,
         error: 'Missing or invalid: fromCurrency, toCurrency, or amount' 
