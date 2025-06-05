@@ -1437,7 +1437,6 @@ app.get('/api/v1/exchange/rate', async (req, res) => {
     }
 });
 
-// server.js
 app.post('/api/v1/exchange/convert', authenticate, async (req, res) => {
   try {
     const { fromCurrency, toCurrency, amount, action } = req.body;
