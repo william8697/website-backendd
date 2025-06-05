@@ -1381,32 +1381,29 @@ app.get('/api/v1/exchange/coins', async (req, res) => {
     }
 });
 
+// server.js ~line 1200 (or wherever your rates endpoint is)
 app.get('/api/v1/exchange/rates', async (req, res) => {
-    try {
-        const coins = await Coin.find({ isActive: true });
-        const rates = {};
-
-        // Generate rates between all coin pairs
-        for (const fromCoin of coins) {
-            rates[fromCoin.symbol] = {};
-            for (const toCoin of coins) {
-                if (fromCoin.symbol === toCoin.symbol) {
-                    rates[fromCoin.symbol][toCoin.symbol] = 1;
-                } else {
-                    // Simple arbitrage logic - adjust rates slightly to create opportunities
-                    const baseRate = toCoin.price / fromCoin.price;
-                    const spread = 0.001; // 0.1% spread
-                    rates[fromCoin.symbol][toCoin.symbol] = baseRate * (1 - spread);
-                    rates[toCoin.symbol][fromCoin.symbol] = 1 / (baseRate * (1 + spread));
-                }
-            }
-        }
-
-        res.json(rates);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Server error fetching rates' });
+  try {
+    const coins = await Coin.find({ isActive: true }).lean();
+    if (!coins.length) {
+      return res.status(200).json({ rates: {} }); // Return empty if no coins
     }
+
+    const rates = {};
+    coins.forEach(fromCoin => {
+      rates[fromCoin.symbol] = {};
+      coins.forEach(toCoin => {
+        rates[fromCoin.symbol][toCoin.symbol] = fromCoin.symbol === toCoin.symbol 
+          ? 1 
+          : (toCoin.price / fromCoin.price) * 0.999; // Add spread
+      });
+    });
+
+    res.json({ rates });
+  } catch (err) {
+    console.error(err);
+    res.status(200).json({ rates: {} }); // Fallback empty response
+  }
 });
 
 app.get('/api/v1/exchange/rate', async (req, res) => {
@@ -1441,13 +1438,13 @@ app.get('/api/v1/exchange/rate', async (req, res) => {
 });
 
 app.post('/api/v1/exchange/convert', authenticate, async (req, res) => {
-    try {
-  const { from, to, amount } = req.body; // Changed parameter names to match frontend
+  try {
+    const { fromCurrency, toCurrency, amount } = req.body;
 
-        if (!fromCurrency || !toCurrency || !amount) {
-            return res.status(400).json({ error: 'From currency, to currency, and amount are required' });
-        }
-
+    // Validate input
+    if (!fromCurrency || !toCurrency || !amount || isNaN(amount)) {
+      return res.status(400).json({ error: 'Invalid input data' });
+    }
         if (amount <= 0) {
             return res.status(400).json({ error: 'Amount must be positive' });
         }
@@ -1579,13 +1576,13 @@ app.post('/api/v1/exchange/convert', authenticate, async (req, res) => {
             }
         });
     } catch (err) {
-        console.error('Conversion error:', err);
-        res.status(500).json({ 
-            success: false,
-            error: 'Server error during conversion',
-            details: process.env.NODE_ENV === 'development' ? err.message : undefined
-        });
-    }
+    console.error(err);
+    res.status(400).json({ 
+      success: false,
+      error: 'Conversion failed',
+      details: err.message 
+    });
+  }
 });
 
 app.get('/api/v1/exchange/history', authenticate, async (req, res) => {
