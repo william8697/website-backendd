@@ -1437,150 +1437,80 @@ app.get('/api/v1/exchange/rate', async (req, res) => {
     }
 });
 
+// server.js
 app.post('/api/v1/exchange/convert', authenticate, async (req, res) => {
   try {
-    const { fromCurrency, toCurrency, amount } = req.body;
+    const { fromCurrency, toCurrency, amount, action } = req.body;
 
-    // Validate input
-    if (!fromCurrency || !toCurrency || !amount || isNaN(amount)) {
-      return res.status(400).json({ error: 'Invalid input data' });
+    // 1. Validate Inputs
+    if (!fromCurrency || !toCurrency || !amount || isNaN(amount) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Missing or invalid: fromCurrency, toCurrency, or amount' 
+      });
     }
-        if (amount <= 0) {
-            return res.status(400).json({ error: 'Amount must be positive' });
-        }
 
-        // Get current rates - using case-insensitive search
-        const fromCoin = await Coin.findOne({ 
-            symbol: { $regex: new RegExp(`^${fromCurrency}$`, 'i') }, 
-            isActive: true 
-        });
-        const toCoin = await Coin.findOne({ 
-            symbol: { $regex: new RegExp(`^${toCurrency}$`, 'i') }, 
-            isActive: true 
-        });
+    // 2. Get Coin Data (case-insensitive)
+    const fromCoin = await Coin.findOne({ 
+      symbol: { $regex: new RegExp(`^${fromCurrency}$`, 'i') } 
+    });
+    const toCoin = await Coin.findOne({ 
+      symbol: { $regex: new RegExp(`^${toCurrency}$`, 'i') } 
+    });
 
-        if (!fromCoin || !toCoin) {
-            return res.status(404).json({ 
-                error: 'One or both currencies not found',
-                availableCurrencies: await Coin.distinct('symbol', { isActive: true })
-            });
-        }
+    if (!fromCoin || !toCoin) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid currency pair',
+        availableCoins: await Coin.distinct('symbol')
+      });
+    }
 
-        // Calculate rate with spread
-        const baseRate = toCoin.price / fromCoin.price;
-        const spread = 0.001; // 0.1% spread
-        const rate = baseRate * (1 - spread);
-        const fee = amount * 0.001; // 0.1% fee
-        const amountAfterFee = amount - fee;
-        const convertedAmount = amountAfterFee * rate;
+    // 3. Calculate Conversion
+    const rate = toCoin.price / fromCoin.price;
+    const fee = amount * 0.001; // 0.1% fee
+    const convertedAmount = (amount - fee) * rate;
 
-        // Check balance - now supports crypto-to-crypto
-        const user = await User.findById(req.user._id);
-        const fromBalance = fromCurrency === 'USD' ? 
-            user.balance : 
-            (user.balances?.[fromCurrency.toLowerCase()] || 0);
+    // 4. Update User Balances (atomic operation)
+    await User.updateOne(
+      { _id: req.user._id },
+      { 
+        $inc: { 
+          [`balances.${fromCurrency.toLowerCase()}`]: -amount,
+          [`balances.${toCurrency.toLowerCase()}`]: convertedAmount
+        } 
+      }
+    );
 
-        if (fromBalance < amount) {
-            return res.status(400).json({ 
-                error: `Insufficient ${fromCurrency} balance`,
-                currentBalance: fromBalance
-            });
-        }
+    // 5. Save Transaction
+    const transaction = await Transaction.create({
+      userId: req.user._id,
+      type: 'trade',
+      amount: convertedAmount,
+      currency: toCurrency,
+      status: 'completed'
+    });
 
-        // Update balances - atomic operation
-        const updateOps = {
-            $inc: { 
-                [`balances.${toCurrency.toLowerCase()}`]: convertedAmount,
-                ...(fromCurrency === 'USD' ? 
-                    { balance: -amount } : 
-                    { [`balances.${fromCurrency.toLowerCase()}`]: -amount }
-                )
-            }
-        };
+    // 6. Response Format (MATCH FRONTEND EXPECTATIONS)
+    res.json({
+      success: true,
+      message: 'Conversion successful',
+      data: {
+        from: fromCurrency,
+        to: toCurrency,
+        amount: parseFloat(amount),
+        convertedAmount: parseFloat(convertedAmount.toFixed(8)),
+        rate: parseFloat(rate.toFixed(8)),
+        fee: parseFloat(fee.toFixed(8)),
+        transactionId: transaction._id
+      }
+    });
 
-        await User.updateOne({ _id: req.user._id }, updateOps);
-
-        // Create trade record with enhanced data
-        const trade = await Trade.create({
-            userId: req.user._id,
-            fromCoin: fromCurrency,
-            toCoin: toCurrency,
-            amount,
-            convertedAmount,
-            rate,
-            fee,
-            status: 'completed',
-            metadata: {
-                fromPrice: fromCoin.price,
-                toPrice: toCoin.price,
-                marketSpread: spread
-            }
-        });
-
-        // Create transaction records for both sides
-        await Transaction.create([{
-            userId: req.user._id,
-            type: 'trade',
-            amount: -amount,
-            currency: fromCurrency,
-            status: 'completed',
-            txHash: `trade-out-${trade._id}`
-        }, {
-            userId: req.user._id,
-            type: 'trade',
-            amount: convertedAmount,
-            currency: toCurrency,
-            status: 'completed',
-            txHash: `trade-in-${trade._id}`
-        }]);
-
-        // Enhanced WebSocket notification
-        notifyUser(req.user._id, {
-            type: 'trade_completed',
-            tradeId: trade._id,
-            from: fromCurrency,
-            to: toCurrency,
-            amount,
-            convertedAmount,
-            fee,
-            rate,
-            newBalances: {
-                [fromCurrency]: fromCurrency === 'USD' ? 
-                    user.balance - amount : 
-                    (user.balances?.[fromCurrency.toLowerCase()] || 0) - amount,
-                [toCurrency]: (user.balances?.[toCurrency.toLowerCase()] || 0) + convertedAmount
-            }
-        });
-
-        await logAction(req.user._id, 'trade_executed', { 
-            from: fromCurrency, 
-            to: toCurrency, 
-            amount, 
-            convertedAmount, 
-            fee,
-            rate 
-        });
-
-        res.json({
-            success: true,
-            message: 'Conversion completed successfully',
-            data: {
-                from: fromCurrency,
-                to: toCurrency,
-                amount,
-                convertedAmount: parseFloat(convertedAmount.toFixed(8)),
-                rate: parseFloat(rate.toFixed(8)),
-                fee: parseFloat(fee.toFixed(8)),
-                tradeId: trade._id,
-                timestamp: new Date()
-            }
-        });
-    } catch (err) {
-    console.error(err);
+  } catch (err) {
+    console.error('Conversion error:', err);
     res.status(400).json({ 
       success: false,
-      error: 'Conversion failed',
-      details: err.message 
+      error: err.message || 'Conversion failed' 
     });
   }
 });
