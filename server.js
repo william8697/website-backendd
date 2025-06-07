@@ -39,8 +39,6 @@ const transporter = nodemailer.createTransport({
 // Enhanced device detection middleware
 const deviceDetector = new (require('device-detector-js')).DeviceDetector();
 const geoip = require('geoip-lite');
-const { v4: uuidv4 } = require('uuid');
-
 const captureDeviceInfo = (req, res, next) => {
     const userAgent = req.headers['user-agent'] || '';
     const ip = req.ip || req.connection.remoteAddress;
