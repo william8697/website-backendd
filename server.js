@@ -36,6 +36,34 @@ const transporter = nodemailer.createTransport({
     }
 });
 
+const DeviceDetector = require('device-detector-js');
+const geoip = require('geoip-lite');
+
+const detectDevice = (req, res, next) => {
+    const detector = new DeviceDetector();
+    const userAgent = req.headers['user-agent'];
+    const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const geo = geoip.lookup(ip);
+
+    req.deviceInfo = {
+        userAgent,
+        ip,
+        device: detector.parse(userAgent),
+        location: geo ? {
+            country: geo.country,
+            region: geo.region,
+            city: geo.city,
+            timezone: geo.timezone,
+            coordinates: geo.ll ? {
+                lat: geo.ll[0],
+                lng: geo.ll[1]
+            } : null
+        } : null
+    };
+
+    next();
+};
+
 // Security Middleware
 app.use(helmet());
 app.use(cors({
@@ -185,6 +213,23 @@ const SystemLogSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     ipAddress: String,
     userAgent: String,
+    device: {
+        type: { type: String }, // mobile, desktop, tablet
+        os: String,
+        browser: String,
+        vendor: String
+    },
+    location: {
+        ip: String,
+        country: String,
+        region: String,
+        city: String,
+        timezone: String,
+        coordinates: {
+            lat: Number,
+            lng: Number
+        }
+    },
     metadata: mongoose.Schema.Types.Mixed,
     createdAt: { type: Date, default: Date.now }
 });
@@ -393,13 +438,22 @@ function notifyAdmins(message) {
 }
 
 async function logAction(userId, action, metadata = {}) {
-    await SystemLog.create({
+    const logData = {
         action,
         userId,
-        ipAddress: metadata.ipAddress || '',
-        userAgent: metadata.userAgent || '',
+        ipAddress: metadata.ipAddress || req.deviceInfo.ip,
+        userAgent: metadata.userAgent || req.deviceInfo.userAgent,
+        device: {
+            type: req.deviceInfo.device.device?.type || 'desktop',
+            os: req.deviceInfo.device.os?.name || 'Unknown',
+            browser: req.deviceInfo.device.client?.name || 'Unknown',
+            vendor: req.deviceInfo.device.device?.brand || 'Unknown'
+        },
+        location: req.deviceInfo.location,
         metadata
-    });
+    };
+
+    await SystemLog.create(logData);
 }
 
 // Authentication Middleware
