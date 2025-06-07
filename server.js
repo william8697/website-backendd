@@ -2051,6 +2051,7 @@ app.put('/api/v1/admin/kyc/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
+// Backend - Update the recent activities endpoint
 app.get('/api/v1/admin/logs', authenticateAdmin, async (req, res) => {
     try {
         const { action, userId, limit = 10, offset = 0 } = req.query;
@@ -2068,17 +2069,28 @@ app.get('/api/v1/admin/logs', authenticateAdmin, async (req, res) => {
         const total = await SystemLog.countDocuments(query);
 
         res.json({
-            logs,
-            total,
-            limit: parseInt(limit),
-            offset: parseInt(offset)
+            data: {  // Add this wrapper to match frontend expectation
+                logs: logs.map(log => ({
+                    _id: log._id,
+                    user: {
+                        fullName: log.userId ? `${log.userId.firstName} ${log.userId.lastName}` : 'System'
+                    },
+                    activity: log.action,
+                    type: log.action.includes('login') ? 'login' : 
+                          log.action.includes('trade') ? 'trade' :
+                          log.action.includes('withdrawal') ? 'withdrawal' :
+                          log.action.includes('deposit') ? 'deposit' : 'account',
+                    ipAddress: log.ipAddress,
+                    timestamp: log.createdAt
+                })),
+                totalPages: Math.ceil(total / parseInt(limit))
+            }
         });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Server error fetching logs' });
     }
 });
-
 app.post('/api/v1/admin/broadcast', authenticateAdmin, async (req, res) => {
     try {
         const { message } = req.body;
