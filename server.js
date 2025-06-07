@@ -36,33 +36,52 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-const DeviceDetector = require('device-detector-js');
+// Enhanced device detection middleware
+const deviceDetector = new (require('device-detector-js')).DeviceDetector();
 const geoip = require('geoip-lite');
+const { v4: uuidv4 } = require('uuid');
 
-const detectDevice = (req, res, next) => {
-    const detector = new DeviceDetector();
-    const userAgent = req.headers['user-agent'];
-    const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+const captureDeviceInfo = (req, res, next) => {
+    const userAgent = req.headers['user-agent'] || '';
+    const ip = req.ip || req.connection.remoteAddress;
     const geo = geoip.lookup(ip);
-
+    const device = deviceDetector.parse(userAgent);
+    
     req.deviceInfo = {
+        fingerprint: uuidv4(),
         userAgent,
         ip,
-        device: detector.parse(userAgent),
+        timestamp: new Date(),
+        device: {
+            type: device.device?.type || 'desktop',
+            brand: device.device?.brand || 'unknown',
+            model: device.device?.model || 'unknown',
+            os: {
+                name: device.os?.name || 'Unknown',
+                version: device.os?.version || '',
+                platform: device.os?.platform || ''
+            },
+            browser: {
+                name: device.client?.name || 'Unknown',
+                version: device.client?.version || '',
+                engine: device.client?.engine || ''
+            }
+        },
         location: geo ? {
             country: geo.country,
             region: geo.region,
             city: geo.city,
             timezone: geo.timezone,
             coordinates: geo.ll ? {
-                lat: geo.ll[0],
-                lng: geo.ll[1]
+                latitude: geo.ll[0],
+                longitude: geo.ll[1]
             } : null
         } : null
     };
-
     next();
 };
+
+app.use(captureDeviceInfo);
 
 // Security Middleware
 app.use(helmet());
