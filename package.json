@@ -11,7 +11,7 @@
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
-    "device-detector-js": "^2.2.10"
+    "device-detector-js": "^2.2.10",
     "crypto": "^1.0.1",
     "dotenv": "^16.0.3",
     "ethers": "^5.7.2",
