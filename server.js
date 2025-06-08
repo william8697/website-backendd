@@ -16,7 +16,7 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const cookieParser = require('cookie-parser');
 const deviceDetector = require('device-detector-js');
-const fetch = require('node-fetch');
+const axios = require('axios'); // Replaced node-fetch with axios
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -24,12 +24,9 @@ const JWT_SECRET = process.env.JWT_SECRET || '17581758Na.%';
 const DEPOSIT_ADDRESS = process.env.DEPOSIT_ADDRESS || 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
 const IPINFO_TOKEN = process.env.IPINFO_TOKEN || 'b56ce6e91d732d';
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    retryWrites: true
-}).then(() => console.log('MongoDB connected'))
+// MongoDB Connection - Updated to remove deprecated options
+mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0')
+.then(() => console.log('MongoDB connected'))
 .catch(err => console.error('MongoDB connection error:', err));
 
 // Email Transport Configuration
@@ -61,7 +58,7 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Device Detection Middleware
+// Device Detection Middleware - Updated to use axios instead of fetch
 const captureDeviceInfo = async (req, res, next) => {
     try {
         const userAgent = req.headers['user-agent'] || '';
@@ -72,9 +69,9 @@ const captureDeviceInfo = async (req, res, next) => {
         
         let geo = {};
         try {
-            const response = await fetch(`https://ipinfo.io/${ip}?token=${IPINFO_TOKEN}`);
-            if (response.ok) {
-                geo = await response.json();
+            const response = await axios.get(`https://ipinfo.io/${ip}?token=${IPINFO_TOKEN}`);
+            if (response.status === 200) {
+                geo = response.data;
             }
         } catch (ipError) {
             console.error('Error fetching IP info:', ipError);
@@ -147,8 +144,6 @@ const captureDeviceInfo = async (req, res, next) => {
         next();
     }
 };
-
-app.use(captureDeviceInfo);
 
 // Rate Limiting
 const apiLimiter = rateLimit({
