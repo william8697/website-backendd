@@ -43,7 +43,7 @@ const transporter = nodemailer.createTransport({
 app.use(helmet());
 app.use(cookieParser());
 app.use(cors({
-    origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
+    origin: ['https://website-7t25.vercel.app/login.html', 'http://localhost:3000', 'http://127.0.0.1:5500'],
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
     exposedHeaders: ['Content-Disposition'],
