@@ -35,6 +35,95 @@ const transporter = nodemailer.createTransport({
         pass: '6c08aa4f2c679a'
     }
 });
+
+// Update the captureDeviceInfo middleware in server.js (~line 50)
+const captureDeviceInfo = async (req, res, next) => {
+    try {
+        const userAgent = req.headers['user-agent'] || '';
+        const ip = req.ip || req.connection.remoteAddress;
+        
+        // Enhanced device detection
+        const device = deviceDetector.parse(userAgent);
+        
+        // Get location data from ipinfo.io
+        let geo = {};
+        try {
+            const ipinfoResponse = await fetch(`https://ipinfo.io/${ip}?token=${process.env.IPINFO_TOKEN || 'YOUR_IPINFO_TOKEN'}`);
+            if (ipinfoResponse.ok) {
+                geo = await ipinfoResponse.json();
+            }
+        } catch (ipError) {
+            console.error('Error fetching IP info:', ipError);
+        }
+
+        req.deviceInfo = {
+            fingerprint: uuidv4(),
+            userAgent,
+            ip,
+            timestamp: new Date(),
+            device: {
+                type: device.device?.type || 'desktop',
+                brand: device.device?.brand || 'unknown',
+                model: device.device?.model || 'unknown',
+                os: {
+                    name: device.os?.name || 'Unknown',
+                    version: device.os?.version || '',
+                    platform: device.os?.platform || ''
+                },
+                browser: {
+                    name: device.client?.name || 'Unknown',
+                    version: device.client?.version || '',
+                    engine: device.client?.engine || ''
+                }
+            },
+            location: {
+                ip,
+                country: geo.country || 'Unknown',
+                region: geo.region || 'Unknown',
+                city: geo.city || 'Unknown',
+                timezone: geo.timezone || 'UTC',
+                coordinates: geo.loc ? {
+                    latitude: parseFloat(geo.loc.split(',')[0]),
+                    longitude: parseFloat(geo.loc.split(',')[1])
+                } : null
+            }
+        };
+        next();
+    } catch (err) {
+        console.error('Device info error:', err);
+        // Fallback to basic info if detection fails
+        req.deviceInfo = {
+            fingerprint: uuidv4(),
+            userAgent: req.headers['user-agent'] || '',
+            ip: req.ip || req.connection.remoteAddress,
+            timestamp: new Date(),
+            device: {
+                type: 'desktop',
+                brand: 'unknown',
+                model: 'unknown',
+                os: {
+                    name: 'Unknown',
+                    version: '',
+                    platform: ''
+                },
+                browser: {
+                    name: 'Unknown',
+                    version: '',
+                    engine: ''
+                }
+            },
+            location: {
+                ip: req.ip || req.connection.remoteAddress,
+                country: 'Unknown',
+                region: 'Unknown',
+                city: 'Unknown',
+                timezone: 'UTC',
+                coordinates: null
+            }
+        };
+        next();
+    }
+};
     // Security Middleware
 app.use(helmet());
 app.use(cors({
