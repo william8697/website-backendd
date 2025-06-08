@@ -11,6 +11,7 @@
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "node-fetch": "^3.3.2",
+    "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "device-detector-js": "^2.2.10",
    "geoip-lite": "^1.4.10", 
