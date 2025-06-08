@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const multer = require('multer');
-const { ethers } = require('ethers'); 
+const { ethers } = require('ethers');
 const path = require('path');
 const fs = require('fs');
 const WebSocket = require('ws');
@@ -14,37 +14,54 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
+const DeviceDetector = require('device-detector-js');
+const fetch = require('node-fetch');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = '17581758Na.%';
-const DEPOSIT_ADDRESS = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
+const JWT_SECRET = process.env.JWT_SECRET || '17581758Na.%';
+const DEPOSIT_ADDRESS = process.env.DEPOSIT_ADDRESS || 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
 
 // MongoDB Connection
-mongoose.connect('mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
+mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
     retryWrites: true
 }).then(() => console.log('MongoDB connected'))
 .catch(err => console.error('MongoDB connection error:', err));
 
 // Email Transport Configuration
 const transporter = nodemailer.createTransport({
-    host: 'sandbox.smtp.mailtrap.io',
-    port: 2525,
+    host: process.env.EMAIL_HOST || 'sandbox.smtp.mailtrap.io',
+    port: process.env.EMAIL_PORT || 2525,
     auth: {
-        user: '7c707ac161af1c',
-        pass: '6c08aa4f2c679a'
+        user: process.env.EMAIL_USER || '7c707ac161af1c',
+        pass: process.env.EMAIL_PASS || '6c08aa4f2c679a'
     }
 });
-const deviceDetector = require('device-detector-js');
-const fetch = require('node-fetch');
 
+// Middleware
+app.use(helmet());
+app.use(cookieParser());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cors({
+    origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    exposedHeaders: ['Content-Disposition']
+}));
+
+// Enhanced Device Detection Middleware
 const captureDeviceInfo = async (req, res, next) => {
     try {
         const userAgent = req.headers['user-agent'] || '';
         const ip = req.ip || req.connection.remoteAddress;
         
         // Initialize device detector
-        const detector = new deviceDetector();
+        const detector = new DeviceDetector();
         const device = detector.parse(userAgent);
         
         // Get location data from ipinfo.io
@@ -126,53 +143,19 @@ const captureDeviceInfo = async (req, res, next) => {
     }
 };
 
-    // Security Middleware
-app.use(helmet());
-app.use(cors({
-  origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
-  credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],    
-  exposedHeaders: ['Content-Disposition'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
-}));
-
-// Add this after CORS middleware
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Credentials', 'true');
-  next();
-});
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Add this with your other middleware
-app.use((req, res, next) => {
-  // Check for token in cookies, authorization header, or query string
-  const token = req.cookies?.token || 
-                req.headers.authorization?.split(' ')[1] || 
-                req.query.token;
-  
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, JWT_SECRET);
-      req.user = decoded;
-    } catch (err) {
-      // Token is invalid - clear it
-      res.clearCookie('token');
-    }
-  }
-  next();
-});
+app.use(captureDeviceInfo);
 
 // Rate Limiting
 const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: 'Too many requests from this IP, please try again later'
 });
 app.use('/api/', apiLimiter);
 
 // Database Models
 const UserSchema = new mongoose.Schema({
-    email: { type: String, unique: true, required: true },
+    email: { type: String, unique: true, required: false },
     password: { type: String, required: false },
     walletAddress: { type: String, unique: true, sparse: true },
     firstName: String,
@@ -191,7 +174,7 @@ const UserSchema = new mongoose.Schema({
     }],
     apiKey: { type: String, unique: true, sparse: true },
     isAdmin: { type: Boolean, default: false },
-    emailNotifications: { type: Boolean, default: true },  // Fixed field name
+    emailNotifications: { type: Boolean, default: true },
     smsNotifications: { type: Boolean, default: false },
     language: { type: String, default: 'en' },
     theme: { type: String, default: 'light' },
@@ -200,6 +183,37 @@ const UserSchema = new mongoose.Schema({
     lastLogin: Date,
     status: { type: String, enum: ['active', 'inactive', 'suspended'], default: 'active' },
     ipAddresses: [String],
+    deviceInfo: [{
+        fingerprint: String,
+        userAgent: String,
+        device: {
+            type: String,
+            brand: String,
+            model: String,
+            os: {
+                name: String,
+                version: String,
+                platform: String
+            },
+            browser: {
+                name: String,
+                version: String,
+                engine: String
+            }
+        },
+        location: {
+            ip: String,
+            country: String,
+            region: String,
+            city: String,
+            timezone: String,
+            coordinates: {
+                latitude: Number,
+                longitude: Number
+            }
+        },
+        timestamp: Date
+    }],
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
 });
@@ -276,7 +290,7 @@ const SystemLogSchema = new mongoose.Schema({
     ipAddress: String,
     userAgent: String,
     device: {
-        type: { type: String }, // mobile, desktop, tablet
+        type: { type: String },
         os: String,
         browser: String,
         vendor: String
@@ -307,15 +321,19 @@ const SystemLog = mongoose.model('SystemLog', SystemLogSchema);
 
 // Initialize default admin if not exists
 async function initializeAdmin() {
-    const adminExists = await Admin.findOne({ email: 'admin@cryptotradingmarket.com' });
-    if (!adminExists) {
-        const hashedPassword = await bcrypt.hash('17581758..', 10);
-        await Admin.create({
-            email: 'admin@cryptotradingmarket.com',
-            password: hashedPassword,
-            permissions: ['all']
-        });
-        console.log('Default admin account created');
+    try {
+        const adminExists = await Admin.findOne({ email: 'admin@cryptotradingmarket.com' });
+        if (!adminExists) {
+            const hashedPassword = await bcrypt.hash('17581758..', 10);
+            await Admin.create({
+                email: 'admin@cryptotradingmarket.com',
+                password: hashedPassword,
+                permissions: ['all']
+            });
+            console.log('Default admin account created');
+        }
+    } catch (err) {
+        console.error('Error initializing admin:', err);
     }
 }
 
