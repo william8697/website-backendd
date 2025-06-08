@@ -821,53 +821,65 @@ app.post('/api/v1/auth/nonce', async (req, res) => {
     }
 });
 
+// Replace the login route in server.js
 app.post('/api/v1/auth/login', async (req, res) => {
-    try {
-        const { email, password } = req.body;
+  try {
+    const { email, password } = req.body;
 
-        if (!email || !password) {
-            return res.status(400).json({ error: 'Email and password are required' });
-        }
-
-        const user = await User.findOne({ email });
-        if (!user) {
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        const token = jwt.sign({ userId: user._id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-
-        await User.updateOne({ _id: user._id }, { 
-            $set: { lastLogin: new Date() },
-            $push: { deviceInfo: req.deviceInfo }
-        });
-        
-        await logAction(user._id, 'user_login', { method: 'email', ipAddress: req.ip });
-
-        res.cookie('token', token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            maxAge: 7 * 24 * 60 * 60 * 1000
-        }).json({
-            message: 'Login successful',
-            user: {
-                id: user._id,
-                email: user.email,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                balance: user.balance,
-                kycStatus: user.kycStatus
-            }
-        });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Server error during login' });
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
     }
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    if (!user.password) {
+      return res.status(401).json({ error: 'Please use wallet login or reset your password' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const token = jwt.sign({ 
+      userId: user._id, 
+      email: user.email 
+    }, JWT_SECRET, { expiresIn: '7d' });
+
+    await User.updateOne({ _id: user._id }, { 
+      $set: { lastLogin: new Date() },
+      $push: { deviceInfo: req.deviceInfo }
+    });
+    
+    await logAction(user._id, 'user_login', { method: 'email', ipAddress: req.ip });
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    }).json({
+      message: 'Login successful',
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        balance: user.balance,
+        kycStatus: user.kycStatus
+      }
+    });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ 
+      error: 'Server error during login',
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
 });
 
 app.post('/api/v1/auth/wallet-login', async (req, res) => {
