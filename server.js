@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const multer = require('multer');
-const { ethers } = require('ethers'); 
+const { ethers } = require('ethers');
 const path = require('path');
 const fs = require('fs');
 const WebSocket = require('ws');
@@ -48,7 +48,7 @@ app.use(cookieParser());
 app.use(cors({
     origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
     credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],    
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
     exposedHeaders: ['Content-Disposition'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 }));
@@ -518,67 +518,67 @@ async function logAction(userId, action, metadata = {}) {
 // Authentication Middleware
 async function authenticate(req, res, next) {
     const token = req.cookies?.token || 
-                req.headers.authorization?.split(' ')[1] || 
-                req.query.token;
+                 req.headers.authorization?.split(' ')[1] || 
+                 req.query.token;
     
     if (!token) {
-        return res.status(401).json({ success: false, error: 'Authentication required' });
+        return res.status(401).json({ error: 'Authentication required' });
     }
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
         const user = await User.findById(decoded.userId);
         if (!user) {
-            return res.status(401).json({ success: false, error: 'User not found' });
+            return res.status(401).json({ error: 'User not found' });
         }
 
         req.user = user;
         next();
     } catch (err) {
-        return res.status(401).json({ success: false, error: 'Invalid token' });
+        return res.status(401).json({ error: 'Invalid token' });
     }
 }
 
 async function authenticateAdmin(req, res, next) {
     const token = req.cookies?.token || 
-                req.headers.authorization?.split(' ')[1] || 
-                req.query.token;
+                 req.headers.authorization?.split(' ')[1] || 
+                 req.query.token;
     
     if (!token) {
-        return res.status(401).json({ success: false, error: 'Authentication required' });
+        return res.status(401).json({ error: 'Authentication required' });
     }
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
         const admin = await Admin.findOne({ email: decoded.email });
         if (!admin) {
-            return res.status(401).json({ success: false, error: 'Admin not found' });
+            return res.status(401).json({ error: 'Admin not found' });
         }
 
         req.admin = admin;
         next();
     } catch (err) {
-        return res.status(401).json({ success: false, error: 'Invalid token' });
+        return res.status(401).json({ error: 'Invalid token' });
     }
 }
 
 // Auth Status Endpoint
 app.get('/api/v1/auth/status', async (req, res) => {
+    const token = req.cookies?.token || 
+                 req.headers.authorization?.split(' ')[1] || 
+                 req.query.token;
+    
+    if (!token) {
+        return res.json({ isAuthenticated: false });
+    }
+
     try {
-        const token = req.cookies?.token || 
-                    req.headers.authorization?.split(' ')[1] || 
-                    req.query.token;
-        
-        if (!token) {
-            return res.json({ isAuthenticated: false });
-        }
-        
         const decoded = jwt.verify(token, JWT_SECRET);
         const user = await User.findById(decoded.userId);
         if (!user) {
             return res.json({ isAuthenticated: false });
         }
-        
+
         res.json({
             isAuthenticated: true,
             user: {
@@ -587,7 +587,7 @@ app.get('/api/v1/auth/status', async (req, res) => {
                 walletAddress: user.walletAddress,
                 firstName: user.firstName,
                 lastName: user.lastName,
-                username: user.email.split('@')[0],
+                username: user.email?.split('@')[0] || 'wallet-user',
                 balance: user.balance,
                 kycStatus: user.kycStatus
             }
@@ -603,21 +603,21 @@ app.post('/api/v1/auth/signup', async (req, res) => {
         const { email, password, firstName, lastName, country, currency, confirmPassword } = req.body;
 
         if (!email || !password || !firstName || !lastName || !country || !currency || !confirmPassword) {
-            return res.status(400).json({ success: false, error: 'All fields are required' });
+            return res.status(400).json({ error: 'All fields are required' });
         }
 
         if (password !== confirmPassword) {
-            return res.status(400).json({ success: false, error: 'Passwords do not match' });
+            return res.status(400).json({ error: 'Passwords do not match' });
         }
 
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(email)) {
-            return res.status(400).json({ success: false, error: 'Invalid email format' });
+            return res.status(400).json({ error: 'Invalid email format' });
         }
 
         const existingUser = await User.findOne({ email });
         if (existingUser) {
-            return res.status(400).json({ success: false, error: 'Email already in use' });
+            return res.status(400).json({ error: 'Email already in use' });
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -642,7 +642,6 @@ app.post('/api/v1/auth/signup', async (req, res) => {
             sameSite: 'strict',
             maxAge: 7 * 24 * 60 * 60 * 1000
         }).status(201).json({
-            success: true,
             message: 'User created successfully',
             token,
             user: {
@@ -658,15 +657,15 @@ app.post('/api/v1/auth/signup', async (req, res) => {
         console.error('Signup error:', err);
         
         if (err.code === 11000) {
-            return res.status(400).json({ success: false, error: 'Email already in use' });
+            return res.status(400).json({ error: 'Email already in use' });
         }
         
         if (err.name === 'ValidationError') {
             const errors = Object.values(err.errors).map(el => el.message);
-            return res.status(400).json({ success: false, error: errors.join(', ') });
+            return res.status(400).json({ error: errors.join(', ') });
         }
         
-        res.status(500).json({ success: false, error: 'Server error during signup' });
+        res.status(500).json({ error: 'Server error during signup' });
     }
 });
 
@@ -677,7 +676,8 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
         if (!walletAddress || !walletProvider) {
             return res.status(400).json({
                 success: false,
-                error: 'Wallet address and provider are required'
+                error: 'Wallet address and provider are required',
+                code: 'MISSING_FIELDS'
             });
         }
 
@@ -687,7 +687,8 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
         } catch (err) {
             return res.status(400).json({
                 success: false,
-                error: 'Invalid wallet address format'
+                error: 'Invalid wallet address format',
+                code: 'INVALID_ADDRESS'
             });
         }
 
@@ -697,13 +698,15 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
                 if (recoveredAddress.toLowerCase() !== normalizedAddress.toLowerCase()) {
                     return res.status(401).json({
                         success: false,
-                        error: 'Signature verification failed'
+                        error: 'Signature verification failed',
+                        code: 'SIGNATURE_MISMATCH'
                     });
                 }
             } catch (sigError) {
                 return res.status(401).json({
                     success: false,
-                    error: 'Invalid signature format'
+                    error: 'Invalid signature format',
+                    code: 'INVALID_SIGNATURE'
                 });
             }
         }
@@ -712,7 +715,8 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
         if (existingUser) {
             return res.status(409).json({
                 success: false,
-                error: 'Wallet address already registered'
+                error: 'Wallet address already registered',
+                code: 'WALLET_EXISTS'
             });
         }
 
@@ -721,7 +725,7 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
             walletProvider,
             firstName: 'Wallet',
             lastName: 'User',
-            country: 'Unknown',
+            country: req.deviceInfo.location.country || 'Unknown',
             currency: 'USD',
             balance: 0,
             isVerified: true,
@@ -756,21 +760,38 @@ app.post('/api/v1/auth/wallet-signup', async (req, res) => {
                 balance: user.balance
             }
         });
-
     } catch (err) {
         console.error('Wallet signup error:', err);
         
         if (err.code === 11000) {
             return res.status(409).json({
                 success: false,
-                error: 'Wallet address already registered'
+                error: 'Wallet address already registered',
+                code: 'DUPLICATE_WALLET'
             });
         }
         
         return res.status(500).json({
             success: false,
-            error: 'Internal server error'
+            error: 'Internal server error',
+            code: 'WALLET_SIGNUP_ERROR'
         });
+    }
+});
+
+app.post('/api/v1/auth/nonce', async (req, res) => {
+    try {
+        const { walletAddress } = req.body;
+        
+        if (!walletAddress) {
+            return res.status(400).json({ error: 'Wallet address is required' });
+        }
+
+        const nonce = crypto.randomBytes(16).toString('hex');
+        res.json({ nonce });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error generating nonce' });
     }
 });
 
@@ -779,21 +800,17 @@ app.post('/api/v1/auth/login', async (req, res) => {
         const { email, password } = req.body;
 
         if (!email || !password) {
-            return res.status(400).json({ success: false, error: 'Email and password are required' });
+            return res.status(400).json({ error: 'Email and password are required' });
         }
 
         const user = await User.findOne({ email });
         if (!user) {
-            return res.status(401).json({ success: false, error: 'Invalid credentials' });
-        }
-
-        if (!user.password) {
-            return res.status(401).json({ success: false, error: 'Please use wallet login' });
+            return res.status(401).json({ error: 'Invalid credentials' });
         }
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
-            return res.status(401).json({ success: false, error: 'Invalid credentials' });
+            return res.status(401).json({ error: 'Invalid credentials' });
         }
 
         const token = jwt.sign({ userId: user._id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
@@ -802,7 +819,7 @@ app.post('/api/v1/auth/login', async (req, res) => {
             $set: { lastLogin: new Date() },
             $push: { deviceInfo: req.deviceInfo }
         });
-
+        
         await logAction(user._id, 'user_login', { method: 'email', ipAddress: req.ip });
 
         res.cookie('token', token, {
@@ -811,7 +828,6 @@ app.post('/api/v1/auth/login', async (req, res) => {
             sameSite: 'strict',
             maxAge: 7 * 24 * 60 * 60 * 1000
         }).json({
-            success: true,
             message: 'Login successful',
             user: {
                 id: user._id,
@@ -824,32 +840,57 @@ app.post('/api/v1/auth/login', async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error during login' });
+        res.status(500).json({ error: 'Server error during login' });
     }
 });
 
 app.post('/api/v1/auth/wallet-login', async (req, res) => {
     try {
-        const { walletAddress, signature, walletType } = req.body;
+        const { walletAddress, signature, walletType, message } = req.body;
 
-        if (!walletAddress || !signature || !walletType) {
-            return res.status(400).json({ success: false, error: 'Wallet address, signature and wallet type are required' });
+        if (!walletAddress || !walletType) {
+            return res.status(400).json({ error: 'Wallet address and type are required' });
         }
 
-        const normalizedAddress = ethers.utils.getAddress(walletAddress);
+        let normalizedAddress;
+        try {
+            normalizedAddress = ethers.utils.getAddress(walletAddress);
+        } catch (err) {
+            return res.status(400).json({ error: 'Invalid wallet address format' });
+        }
+
+        if (signature && message) {
+            try {
+                const recoveredAddress = ethers.utils.verifyMessage(message, signature);
+                if (recoveredAddress.toLowerCase() !== normalizedAddress.toLowerCase()) {
+                    return res.status(401).json({ error: 'Signature verification failed' });
+                }
+            } catch (sigError) {
+                return res.status(401).json({ error: 'Invalid signature format' });
+            }
+        }
+
         const user = await User.findOne({ walletAddress: normalizedAddress });
         if (!user) {
-            return res.status(404).json({ success: false, error: 'Wallet not registered. Please sign up first.' });
+            return res.status(404).json({ error: 'Wallet not registered. Please sign up first.' });
         }
 
-        const token = jwt.sign({ userId: user._id, walletAddress: user.walletAddress }, JWT_SECRET, { expiresIn: '7d' });
+        const token = jwt.sign({ 
+            userId: user._id, 
+            walletAddress: user.walletAddress 
+        }, JWT_SECRET, { expiresIn: '7d' });
 
         await User.updateOne({ _id: user._id }, { 
             $set: { lastLogin: new Date() },
             $push: { deviceInfo: req.deviceInfo }
         });
-
-        await logAction(user._id, 'user_login', { method: 'wallet', walletAddress, walletType, ipAddress: req.ip });
+        
+        await logAction(user._id, 'user_login', { 
+            method: 'wallet', 
+            walletAddress, 
+            walletType, 
+            ipAddress: req.ip 
+        });
 
         res.cookie('token', token, {
             httpOnly: true,
@@ -868,83 +909,17 @@ app.post('/api/v1/auth/wallet-login', async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error during wallet login' });
-    }
-});
-
-app.post('/api/v1/admin/login', async (req, res) => {
-    try {
-        const { email, password } = req.body;
-
-        if (!email || !password) {
-            return res.status(400).json({ success: false, error: 'Email and password are required' });
-        }
-
-        const admin = await Admin.findOne({ email });
-        if (!admin) {
-            return res.status(401).json({ success: false, error: 'Invalid credentials' });
-        }
-
-        const isMatch = await bcrypt.compare(password, admin.password);
-        if (!isMatch) {
-            return res.status(401).json({ success: false, error: 'Invalid credentials' });
-        }
-
-        const token = jwt.sign({ 
-            userId: admin._id, 
-            email: admin.email, 
-            isAdmin: true,
-            permissions: admin.permissions 
-        }, JWT_SECRET, { expiresIn: '7d' });
-
-        await Admin.updateOne({ _id: admin._id }, { $set: { lastLogin: new Date() } });
-        await logAction(admin._id, 'admin_login', { ipAddress: req.ip });
-
-        res.cookie('token', token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            maxAge: 7 * 24 * 60 * 60 * 1000
-        }).json({
-            success: true,
-            message: 'Admin login successful',
-            token,
-            admin: {
-                id: admin._id,
-                email: admin.email,
-                permissions: admin.permissions
-            }
-        });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, error: 'Server error during admin login' });
-    }
-});
-
-app.get('/api/v1/admin/verify', authenticateAdmin, async (req, res) => {
-    try {
-        res.json({
-            success: true,
-            isAuthenticated: true,
-            admin: {
-                id: req.admin._id,
-                email: req.admin.email,
-                permissions: req.admin.permissions
-            }
-        });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, error: 'Server error verifying admin token' });
+        res.status(500).json({ error: 'Server error during wallet login' });
     }
 });
 
 app.post('/api/v1/auth/logout', authenticate, async (req, res) => {
     try {
         await logAction(req.user._id, 'user_logout', { ipAddress: req.ip });
-        res.clearCookie('token').json({ success: true, message: 'Logout successful' });
+        res.clearCookie('token').json({ message: 'Logout successful' });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error during logout' });
+        res.status(500).json({ error: 'Server error during logout' });
     }
 });
 
@@ -953,12 +928,12 @@ app.post('/api/v1/auth/forgot-password', async (req, res) => {
         const { email } = req.body;
 
         if (!email) {
-            return res.status(400).json({ success: false, error: 'Email is required' });
+            return res.status(400).json({ error: 'Email is required' });
         }
 
         const user = await User.findOne({ email });
         if (!user) {
-            return res.json({ success: true, message: 'If an account with this email exists, a reset link has been sent' });
+            return res.json({ message: 'If an account with this email exists, a reset link has been sent' });
         }
 
         const resetToken = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '1h' });
@@ -978,10 +953,10 @@ app.post('/api/v1/auth/forgot-password', async (req, res) => {
 
         await logAction(user._id, 'password_reset_requested', { ipAddress: req.ip });
 
-        res.json({ success: true, message: 'If an account with this email exists, a reset link has been sent' });
+        res.json({ message: 'If an account with this email exists, a reset link has been sent' });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error during password reset request' });
+        res.status(500).json({ error: 'Server error during password reset request' });
     }
 });
 
@@ -990,21 +965,21 @@ app.patch('/api/v1/auth/update-password', authenticate, async (req, res) => {
         const { currentPassword, newPassword, newPasswordConfirm } = req.body;
 
         if (!currentPassword || !newPassword || !newPasswordConfirm) {
-            return res.status(400).json({ success: false, error: 'All fields are required' });
+            return res.status(400).json({ error: 'All fields are required' });
         }
 
         if (newPassword !== newPasswordConfirm) {
-            return res.status(400).json({ success: false, error: 'New passwords do not match' });
+            return res.status(400).json({ error: 'New passwords do not match' });
         }
 
         const user = await User.findById(req.user._id);
         if (!user) {
-            return res.status(404).json({ success: false, error: 'User not found' });
+            return res.status(404).json({ error: 'User not found' });
         }
 
         const isMatch = await bcrypt.compare(currentPassword, user.password);
         if (!isMatch) {
-            return res.status(401).json({ success: false, error: 'Current password is incorrect' });
+            return res.status(401).json({ error: 'Current password is incorrect' });
         }
 
         const hashedPassword = await bcrypt.hash(newPassword, 10);
@@ -1012,10 +987,74 @@ app.patch('/api/v1/auth/update-password', authenticate, async (req, res) => {
 
         await logAction(user._id, 'password_changed');
 
-        res.json({ success: true, message: 'Password updated successfully' });
+        res.json({ message: 'Password updated successfully' });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error updating password' });
+        res.status(500).json({ error: 'Server error updating password' });
+    }
+});
+
+// Admin Authentication Routes
+app.post('/api/v1/admin/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({ error: 'Email and password are required' });
+        }
+
+        const admin = await Admin.findOne({ email });
+        if (!admin) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const isMatch = await bcrypt.compare(password, admin.password);
+        if (!isMatch) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const token = jwt.sign({ 
+            userId: admin._id, 
+            email: admin.email, 
+            isAdmin: true,
+            permissions: admin.permissions 
+        }, JWT_SECRET, { expiresIn: '7d' });
+
+        await Admin.updateOne({ _id: admin._id }, { $set: { lastLogin: new Date() } });
+        await logAction(admin._id, 'admin_login', { ipAddress: req.ip });
+
+        res.json({
+            message: 'Admin login successful',
+            token,
+            data: {
+                admin: {
+                    id: admin._id,
+                    email: admin.email,
+                    permissions: admin.permissions
+                }
+            }
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error during admin login' });
+    }
+});
+
+app.get('/api/v1/admin/verify', authenticateAdmin, async (req, res) => {
+    try {
+        res.json({
+            isAuthenticated: true,
+            data: {
+                admin: {
+                    id: req.admin._id,
+                    email: req.admin.email,
+                    permissions: req.admin.permissions
+                }
+            }
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error verifying admin token' });
     }
 });
 
@@ -1023,27 +1062,29 @@ app.patch('/api/v1/auth/update-password', authenticate, async (req, res) => {
 app.get('/api/v1/users/me', authenticate, async (req, res) => {
     try {
         res.json({
-            success: true,
-            user: {
-                id: req.user._id,
-                email: req.user.email,
-                walletAddress: req.user.walletAddress,
-                firstName: req.user.firstName,
-                lastName: req.user.lastName,
-                country: req.user.country,
-                currency: req.user.currency,
-                balance: req.user.balance,
-                kycStatus: req.user.kycStatus,
-                apiKey: req.user.apiKey,
-                twoFactorEnabled: req.user.twoFactorEnabled,
-                createdAt: req.user.createdAt,
-                isVerified: req.user.kycStatus === 'approved',
-                lastLogin: req.user.lastLogin
+            data: {
+                user: {
+                    id: req.user._id,
+                    email: req.user.email,
+                    walletAddress: req.user.walletAddress,
+                    firstName: req.user.firstName,
+                    lastName: req.user.lastName,
+                    country: req.user.country,
+                    currency: req.user.currency,
+                    balance: req.user.balance,
+                    kycStatus: req.user.kycStatus,
+                    apiKey: req.user.apiKey,
+                    twoFactorEnabled: req.user.twoFactorEnabled,
+                    createdAt: req.user.createdAt,
+                    isVerified: req.user.kycStatus === 'approved',
+                    lastLogin: req.user.lastLogin,
+                    deviceInfo: req.user.deviceInfo
+                }
             }
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching user data' });
+        res.status(500).json({ error: 'Server error fetching user data' });
     }
 });
 
@@ -1057,7 +1098,7 @@ app.post('/api/v1/users/kyc', authenticate, upload.fields([
         const files = req.files;
 
         if (!fullName || !dob || !country || !address || !city || !postalCode || !idType || !idNumber || !files?.idFront || !files?.selfie) {
-            return res.status(400).json({ success: false, error: 'All required fields must be provided' });
+            return res.status(400).json({ error: 'All required fields must be provided' });
         }
 
         const kycDocument = {
@@ -1097,31 +1138,29 @@ app.post('/api/v1/users/kyc', authenticate, upload.fields([
         });
 
         res.json({ 
-            success: true,
             message: 'KYC documents submitted successfully',
             kycStatus: 'pending'
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error submitting KYC documents' });
+        res.status(500).json({ error: 'Server error submitting KYC documents' });
     }
 });
 
 app.get('/api/v1/users/settings', authenticate, async (req, res) => {
     try {
         res.json({
-            success: true,
             preferredCurrency: req.user.currency,
             language: req.user.language || 'en',
             theme: req.user.theme || 'light',
-            emailNotifications: req.user.emailNotifications || true,
-            smsNotifications: req.user.smsNotifications || false,
+            emailNotifications: req.user.emailNotifications,
+            smsNotifications: req.user.smsNotifications,
             twoFactorAuth: req.user.twoFactorEnabled,
             apiKey: req.user.apiKey
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching user settings' });
+        res.status(500).json({ error: 'Server error fetching user settings' });
     }
 });
 
@@ -1140,10 +1179,10 @@ app.patch('/api/v1/users/settings', authenticate, async (req, res) => {
         await User.updateOne({ _id: req.user._id }, { $set: update });
         await logAction(req.user._id, 'user_settings_updated', { settings: update });
 
-        res.json({ success: true, message: 'Settings updated successfully' });
+        res.json({ message: 'Settings updated successfully' });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error updating user settings' });
+        res.status(500).json({ error: 'Server error updating user settings' });
     }
 });
 
@@ -1153,10 +1192,10 @@ app.post('/api/v1/users/generate-api-key', authenticate, async (req, res) => {
         await User.updateOne({ _id: req.user._id }, { $set: { apiKey } });
         await logAction(req.user._id, 'api_key_generated');
 
-        res.json({ success: true, message: 'API key generated successfully', apiKey });
+        res.json({ message: 'API key generated successfully', apiKey });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error generating API key' });
+        res.status(500).json({ error: 'Server error generating API key' });
     }
 });
 
@@ -1177,13 +1216,12 @@ app.post('/api/v1/users/export-data', authenticate, async (req, res) => {
         await logAction(req.user._id, 'data_export_requested');
 
         res.json({
-            success: true,
             message: 'Data export generated successfully',
             data
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error exporting user data' });
+        res.status(500).json({ error: 'Server error exporting user data' });
     }
 });
 
@@ -1192,17 +1230,17 @@ app.delete('/api/v1/users/delete-account', authenticate, async (req, res) => {
         const { password } = req.body;
 
         if (!password) {
-            return res.status(400).json({ success: false, error: 'Password is required' });
+            return res.status(400).json({ error: 'Password is required' });
         }
 
         const user = await User.findById(req.user._id);
         if (!user) {
-            return res.status(404).json({ success: false, error: 'User not found' });
+            return res.status(404).json({ error: 'User not found' });
         }
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
-            return res.status(401).json({ success: false, error: 'Invalid password' });
+            return res.status(401).json({ error: 'Invalid password' });
         }
 
         await User.deleteOne({ _id: req.user._id });
@@ -1212,10 +1250,10 @@ app.delete('/api/v1/users/delete-account', authenticate, async (req, res) => {
 
         await logAction(req.user._id, 'account_deleted');
 
-        res.clearCookie('token').json({ success: true, message: 'Account deleted successfully' });
+        res.json({ message: 'Account deleted successfully' });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error deleting account' });
+        res.status(500).json({ error: 'Server error deleting account' });
     }
 });
 
@@ -1223,14 +1261,13 @@ app.delete('/api/v1/users/delete-account', authenticate, async (req, res) => {
 app.get('/api/v1/wallet/deposit-address', authenticate, async (req, res) => {
     try {
         res.json({
-            success: true,
             address: DEPOSIT_ADDRESS,
             currency: 'BTC',
             note: `Include your user ID (${req.user._id}) in the memo when depositing`
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching deposit address' });
+        res.status(500).json({ error: 'Server error fetching deposit address' });
     }
 });
 
@@ -1239,19 +1276,19 @@ app.post('/api/v1/wallet/withdraw', authenticate, async (req, res) => {
         const { amount, currency, address } = req.body;
 
         if (!amount || !currency || !address) {
-            return res.status(400).json({ success: false, error: 'Amount, currency, and address are required' });
+            return res.status(400).json({ error: 'Amount, currency, and address are required' });
         }
 
         if (amount <= 0) {
-            return res.status(400).json({ success: false, error: 'Amount must be positive' });
+            return res.status(400).json({ error: 'Amount must be positive' });
         }
 
         if (req.user.balance < amount) {
-            return res.status(400).json({ success: false, error: 'Insufficient balance' });
+            return res.status(400).json({ error: 'Insufficient balance' });
         }
 
         if (req.user.kycStatus !== 'approved') {
-            return res.status(403).json({ success: false, error: 'KYC verification required for withdrawals' });
+            return res.status(403).json({ error: 'KYC verification required for withdrawals' });
         }
 
         await User.updateOne(
@@ -1280,13 +1317,12 @@ app.post('/api/v1/wallet/withdraw', authenticate, async (req, res) => {
         });
 
         res.json({
-            success: true,
             message: 'Withdrawal request submitted. It will be processed manually.',
             transactionId: transaction._id
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error processing withdrawal' });
+        res.status(500).json({ error: 'Server error processing withdrawal' });
     }
 });
 
@@ -1307,7 +1343,6 @@ app.get('/api/v1/wallet/transactions', authenticate, async (req, res) => {
         const total = await Transaction.countDocuments(query);
 
         res.json({
-            success: true,
             transactions,
             total,
             limit: parseInt(limit),
@@ -1315,7 +1350,7 @@ app.get('/api/v1/wallet/transactions', authenticate, async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching transactions' });
+        res.status(500).json({ error: 'Server error fetching transactions' });
     }
 });
 
@@ -1323,10 +1358,10 @@ app.get('/api/v1/wallet/transactions', authenticate, async (req, res) => {
 app.get('/api/v1/exchange/coins', async (req, res) => {
     try {
         const coins = await Coin.find({ isActive: true });
-        res.json({ success: true, coins });
+        res.json(coins);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching coins' });
+        res.status(500).json({ error: 'Server error fetching coins' });
     }
 });
 
@@ -1334,7 +1369,7 @@ app.get('/api/v1/exchange/rates', async (req, res) => {
     try {
         const coins = await Coin.find({ isActive: true }).lean();
         if (!coins.length) {
-            return res.json({ success: true, rates: {} });
+            return res.status(200).json({ rates: {} });
         }
 
         const rates = {};
@@ -1347,10 +1382,10 @@ app.get('/api/v1/exchange/rates', async (req, res) => {
             });
         });
 
-        res.json({ success: true, rates });
+        res.json({ rates });
     } catch (err) {
         console.error(err);
-        res.json({ success: true, rates: {} });
+        res.status(200).json({ rates: {} });
     }
 });
 
@@ -1359,28 +1394,28 @@ app.get('/api/v1/exchange/rate', async (req, res) => {
         const { from, to } = req.query;
 
         if (!from || !to) {
-            return res.status(400).json({ success: false, error: 'From and to currencies are required' });
+            return res.status(400).json({ error: 'From and to currencies are required' });
         }
 
         const fromCoin = await Coin.findOne({ symbol: from, isActive: true });
         const toCoin = await Coin.findOne({ symbol: to, isActive: true });
 
         if (!fromCoin || !toCoin) {
-            return res.status(404).json({ success: false, error: 'One or both currencies not found' });
+            return res.status(404).json({ error: 'One or both currencies not found' });
         }
 
         if (from === to) {
-            return res.json({ success: true, rate: 1 });
+            return res.json({ rate: 1 });
         }
 
         const baseRate = toCoin.price / fromCoin.price;
         const spread = 0.001;
         const rate = baseRate * (1 - spread);
 
-        res.json({ success: true, rate });
+        res.json({ rate });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching rate' });
+        res.status(500).json({ error: 'Server error fetching rate' });
     }
 });
 
@@ -1435,13 +1470,15 @@ app.post('/api/v1/exchange/convert', authenticate, async (req, res) => {
         res.json({
             success: true,
             message: 'Conversion successful',
-            from: fromCurrency,
-            to: toCurrency,
-            amount: parseFloat(amount),
-            convertedAmount: parseFloat(convertedAmount.toFixed(8)),
-            rate: parseFloat(rate.toFixed(8)),
-            fee: parseFloat(fee.toFixed(8)),
-            transactionId: transaction._id
+            data: {
+                from: fromCurrency,
+                to: toCurrency,
+                amount: parseFloat(amount),
+                convertedAmount: parseFloat(convertedAmount.toFixed(8)),
+                rate: parseFloat(rate.toFixed(8)),
+                fee: parseFloat(fee.toFixed(8)),
+                transactionId: transaction._id
+            }
         });
     } catch (err) {
         console.error('Conversion error:', err);
@@ -1463,7 +1500,6 @@ app.get('/api/v1/exchange/history', authenticate, async (req, res) => {
         const total = await Trade.countDocuments({ userId: req.user._id });
 
         res.json({
-            success: true,
             trades,
             total,
             limit: parseInt(limit),
@@ -1471,7 +1507,7 @@ app.get('/api/v1/exchange/history', authenticate, async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching trade history' });
+        res.status(500).json({ error: 'Server error fetching trade history' });
     }
 });
 
@@ -1479,10 +1515,10 @@ app.get('/api/v1/exchange/history', authenticate, async (req, res) => {
 app.get('/api/v1/support/faqs', async (req, res) => {
     try {
         const faqs = await FAQ.find({ isActive: true });
-        res.json({ success: true, faqs });
+        res.json(faqs);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching FAQs' });
+        res.status(500).json({ error: 'Server error fetching FAQs' });
     }
 });
 
@@ -1491,7 +1527,7 @@ app.post('/api/v1/support/contact', async (req, res) => {
         const { email, subject, message } = req.body;
 
         if (!email || !subject || !message) {
-            return res.status(400).json({ success: false, error: 'Email, subject, and message are required' });
+            return res.status(400).json({ error: 'Email, subject, and message are required' });
         }
 
         const ticket = await SupportTicket.create({
@@ -1510,13 +1546,12 @@ app.post('/api/v1/support/contact', async (req, res) => {
         });
 
         res.json({
-            success: true,
             message: 'Support ticket submitted successfully',
             ticketId: ticket._id
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error submitting support ticket' });
+        res.status(500).json({ error: 'Server error submitting support ticket' });
     }
 });
 
@@ -1525,7 +1560,7 @@ app.post('/api/v1/support/tickets', authenticate, async (req, res) => {
         const { subject, message } = req.body;
 
         if (!subject || !message) {
-            return res.status(400).json({ success: false, error: 'Subject and message are required' });
+            return res.status(400).json({ error: 'Subject and message are required' });
         }
 
         const ticket = await SupportTicket.create({
@@ -1548,13 +1583,12 @@ app.post('/api/v1/support/tickets', authenticate, async (req, res) => {
         await logAction(req.user._id, 'support_ticket_created', { ticketId: ticket._id });
 
         res.json({
-            success: true,
             message: 'Support ticket submitted successfully',
             ticketId: ticket._id
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error submitting support ticket' });
+        res.status(500).json({ error: 'Server error submitting support ticket' });
     }
 });
 
@@ -1575,7 +1609,6 @@ app.get('/api/v1/support/my-tickets', authenticate, async (req, res) => {
         const total = await SupportTicket.countDocuments(query);
 
         res.json({
-            success: true,
             tickets,
             total,
             limit: parseInt(limit),
@@ -1583,7 +1616,7 @@ app.get('/api/v1/support/my-tickets', authenticate, async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching support tickets' });
+        res.status(500).json({ error: 'Server error fetching support tickets' });
     }
 });
 
@@ -1603,7 +1636,6 @@ app.get('/api/v1/admin/dashboard-stats', authenticateAdmin, async (req, res) => 
         const openTickets = await SupportTicket.countDocuments({ status: 'open' });
 
         res.json({
-            success: true,
             totalUsers,
             newUsersToday,
             totalTrades,
@@ -1614,62 +1646,51 @@ app.get('/api/v1/admin/dashboard-stats', authenticateAdmin, async (req, res) => 
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching dashboard stats' });
-    }
-});
-
-app.get('/api/v1/admin/settings', authenticateAdmin, async (req, res) => {
-    try {
-        res.json({
-            success: true,
-            systemName: "Crypto Trading Platform",
-            maintenanceMode: false,
-            registrationStatus: true,
-            kycRequirement: true,
-            tradeFee: 0.1,
-            withdrawalFee: 0.05
-        });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, error: 'Server error loading settings' });
+        res.status(500).json({ error: 'Server error fetching dashboard stats' });
     }
 });
 
 app.get('/api/v1/admin/users', authenticateAdmin, async (req, res) => {
     try {
-        const { page = 1, limit = 10, search, status, kyc } = req.query;
-        const skip = (page - 1) * limit;
-        
-        let query = {};
+        const { search, status, kycStatus, limit = 10, offset = 0 } = req.query;
+        const query = {};
+
         if (search) {
             query.$or = [
                 { email: { $regex: search, $options: 'i' } },
                 { firstName: { $regex: search, $options: 'i' } },
-                { lastName: { $regex: search, $options: 'i' } }
+                { lastName: { $regex: search, $options: 'i' } },
+                { walletAddress: { $regex: search, $options: 'i' } }
             ];
         }
-        if (status) query.status = status;
-        if (kyc) query.kycStatus = kyc;
-        
+
+        if (status === 'active') {
+            query.lastLogin = { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) };
+        } else if (status === 'inactive') {
+            query.lastLogin = { $lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) };
+        }
+
+        if (kycStatus) {
+            query.kycStatus = kycStatus;
+        }
+
         const users = await User.find(query)
-            .skip(skip)
+            .sort({ createdAt: -1 })
+            .skip(parseInt(offset))
             .limit(parseInt(limit))
-            .lean();
-            
+            .select('-password');
+
         const total = await User.countDocuments(query);
-        
+
         res.json({
-            success: true,
-            users: users.map(user => ({
-                ...user,
-                fullName: `${user.firstName} ${user.lastName}`,
-                kycVerified: user.kycStatus === 'approved'
-            })),
-            totalPages: Math.ceil(total / limit)
+            users,
+            total,
+            limit: parseInt(limit),
+            offset: parseInt(offset)
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching users' });
+        res.status(500).json({ error: 'Server error fetching users' });
     }
 });
 
@@ -1677,7 +1698,7 @@ app.get('/api/v1/admin/users/:id', authenticateAdmin, async (req, res) => {
     try {
         const user = await User.findById(req.params.id).select('-password');
         if (!user) {
-            return res.status(404).json({ success: false, error: 'User not found' });
+            return res.status(404).json({ error: 'User not found' });
         }
 
         const trades = await Trade.find({ userId: user._id }).sort({ createdAt: -1 }).limit(10);
@@ -1685,7 +1706,6 @@ app.get('/api/v1/admin/users/:id', authenticateAdmin, async (req, res) => {
         const tickets = await SupportTicket.find({ userId: user._id }).sort({ createdAt: -1 }).limit(5);
 
         res.json({
-            success: true,
             user,
             recentTrades: trades,
             recentTransactions: transactions,
@@ -1693,7 +1713,7 @@ app.get('/api/v1/admin/users/:id', authenticateAdmin, async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching user details' });
+        res.status(500).json({ error: 'Server error fetching user details' });
     }
 });
 
@@ -1712,7 +1732,7 @@ app.put('/api/v1/admin/users/:id', authenticateAdmin, async (req, res) => {
         ).select('-password');
 
         if (!user) {
-            return res.status(404).json({ success: false, error: 'User not found' });
+            return res.status(404).json({ error: 'User not found' });
         }
 
         if (kycStatus && kycStatus !== user.kycStatus) {
@@ -1725,13 +1745,12 @@ app.put('/api/v1/admin/users/:id', authenticateAdmin, async (req, res) => {
         await logAction(req.admin._id, 'user_updated', { userId: user._id, updates: update });
 
         res.json({
-            success: true,
             message: 'User updated successfully',
             user
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error updating user' });
+        res.status(500).json({ error: 'Server error updating user' });
     }
 });
 
@@ -1754,7 +1773,6 @@ app.get('/api/v1/admin/trades', authenticateAdmin, async (req, res) => {
         const total = await Trade.countDocuments(query);
 
         res.json({
-            success: true,
             trades,
             total,
             limit: parseInt(limit),
@@ -1762,7 +1780,7 @@ app.get('/api/v1/admin/trades', authenticateAdmin, async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching trades' });
+        res.status(500).json({ error: 'Server error fetching trades' });
     }
 });
 
@@ -1785,7 +1803,6 @@ app.get('/api/v1/admin/transactions', authenticateAdmin, async (req, res) => {
         const total = await Transaction.countDocuments(query);
 
         res.json({
-            success: true,
             transactions,
             total,
             limit: parseInt(limit),
@@ -1793,7 +1810,7 @@ app.get('/api/v1/admin/transactions', authenticateAdmin, async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching transactions' });
+        res.status(500).json({ error: 'Server error fetching transactions' });
     }
 });
 
@@ -1803,7 +1820,7 @@ app.put('/api/v1/admin/transactions/:id', authenticateAdmin, async (req, res) =>
 
         const transaction = await Transaction.findById(req.params.id);
         if (!transaction) {
-            return res.status(404).json({ success: false, error: 'Transaction not found' });
+            return res.status(404).json({ error: 'Transaction not found' });
         }
 
         const update = {};
@@ -1831,13 +1848,12 @@ app.put('/api/v1/admin/transactions/:id', authenticateAdmin, async (req, res) =>
         });
 
         res.json({
-            success: true,
             message: 'Transaction updated successfully',
             transaction: updatedTransaction
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error updating transaction' });
+        res.status(500).json({ error: 'Server error updating transaction' });
     }
 });
 
@@ -1864,7 +1880,6 @@ app.get('/api/v1/admin/tickets', authenticateAdmin, async (req, res) => {
         const total = await SupportTicket.countDocuments(query);
 
         res.json({
-            success: true,
             tickets,
             total,
             limit: parseInt(limit),
@@ -1872,7 +1887,7 @@ app.get('/api/v1/admin/tickets', authenticateAdmin, async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching tickets' });
+        res.status(500).json({ error: 'Server error fetching tickets' });
     }
 });
 
@@ -1882,16 +1897,13 @@ app.get('/api/v1/admin/tickets/:id', authenticateAdmin, async (req, res) => {
             .populate('userId', 'email firstName lastName');
 
         if (!ticket) {
-            return res.status(404).json({ success: false, error: 'Ticket not found' });
+            return res.status(404).json({ error: 'Ticket not found' });
         }
 
-        res.json({
-            success: true,
-            ticket
-        });
+        res.json(ticket);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching ticket' });
+        res.status(500).json({ error: 'Server error fetching ticket' });
     }
 });
 
@@ -1901,7 +1913,7 @@ app.put('/api/v1/admin/tickets/:id', authenticateAdmin, async (req, res) => {
 
         const ticket = await SupportTicket.findById(req.params.id);
         if (!ticket) {
-            return res.status(404).json({ success: false, error: 'Ticket not found' });
+            return res.status(404).json({ error: 'Ticket not found' });
         }
 
         const update = {};
@@ -1936,13 +1948,12 @@ app.put('/api/v1/admin/tickets/:id', authenticateAdmin, async (req, res) => {
         });
 
         res.json({
-            success: true,
             message: 'Ticket updated successfully',
             ticket: updatedTicket
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error updating ticket' });
+        res.status(500).json({ error: 'Server error updating ticket' });
     }
 });
 
@@ -1955,12 +1966,11 @@ app.get('/api/v1/admin/kyc', authenticateAdmin, async (req, res) => {
             .sort({ createdAt: -1 })
             .skip(parseInt(offset))
             .limit(parseInt(limit))
-            .select('email firstName lastName walletAddress balance kycStatus kycDocuments createdAt');
+            .select('email firstName lastName kycStatus kycDocuments createdAt');
 
         const total = await User.countDocuments(query);
 
         res.json({
-            success: true,
             users,
             total,
             limit: parseInt(limit),
@@ -1968,7 +1978,7 @@ app.get('/api/v1/admin/kyc', authenticateAdmin, async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching KYC submissions' });
+        res.status(500).json({ error: 'Server error fetching KYC submissions' });
     }
 });
 
@@ -1977,7 +1987,7 @@ app.put('/api/v1/admin/kyc/:id', authenticateAdmin, async (req, res) => {
         const { status } = req.body;
 
         if (!status || !['approved', 'rejected'].includes(status)) {
-            return res.status(400).json({ success: false, error: 'Valid status is required' });
+            return res.status(400).json({ error: 'Valid status is required' });
         }
 
         const user = await User.findByIdAndUpdate(
@@ -1987,7 +1997,7 @@ app.put('/api/v1/admin/kyc/:id', authenticateAdmin, async (req, res) => {
         ).select('-password');
 
         if (!user) {
-            return res.status(404).json({ success: false, error: 'User not found' });
+            return res.status(404).json({ error: 'User not found' });
         }
 
         notifyUser(user._id, {
@@ -2001,13 +2011,12 @@ app.put('/api/v1/admin/kyc/:id', authenticateAdmin, async (req, res) => {
         });
 
         res.json({
-            success: true,
             message: 'KYC status updated successfully',
             user
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error updating KYC status' });
+        res.status(500).json({ error: 'Server error updating KYC status' });
     }
 });
 
@@ -2042,21 +2051,23 @@ app.get('/api/v1/admin/logs', authenticateAdmin, async (req, res) => {
         
         res.json({
             success: true,
-            logs: logs.map(log => ({
-                _id: log._id,
-                action: log.action,
-                user: log.userId ? {
-                    id: log.userId._id,
-                    fullName: `${log.userId.firstName} ${log.userId.lastName}`,
-                    email: log.userId.email
-                } : null,
-                ipAddress: log.ipAddress,
-                timestamp: log.createdAt,
-                device: log.device,
-                location: log.location,
-                metadata: log.metadata
-            })),
-            totalPages: Math.ceil(total / limit)
+            data: {
+                logs: logs.map(log => ({
+                    _id: log._id,
+                    action: log.action,
+                    user: log.userId ? {
+                        id: log.userId._id,
+                        fullName: `${log.userId.firstName} ${log.userId.lastName}`,
+                        email: log.userId.email
+                    } : null,
+                    ipAddress: log.ipAddress,
+                    timestamp: log.createdAt,
+                    device: log.device,
+                    location: log.location,
+                    metadata: log.metadata
+                })),
+                totalPages: Math.ceil(total / limit)
+            }
         });
     } catch (err) {
         console.error(err);
@@ -2072,7 +2083,7 @@ app.post('/api/v1/admin/broadcast', authenticateAdmin, async (req, res) => {
         const { message } = req.body;
 
         if (!message) {
-            return res.status(400).json({ success: false, error: 'Message is required' });
+            return res.status(400).json({ error: 'Message is required' });
         }
 
         clients.forEach(ws => {
@@ -2085,10 +2096,10 @@ app.post('/api/v1/admin/broadcast', authenticateAdmin, async (req, res) => {
 
         await logAction(req.admin._id, 'admin_broadcast', { message });
 
-        res.json({ success: true, message: 'Broadcast sent successfully' });
+        res.json({ message: 'Broadcast sent successfully' });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error sending broadcast' });
+        res.status(500).json({ error: 'Server error sending broadcast' });
     }
 });
 
@@ -2106,7 +2117,6 @@ app.get('/api/v1/stats', async (req, res) => {
         const kycApproved = await User.countDocuments({ kycStatus: 'approved' });
 
         res.json({
-            success: true,
             totalUsers,
             activeUsers,
             totalTrades,
@@ -2115,7 +2125,7 @@ app.get('/api/v1/stats', async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching stats' });
+        res.status(500).json({ error: 'Server error fetching stats' });
     }
 });
 
@@ -2153,10 +2163,10 @@ app.get('/api/v1/team', async (req, res) => {
             }
         ];
 
-        res.json({ success: true, team });
+        res.json(team);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching team data' });
+        res.status(500).json({ error: 'Server error fetching team data' });
     }
 });
 
@@ -2165,6 +2175,7 @@ app.get('/api/v1/admin/notifications', authenticateAdmin, async (req, res) => {
     try {
         const pendingTickets = await SupportTicket.countDocuments({ status: 'open' });
         const pendingKYC = await User.countDocuments({ kycStatus: 'pending' });
+        
         const notifications = await SystemLog.find({ 
             action: { $in: ['user_signup', 'trade_executed', 'kyc_submitted', 'support_ticket_created'] }
         })
@@ -2209,15 +2220,16 @@ app.get('/api/v1/admin/notifications', authenticateAdmin, async (req, res) => {
         });
         
         res.json({
-            success: true,
-            unreadCount: pendingTickets + pendingKYC,
-            pendingTickets,
-            pendingKYC,
-            notifications: formattedNotifications
+            data: {
+                unreadCount: pendingTickets + pendingKYC,
+                pendingTickets,
+                pendingKYC,
+                notifications: formattedNotifications
+            }
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Failed to load notifications' });
+        res.status(500).json({ error: 'Failed to load notifications' });
     }
 });
 
@@ -2230,8 +2242,7 @@ app.get('/api/v1/admin/recent-users', authenticateAdmin, async (req, res) => {
             .select('firstName lastName email walletAddress balance kycStatus createdAt');
             
         res.json({
-            success: true,
-            users: users.map(user => ({
+            data: users.map(user => ({
                 _id: user._id,
                 fullName: `${user.firstName} ${user.lastName}`,
                 email: user.email,
@@ -2245,7 +2256,7 @@ app.get('/api/v1/admin/recent-users', authenticateAdmin, async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Failed to load recent users' });
+        res.status(500).json({ error: 'Failed to load recent users' });
     }
 });
 
@@ -2258,8 +2269,7 @@ app.get('/api/v1/admin/recent-activities', authenticateAdmin, async (req, res) =
             .populate('userId', 'firstName lastName');
             
         res.json({
-            success: true,
-            activities: activities.map(activity => ({
+            data: activities.map(activity => ({
                 _id: activity._id,
                 type: activity.action.includes('login') ? 'login' : 
                       activity.action.includes('trade') ? 'trade' :
@@ -2275,7 +2285,7 @@ app.get('/api/v1/admin/recent-activities', authenticateAdmin, async (req, res) =
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Failed to load recent activities' });
+        res.status(500).json({ error: 'Failed to load recent activities' });
     }
 });
 
@@ -2308,7 +2318,7 @@ app.get('/api/v1/admin/:type/export', authenticateAdmin, async (req, res) => {
                 filename = 'logs-export.csv';
                 break;
             default:
-                return res.status(400).json({ success: false, error: 'Invalid export type' });
+                return res.status(400).json({ error: 'Invalid export type' });
         }
         
         let csv = '';
@@ -2327,11 +2337,11 @@ app.get('/api/v1/admin/:type/export', authenticateAdmin, async (req, res) => {
         res.send(csv);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Failed to export data' });
+        res.status(500).json({ error: 'Failed to export data' });
     }
 });
 
-// Get active trades
+// Active Trades
 app.get('/api/v1/trades/active', authenticate, async (req, res) => {
     try {
         const trades = await Trade.find({ 
@@ -2339,28 +2349,28 @@ app.get('/api/v1/trades/active', authenticate, async (req, res) => {
             status: { $in: ['pending', 'completed'] }
         }).sort({ createdAt: -1 }).limit(5);
         
-        res.json({ success: true, trades });
+        res.json(trades);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching active trades' });
+        res.status(500).json({ error: 'Server error fetching active trades' });
     }
 });
 
-// Get recent transactions
+// Recent Transactions
 app.get('/api/v1/transactions/recent', authenticate, async (req, res) => {
     try {
         const transactions = await Transaction.find({ 
             userId: req.user._id 
         }).sort({ createdAt: -1 }).limit(5);
         
-        res.json({ success: true, transactions });
+        res.json(transactions);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching recent transactions' });
+        res.status(500).json({ error: 'Server error fetching recent transactions' });
     }
 });
 
-// Get market data
+// Market Data
 app.get('/api/v1/market/data', async (req, res) => {
     try {
         const coins = await Coin.find({ isActive: true })
@@ -2371,7 +2381,6 @@ app.get('/api/v1/market/data', async (req, res) => {
         const topLosers = coins.slice(-5).reverse();
         
         res.json({
-            success: true,
             topGainers,
             topLosers,
             marketCap: coins.reduce((sum, coin) => sum + coin.marketCap, 0),
@@ -2381,19 +2390,19 @@ app.get('/api/v1/market/data', async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, error: 'Server error fetching market data' });
+        res.status(500).json({ error: 'Server error fetching market data' });
     }
 });
 
 // Error Handling Middleware
 app.use((err, req, res, next) => {
     console.error(err.stack);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error' });
 });
 
 // 404 Handler
 app.use((req, res) => {
-    res.status(404).json({ success: false, error: 'Endpoint not found' });
+    res.status(404).json({ error: 'Endpoint not found' });
 });
 
 // Start Server
