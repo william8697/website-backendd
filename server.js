@@ -35,7 +35,6 @@ const transporter = nodemailer.createTransport({
         pass: '6c08aa4f2c679a'
     }
 });
-
 // Update the captureDeviceInfo middleware in server.js (~line 50)
 const captureDeviceInfo = async (req, res, next) => {
     try {
@@ -124,6 +123,7 @@ const captureDeviceInfo = async (req, res, next) => {
         next();
     }
 };
+
     // Security Middleware
 app.use(helmet());
 app.use(cors({
