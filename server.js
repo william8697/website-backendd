@@ -43,11 +43,11 @@ const transporter = nodemailer.createTransport({
 app.use(helmet());
 app.use(cookieParser());
 app.use(cors({
-    origin: ['https://website-7t25.vercel.app/login.html', 'http://localhost:3000', 'http://127.0.0.1:5500'],
+    origin: ['https://website-7t25.vercel.app', 'https://website-xi-ten-52.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
     credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-    exposedHeaders: ['Content-Disposition'],
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+    exposedHeaders: ['Content-Disposition']
 }));
 
 app.use((req, res, next) => {
@@ -62,7 +62,7 @@ app.use(express.urlencoded({ extended: true }));
 const captureDeviceInfo = async (req, res, next) => {
     try {
         const userAgent = req.headers['user-agent'] || '';
-        const ip = req.ip || req.connection.remoteAddress;
+        const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
         
         const detector = new deviceDetector();
         const device = detector.parse(userAgent);
@@ -70,15 +70,21 @@ const captureDeviceInfo = async (req, res, next) => {
         let geo = {};
         try {
             const response = await axios.get(`https://ipinfo.io/${ip}?token=${IPINFO_TOKEN}`);
-            if (response.status === 200) {
-                geo = response.data;
-            }
+            geo = response.data;
         } catch (ipError) {
-            console.error('Error fetching IP info:', ipError);
+            console.error('Error fetching IP info:', ipError.message);
+            geo = {
+                ip,
+                country: 'Unknown',
+                region: 'Unknown',
+                city: 'Unknown',
+                timezone: 'UTC',
+                loc: null
+            };
         }
 
-        req.deviceInfo = {
-            fingerprint: crypto.createHash('md5').update(`${userAgent}-${ip}`).digest('hex'),
+        const deviceInfo = {
+            fingerprint: crypto.createHash('md5').update(`${userAgent}-${ip}-${Date.now()}`).digest('hex'),
             userAgent,
             ip,
             timestamp: new Date(),
@@ -98,7 +104,7 @@ const captureDeviceInfo = async (req, res, next) => {
                 }
             },
             location: {
-                ip,
+                ip: geo.ip || ip,
                 country: geo.country || 'Unknown',
                 region: geo.region || 'Unknown',
                 city: geo.city || 'Unknown',
@@ -107,15 +113,31 @@ const captureDeviceInfo = async (req, res, next) => {
                     latitude: parseFloat(geo.loc.split(',')[0]),
                     longitude: parseFloat(geo.loc.split(',')[1])
                 } : null
-            }
+            },
+            lastLogin: new Date()
         };
+
+        req.deviceInfo = deviceInfo;
+        
+        // Store device info in user document if authenticated
+        if (req.user) {
+            await User.updateOne(
+                { _id: req.user._id },
+                { 
+                    $set: { lastLogin: new Date() },
+                    $push: { deviceInfo }
+                }
+            );
+        }
+
         next();
     } catch (err) {
-        console.error('Device info error:', err);
+        console.error('Device info capture error:', err);
+        // Fallback device info
         req.deviceInfo = {
             fingerprint: 'unknown',
             userAgent: req.headers['user-agent'] || '',
-            ip: req.ip || req.connection.remoteAddress,
+            ip: req.headers['x-forwarded-for'] || req.connection.remoteAddress,
             timestamp: new Date(),
             device: {
                 type: 'desktop',
@@ -133,13 +155,14 @@ const captureDeviceInfo = async (req, res, next) => {
                 }
             },
             location: {
-                ip: req.ip || req.connection.remoteAddress,
+                ip: req.headers['x-forwarded-for'] || req.connection.remoteAddress,
                 country: 'Unknown',
                 region: 'Unknown',
                 city: 'Unknown',
                 timezone: 'UTC',
                 coordinates: null
-            }
+            },
+            lastLogin: new Date()
         };
         next();
     }
@@ -591,6 +614,14 @@ app.get('/api/v1/auth/status', async (req, res) => {
         res.json({ isAuthenticated: false });
     }
 });
+
+app.options('*', cors({
+    origin: ['https://website-7t25.vercel.app', 'https://website-xi-ten-52.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+    exposedHeaders: ['Content-Disposition']
+}));
 
 // Authentication Routes
 app.post('/api/v1/auth/signup', async (req, res) => {
