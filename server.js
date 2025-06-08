@@ -35,28 +35,31 @@ const transporter = nodemailer.createTransport({
         pass: '6c08aa4f2c679a'
     }
 });
-// Update the captureDeviceInfo middleware in server.js (~line 50)
+const deviceDetector = require('device-detector-js');
+const fetch = require('node-fetch');
+
 const captureDeviceInfo = async (req, res, next) => {
     try {
         const userAgent = req.headers['user-agent'] || '';
         const ip = req.ip || req.connection.remoteAddress;
         
-        // Enhanced device detection
-        const device = deviceDetector.parse(userAgent);
+        // Initialize device detector
+        const detector = new deviceDetector();
+        const device = detector.parse(userAgent);
         
         // Get location data from ipinfo.io
         let geo = {};
         try {
-            const ipinfoResponse = await fetch(`https://ipinfo.io/${ip}?token=${process.env.IPINFO_TOKEN || 'YOUR_IPINFO_TOKEN'}`);
-            if (ipinfoResponse.ok) {
-                geo = await ipinfoResponse.json();
+            const response = await fetch(`https://ipinfo.io/${ip}?token=${process.env.IPINFO_TOKEN || '17581758'}`);
+            if (response.ok) {
+                geo = await response.json();
             }
         } catch (ipError) {
             console.error('Error fetching IP info:', ipError);
         }
 
         req.deviceInfo = {
-            fingerprint: uuidv4(),
+            fingerprint: crypto.createHash('md5').update(`${userAgent}-${ip}`).digest('hex'),
             userAgent,
             ip,
             timestamp: new Date(),
@@ -90,9 +93,8 @@ const captureDeviceInfo = async (req, res, next) => {
         next();
     } catch (err) {
         console.error('Device info error:', err);
-        // Fallback to basic info if detection fails
         req.deviceInfo = {
-            fingerprint: uuidv4(),
+            fingerprint: 'unknown',
             userAgent: req.headers['user-agent'] || '',
             ip: req.ip || req.connection.remoteAddress,
             timestamp: new Date(),
@@ -2166,72 +2168,63 @@ app.put('/api/v1/admin/kyc/:id', authenticateAdmin, async (req, res) => {
 });
 
 // Backend - Update the recent activities endpoint
-// Update the loadActivityLogs function in admin.html
-function loadActivityLogs(page = 1, search = '', type = '', date = '') {
-    let url = `https://website-backendd-1.onrender.com/api/v1/admin/logs?page=${page}`;
-    if (search) url += `&search=${encodeURIComponent(search)}`;
-    if (type) url += `&action=${type}`;
-    if (date) url += `&date=${date}`;
-
-    fetch(url, {
-        method: 'GET',
-        headers: {
-            'Authorization': 'Bearer ' + authToken,
-            'Content-Type': 'application/json'
+app.get('/api/v1/admin/logs', authenticateAdmin, async (req, res) => {
+    try {
+        const { page = 1, limit = 10, search = '', action = '', date = '' } = req.query;
+        const skip = (page - 1) * limit;
+        
+        let query = {};
+        if (search) {
+            query.$or = [
+                { action: { $regex: search, $options: 'i' } },
+                { 'user.email': { $regex: search, $options: 'i' } },
+                { ipAddress: { $regex: search, $options: 'i' } }
+            ];
         }
-    })
-    .then(response => {
-        if (!response.ok) throw new Error('Failed to load activity logs');
-        return response.json();
-    })
-    .then(data => {
-        if (!data.success || !data.data) {
-            throw new Error('Invalid data format received');
+        if (action) query.action = { $regex: action, $options: 'i' };
+        if (date) {
+            const startDate = new Date(date);
+            const endDate = new Date(startDate);
+            endDate.setDate(endDate.getDate() + 1);
+            query.createdAt = { $gte: startDate, $lt: endDate };
         }
-
-        const tbody = document.getElementById('logs-table-body');
-        tbody.innerHTML = '';
-
-        data.data.logs.forEach(log => {
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td>${log._id.substring(0, 8)}</td>
-                <td>
-                    <div class="d-flex align-items-center">
-                        <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(log.user.fullName)}&background=7367f0&color=fff" 
-                             alt="User" class="user-avatar">
-                        <span>${log.user.fullName}</span>
-                    </div>
-                </td>
-                <td>${log.activity}</td>
-                <td>
-                    <span class="badge ${log.type === 'trade' ? 'bg-success' : 
-                                      log.type === 'login' ? 'bg-primary' : 
-                                      log.type === 'withdrawal' ? 'bg-warning' : 'bg-secondary'}">
-                        ${log.type.charAt(0).toUpperCase() + log.type.slice(1)}
-                    </span>
-                </td>
-                <td>
-                    <div class="device-info">
-                        <span class="badge bg-info">${log.device.type || 'Desktop'}</span>
-                        <small class="text-muted">${log.device.os || 'Unknown OS'}</small>
-                    </div>
-                </td>
-                <td>
-                    ${log.location.country || 'Unknown'}${log.location.city ? `, ${log.location.city}` : ''}
-                </td>
-                <td>${new Date(log.timestamp).toLocaleString()}</td>
-            `;
-            tbody.appendChild(row);
+        
+        const logs = await SystemLog.find(query)
+            .populate('userId', 'email firstName lastName')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+            
+        const total = await SystemLog.countDocuments(query);
+        
+        res.json({
+            success: true,
+            data: {
+                logs: logs.map(log => ({
+                    _id: log._id,
+                    action: log.action,
+                    user: log.userId ? {
+                        id: log.userId._id,
+                        fullName: `${log.userId.firstName} ${log.userId.lastName}`,
+                        email: log.userId.email
+                    } : null,
+                    ipAddress: log.ipAddress,
+                    timestamp: log.createdAt,
+                    device: log.device,
+                    location: log.location,
+                    metadata: log.metadata
+                })),
+                totalPages: Math.ceil(total / limit)
+            }
         });
-
-        updatePagination('logs-pagination', data.data.totalPages, page);
-    })
-    .catch(error => {
-        showError('Error loading activity logs: ' + error.message);
-        console.error('Error loading activity logs:', error);
-    });
-}
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ 
+            success: false,
+            error: 'Server error fetching logs' 
+        });
+    }
+});
 app.post('/api/v1/admin/broadcast', authenticateAdmin, async (req, res) => {
     try {
         const { message } = req.body;
