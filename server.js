@@ -45,42 +45,95 @@ const captureDeviceInfo = (req, res, next) => {
     const geo = geoip.lookup(ip);
     const device = deviceDetector.parse(userAgent);
     
-    req.deviceInfo = {
-        fingerprint: uuidv4(),
-        userAgent,
-        ip,
-        timestamp: new Date(),
-        device: {
-            type: device.device?.type || 'desktop',
-            brand: device.device?.brand || 'unknown',
-            model: device.device?.model || 'unknown',
-            os: {
-                name: device.os?.name || 'Unknown',
-                version: device.os?.version || '',
-                platform: device.os?.platform || ''
-            },
-            browser: {
-                name: device.client?.name || 'Unknown',
-                version: device.client?.version || '',
-                engine: device.client?.engine || ''
+// Update the captureDeviceInfo middleware in server.js (~line 50)
+const captureDeviceInfo = async (req, res, next) => {
+    try {
+        const userAgent = req.headers['user-agent'] || '';
+        const ip = req.ip || req.connection.remoteAddress;
+        
+        // Enhanced device detection
+        const device = deviceDetector.parse(userAgent);
+        
+        // Get location data from ipinfo.io
+        let geo = {};
+        try {
+            const ipinfoResponse = await fetch(`https://ipinfo.io/${ip}?token=${process.env.IPINFO_TOKEN || 'YOUR_IPINFO_TOKEN'}`);
+            if (ipinfoResponse.ok) {
+                geo = await ipinfoResponse.json();
             }
-        },
-        location: geo ? {
-            country: geo.country,
-            region: geo.region,
-            city: geo.city,
-            timezone: geo.timezone,
-            coordinates: geo.ll ? {
-                latitude: geo.ll[0],
-                longitude: geo.ll[1]
-            } : null
-        } : null
-    };
-    next();
+        } catch (ipError) {
+            console.error('Error fetching IP info:', ipError);
+        }
+
+        req.deviceInfo = {
+            fingerprint: uuidv4(),
+            userAgent,
+            ip,
+            timestamp: new Date(),
+            device: {
+                type: device.device?.type || 'desktop',
+                brand: device.device?.brand || 'unknown',
+                model: device.device?.model || 'unknown',
+                os: {
+                    name: device.os?.name || 'Unknown',
+                    version: device.os?.version || '',
+                    platform: device.os?.platform || ''
+                },
+                browser: {
+                    name: device.client?.name || 'Unknown',
+                    version: device.client?.version || '',
+                    engine: device.client?.engine || ''
+                }
+            },
+            location: {
+                ip,
+                country: geo.country || 'Unknown',
+                region: geo.region || 'Unknown',
+                city: geo.city || 'Unknown',
+                timezone: geo.timezone || 'UTC',
+                coordinates: geo.loc ? {
+                    latitude: parseFloat(geo.loc.split(',')[0]),
+                    longitude: parseFloat(geo.loc.split(',')[1])
+                } : null
+            }
+        };
+        next();
+    } catch (err) {
+        console.error('Device info error:', err);
+        // Fallback to basic info if detection fails
+        req.deviceInfo = {
+            fingerprint: uuidv4(),
+            userAgent: req.headers['user-agent'] || '',
+            ip: req.ip || req.connection.remoteAddress,
+            timestamp: new Date(),
+            device: {
+                type: 'desktop',
+                brand: 'unknown',
+                model: 'unknown',
+                os: {
+                    name: 'Unknown',
+                    version: '',
+                    platform: ''
+                },
+                browser: {
+                    name: 'Unknown',
+                    version: '',
+                    engine: ''
+                }
+            },
+            location: {
+                ip: req.ip || req.connection.remoteAddress,
+                country: 'Unknown',
+                region: 'Unknown',
+                city: 'Unknown',
+                timezone: 'UTC',
+                coordinates: null
+            }
+        };
+        next();
+    }
 };
-
-app.use(captureDeviceInfo);
-
+    
 // Security Middleware
 app.use(helmet());
 app.use(cors({
@@ -2123,45 +2176,72 @@ app.put('/api/v1/admin/kyc/:id', authenticateAdmin, async (req, res) => {
 });
 
 // Backend - Update the recent activities endpoint
-app.get('/api/v1/admin/logs', authenticateAdmin, async (req, res) => {
-    try {
-        const { action, userId, limit = 10, offset = 0 } = req.query;
-        const query = {};
+// Update the loadActivityLogs function in admin.html
+function loadActivityLogs(page = 1, search = '', type = '', date = '') {
+    let url = `https://website-backendd-1.onrender.com/api/v1/admin/logs?page=${page}`;
+    if (search) url += `&search=${encodeURIComponent(search)}`;
+    if (type) url += `&action=${type}`;
+    if (date) url += `&date=${date}`;
 
-        if (action) query.action = action;
-        if (userId) query.userId = userId;
+    fetch(url, {
+        method: 'GET',
+        headers: {
+            'Authorization': 'Bearer ' + authToken,
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => {
+        if (!response.ok) throw new Error('Failed to load activity logs');
+        return response.json();
+    })
+    .then(data => {
+        if (!data.success || !data.data) {
+            throw new Error('Invalid data format received');
+        }
 
-        const logs = await SystemLog.find(query)
-            .sort({ createdAt: -1 })
-            .skip(parseInt(offset))
-            .limit(parseInt(limit))
-            .populate('userId', 'email firstName lastName');
+        const tbody = document.getElementById('logs-table-body');
+        tbody.innerHTML = '';
 
-        const total = await SystemLog.countDocuments(query);
-
-        res.json({
-            data: {  // Add this wrapper to match frontend expectation
-                logs: logs.map(log => ({
-                    _id: log._id,
-                    user: {
-                        fullName: log.userId ? `${log.userId.firstName} ${log.userId.lastName}` : 'System'
-                    },
-                    activity: log.action,
-                    type: log.action.includes('login') ? 'login' : 
-                          log.action.includes('trade') ? 'trade' :
-                          log.action.includes('withdrawal') ? 'withdrawal' :
-                          log.action.includes('deposit') ? 'deposit' : 'account',
-                    ipAddress: log.ipAddress,
-                    timestamp: log.createdAt
-                })),
-                totalPages: Math.ceil(total / parseInt(limit))
-            }
+        data.data.logs.forEach(log => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${log._id.substring(0, 8)}</td>
+                <td>
+                    <div class="d-flex align-items-center">
+                        <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(log.user.fullName)}&background=7367f0&color=fff" 
+                             alt="User" class="user-avatar">
+                        <span>${log.user.fullName}</span>
+                    </div>
+                </td>
+                <td>${log.activity}</td>
+                <td>
+                    <span class="badge ${log.type === 'trade' ? 'bg-success' : 
+                                      log.type === 'login' ? 'bg-primary' : 
+                                      log.type === 'withdrawal' ? 'bg-warning' : 'bg-secondary'}">
+                        ${log.type.charAt(0).toUpperCase() + log.type.slice(1)}
+                    </span>
+                </td>
+                <td>
+                    <div class="device-info">
+                        <span class="badge bg-info">${log.device.type || 'Desktop'}</span>
+                        <small class="text-muted">${log.device.os || 'Unknown OS'}</small>
+                    </div>
+                </td>
+                <td>
+                    ${log.location.country || 'Unknown'}${log.location.city ? `, ${log.location.city}` : ''}
+                </td>
+                <td>${new Date(log.timestamp).toLocaleString()}</td>
+            `;
+            tbody.appendChild(row);
         });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Server error fetching logs' });
-    }
-});
+
+        updatePagination('logs-pagination', data.data.totalPages, page);
+    })
+    .catch(error => {
+        showError('Error loading activity logs: ' + error.message);
+        console.error('Error loading activity logs:', error);
+    });
+}
 app.post('/api/v1/admin/broadcast', authenticateAdmin, async (req, res) => {
     try {
         const { message } = req.body;
