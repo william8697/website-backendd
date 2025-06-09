@@ -13,7 +13,7 @@
      "axios": "^1.6.7",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
-     "json2csv": "^6.0.0",
+      "@json2csv/plainjs": "^6.0.0",
     "device-detector-js": "^2.2.10",
     "ua-parser-js": "^1.0.37",
    "geoip-lite": "^1.4.10", 
