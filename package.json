@@ -13,7 +13,7 @@
      "axios": "^1.6.7",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
-    "ipinfo": "^4.1.1",
+    "ipinfo": "^2.1.0",
     "device-detector-js": "^2.2.10",
    "geoip-lite": "^1.4.10", 
     "crypto": "^1.0.1",
