@@ -14,6 +14,7 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const UAParser = require('ua-parser-js');
 const crypto = require('crypto');
+const { Parser } = require('json2csv'); 
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
@@ -1662,43 +1663,6 @@ app.post('/api/v1/exchange/convert', authenticate, async (req, res) => {
     }
 });
 
-app.get('/api/v1/admin/users/export', authenticateAdmin, async (req, res) => {
-    try {
-        // Get all users (consider pagination for large datasets)
-        const users = await User.find().lean();
-        
-        // Convert to CSV
-        const fields = ['_id', 'email', 'firstName', 'lastName', 'country', 'balance', 'kycStatus', 'status', 'createdAt'];
-        let csv = fields.join(',') + '\n';
-        
-        users.forEach(user => {
-            const row = fields.map(field => {
-                // Handle nested objects and special characters
-                let value = user[field];
-                if (typeof value === 'object') value = JSON.stringify(value);
-                if (typeof value === 'string') value = `"${value.replace(/"/g, '""')}"`;
-                return value || '';
-            });
-            csv += row.join(',') + '\n';
-        });
-
-        // Set response headers
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', 'attachment; filename=users-export.csv');
-        
-        // Send the CSV
-        res.status(200).send(csv);
-        
-    } catch (err) {
-        console.error('Export error:', err);
-        res.status(500).json({ 
-            success: false,
-            error: 'Failed to export user data',
-            code: 'EXPORT_ERROR'
-        });
-    }
-});
-
 app.get('/api/v1/exchange/history', authenticate, async (req, res) => {
     try {
         const { limit = 10, offset = 0 } = req.query;
@@ -1833,6 +1797,81 @@ app.get('/api/v1/support/my-tickets', authenticate, async (req, res) => {
 });
 
 // Admin Routes
+app.get('/api/v1/admin/users/export', authenticateAdmin, async (req, res) => {
+    try {
+        console.log('Export users request received');
+        
+        // Verify admin permissions
+        if (!req.admin.permissions.includes('export')) {
+            return res.status(403).json({ 
+                success: false,
+                error: 'Insufficient permissions for export',
+                code: 'FORBIDDEN'
+            });
+        }
+
+        // Get users with selected fields
+        const users = await User.find({}, {
+            _id: 1,
+            email: 1,
+            firstName: 1,
+            lastName: 1,
+            walletAddress: 1,
+            country: 1,
+            balance: 1,
+            kycStatus: 1,
+            status: 1,
+            createdAt: 1
+        }).lean();
+
+        if (!users || users.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'No users found to export',
+                code: 'NO_DATA'
+            });
+        }
+
+        // Convert to CSV
+        const fields = [
+            { label: 'ID', value: '_id' },
+            { label: 'Email', value: 'email' },
+            { label: 'First Name', value: 'firstName' },
+            { label: 'Last Name', value: 'lastName' },
+            { label: 'Wallet Address', value: 'walletAddress' },
+            { label: 'Country', value: 'country' },
+            { label: 'Balance', value: 'balance' },
+            { label: 'KYC Status', value: 'kycStatus' },
+            { label: 'Account Status', value: 'status' },
+            { label: 'Created At', value: 'createdAt' }
+        ];
+
+        const json2csvParser = new Parser({ fields });
+        const csv = json2csvParser.parse(users);
+
+        // Set response headers
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', 'attachment; filename=users-export.csv');
+        
+        console.log(`Successfully exported ${users.length} users`);
+        return res.status(200).send(csv);
+
+    } catch (err) {
+        console.error('Export error:', {
+            message: err.message,
+            stack: err.stack,
+            timestamp: new Date().toISOString()
+        });
+        
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to generate export',
+            details: process.env.NODE_ENV === 'development' ? err.message : undefined,
+            code: 'EXPORT_FAILED'
+        });
+    }
+});
+
 app.get('/api/v1/admin/dashboard-stats', authenticateAdmin, async (req, res) => {
     try {
         const totalUsers = await User.countDocuments();
