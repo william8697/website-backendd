@@ -2137,6 +2137,7 @@ app.put('/api/v1/admin/kyc/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
+// Updated System Logs Endpoint
 app.get('/api/v1/admin/logs', authenticateAdmin, async (req, res) => {
     try {
         const { action, userId, limit = 10, offset = 0 } = req.query;
@@ -2149,19 +2150,61 @@ app.get('/api/v1/admin/logs', authenticateAdmin, async (req, res) => {
             .sort({ createdAt: -1 })
             .skip(parseInt(offset))
             .limit(parseInt(limit))
-            .populate('userId', 'email firstName lastName');
+            .populate('userId', 'email firstName lastName')
+            .lean();
 
         const total = await SystemLog.countDocuments(query);
 
+        // Enhanced log formatting with device info
+        const formattedLogs = logs.map(log => {
+            let deviceInfo = {};
+            try {
+                if (log.userAgent) {
+                    const parser = new UAParser(log.userAgent);
+                    const result = parser.getResult();
+                    deviceInfo = {
+                        device: result.device.model || result.device.type || 'Desktop',
+                        type: result.device.type || 'desktop',
+                        os: result.os.name || 'Unknown',
+                        browser: result.browser.name || 'Unknown'
+                    };
+                }
+            } catch (e) {
+                console.error('Error parsing user agent:', e);
+            }
+
+            return {
+                id: log._id,
+                action: log.action,
+                user: log.userId ? {
+                    id: log.userId._id,
+                    name: `${log.userId.firstName} ${log.userId.lastName}`,
+                    email: log.userId.email
+                } : null,
+                ipAddress: log.ipAddress,
+                timestamp: log.createdAt,
+                metadata: log.metadata,
+                deviceInfo,
+                location: log.metadata?.location || null
+            };
+        });
+
         res.json({
-            logs,
-            total,
-            limit: parseInt(limit),
-            offset: parseInt(offset)
+            success: true,
+            data: {
+                logs: formattedLogs,
+                total,
+                limit: parseInt(limit),
+                offset: parseInt(offset)
+            }
         });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Server error fetching logs' });
+        console.error('Error fetching logs:', err);
+        res.status(500).json({ 
+            success: false,
+            error: 'Server error fetching logs',
+            code: 'LOGS_FETCH_ERROR'
+        });
     }
 });
 
