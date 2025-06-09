@@ -39,15 +39,12 @@ const transporter = nodemailer.createTransport({
 // Security Middleware
 app.use(helmet());
 app.use(cors({
-  origin: ['https://website-7t25.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  exposedHeaders: ['Content-Disposition']
+    origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],    
+    exposedHeaders: ['Content-Disposition'], // Add this for file downloads
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 }));
-
-// Handle preflight requests
-app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -183,17 +180,7 @@ const SystemLogSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     ipAddress: String,
     userAgent: String,
-    metadata: {
-        deviceType: String,
-        os: String,
-        browser: String,
-        deviceModel: String,
-        country: String,
-        city: String,
-        region: String,
-        timezone: String,
-        coordinates: [Number]
-    },
+    metadata: mongoose.Schema.Types.Mixed,
     createdAt: { type: Date, default: Date.now }
 });
 
@@ -401,54 +388,15 @@ function notifyAdmins(message) {
 }
 
 async function logAction(userId, action, metadata = {}) {
-    try {
-        // Parse user agent if available
-        let deviceInfo = {};
-        if (metadata.userAgent) {
-            const parser = new UAParser(metadata.userAgent);
-            const result = parser.getResult();
-            deviceInfo = {
-                deviceType: result.device.type || 'desktop',
-                os: result.os.name || 'Unknown OS',
-                browser: result.browser.name || 'Unknown Browser',
-                deviceModel: result.device.model || 'Unknown Device'
-            };
-        }
-
-        // Get location info if IP is available
-        let locationInfo = {};
-        if (metadata.ipAddress && metadata.ipAddress !== '::1' && metadata.ipAddress !== '127.0.0.1') {
-            try {
-                const response = await fetch(`https://ipinfo.io/${metadata.ipAddress}?token=${process.env.IPINFO_TOKEN}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    locationInfo = {
-                        country: data.country,
-                        city: data.city,
-                        region: data.region,
-                        timezone: data.timezone,
-                        coordinates: data.loc ? data.loc.split(',').map(Number) : null
-                    };
-                }
-            } catch (err) {
-                console.error('Error fetching location:', err);
-            }
-        }
-
-        await SystemLog.create({
-            action,
-            userId,
-            ipAddress: metadata.ipAddress || '',
-            userAgent: metadata.userAgent || '',
-            metadata: {
-                ...deviceInfo,
-                ...locationInfo
-            }
-        });
-    } catch (err) {
-        console.error('Error logging action:', err);
-    }
+    await SystemLog.create({
+        action,
+        userId,
+        ipAddress: metadata.ipAddress || '',
+        userAgent: metadata.userAgent || '',
+        metadata
+    });
 }
+
 // Authentication Middleware
 async function authenticate(req, res, next) {
     const token = req.headers.authorization?.split(' ')[1] || req.cookies?.token;
@@ -505,72 +453,72 @@ app.use(express.json({
 
 // Authentication Routes
 app.post('/api/v1/auth/signup', async (req, res) => {
-  try {
-    const { email, password, firstName, lastName, country, currency, confirmPassword } = req.body;
+    try {
+        const { email, password, firstName, lastName, country, currency, confirmPassword } = req.body;
 
-    // Enhanced validation
-    if (!email || !password || !firstName || !lastName || !country || !currency || !confirmPassword) {
-      return res.status(400).json({ error: 'All fields are required' });
+        // Enhanced validation
+        if (!email || !password || !firstName || !lastName || !country || !currency || !confirmPassword) {
+            return res.status(400).json({ error: 'All fields are required' });
+        }
+
+        if (password !== confirmPassword) {
+            return res.status(400).json({ error: 'Passwords do not match' });
+        }
+
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({ error: 'Invalid email format' });
+        }
+
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(400).json({ error: 'Email already in use' });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const user = await User.create({
+            email,
+            password: hashedPassword,
+            firstName,
+            lastName,
+            country,
+            currency,
+            balance: 0
+        });
+
+        const token = jwt.sign({ userId: user._id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+
+        await logAction(user._id, 'user_signup', { method: 'email' });
+
+        res.status(201).json({
+            message: 'User created successfully',
+            token,
+            user: {
+                id: user._id,
+                email: user.email,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                balance: user.balance,
+                kycStatus: user.kycStatus
+            }
+        });
+    } catch (err) {
+        console.error('Signup error:', err);
+        
+        // Handle duplicate key errors
+        if (err.code === 11000) {
+            return res.status(400).json({ error: 'Email already in use' });
+        }
+        
+        // Handle validation errors
+        if (err.name === 'ValidationError') {
+            const errors = Object.values(err.errors).map(el => el.message);
+            return res.status(400).json({ error: errors.join(', ') });
+        }
+        
+        res.status(500).json({ error: 'Server error during signup. Please try again.' });
     }
-
-    if (password !== confirmPassword) {
-      return res.status(400).json({ error: 'Passwords do not match' });
-    }
-
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({ error: 'Invalid email format' });
-    }
-
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ error: 'Email already in use' });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await User.create({
-      email,
-      password: hashedPassword,
-      firstName,
-      lastName,
-      country,
-      currency,
-      balance: 0
-    });
-
-    const token = jwt.sign({ userId: user._id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-
-    await logAction(user._id, 'user_signup', { method: 'email' });
-
-    res.status(201).json({
-      message: 'User created successfully',
-      token,
-      user: {
-        id: user._id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        balance: user.balance,
-        kycStatus: user.kycStatus
-      }
-    });
-  } catch (err) {
-    console.error('Signup error:', err);
-    
-    // Handle duplicate key errors
-    if (err.code === 11000) {
-      return res.status(400).json({ error: 'Email already in use' });
-    }
-    
-    // Handle validation errors
-    if (err.name === 'ValidationError') {
-      const errors = Object.values(err.errors).map(el => el.message);
-      return res.status(400).json({ error: errors.join(', ') });
-    }
-    
-    res.status(500).json({ error: 'Server error during signup. Please try again.' });
-  }
 });
 app.post('/api/v1/auth/wallet-signup', async (req, res) => {
     try {
@@ -2118,80 +2066,34 @@ app.put('/api/v1/admin/kyc/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
-// Update the logs endpoint in server.js
-const geoip = require('geoip-lite');
-const uaParser = require('ua-parser-js');
-
-// Enhanced log endpoint
 app.get('/api/v1/admin/logs', authenticateAdmin, async (req, res) => {
     try {
-        const { page = 1, limit = 5, search, action, date } = req.query;
-        const skip = (page - 1) * limit;
-        
-        let query = {};
-        if (search) query.$or = [
-            { action: { $regex: search, $options: 'i' } },
-            { 'user.email': { $regex: search, $options: 'i' } },
-            { 'user.fullName': { $regex: search, $options: 'i' } }
-        ];
+        const { action, userId, limit = 10, offset = 0 } = req.query;
+        const query = {};
+
         if (action) query.action = action;
-        if (date) query.createdAt = { $gte: new Date(date) };
+        if (userId) query.userId = userId;
 
         const logs = await SystemLog.find(query)
-            .populate('userId', 'email firstName lastName')
             .sort({ createdAt: -1 })
-            .skip(skip)
+            .skip(parseInt(offset))
             .limit(parseInt(limit))
-            .lean();
-
-        // Enrich logs with device and location info
-        const enrichedLogs = await Promise.all(logs.map(async log => {
-            const ua = uaParser(log.userAgent || '');
-            const geo = log.ipAddress ? geoip.lookup(log.ipAddress) : null;
-            
-            return {
-                ...log,
-                device: {
-                    type: ua.device.type || 'desktop',
-                    model: ua.device.model || 'Unknown',
-                    vendor: ua.device.vendor || 'Unknown'
-                },
-                os: {
-                    name: ua.os.name || 'Unknown',
-                    version: ua.os.version || ''
-                },
-                browser: {
-                    name: ua.browser.name || 'Unknown',
-                    version: ua.browser.version || ''
-                },
-                location: geo ? {
-                    country: geo.country,
-                    region: geo.region,
-                    city: geo.city,
-                    timezone: geo.timezone,
-                    ll: geo.ll
-                } : null
-            };
-        }));
+            .populate('userId', 'email firstName lastName');
 
         const total = await SystemLog.countDocuments(query);
 
         res.json({
-            success: true,
-            data: {
-                logs: enrichedLogs,
-                total,
-                totalPages: Math.ceil(total / limit)
-            }
+            logs,
+            total,
+            limit: parseInt(limit),
+            offset: parseInt(offset)
         });
     } catch (err) {
-        console.error('Error fetching logs:', err);
-        res.status(500).json({ 
-            success: false,
-            error: 'Server error fetching activity logs'
-        });
+        console.error(err);
+        res.status(500).json({ error: 'Server error fetching logs' });
     }
 });
+
 app.post('/api/v1/admin/broadcast', authenticateAdmin, async (req, res) => {
     try {
         const { message } = req.body;
