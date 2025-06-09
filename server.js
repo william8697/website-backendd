@@ -2677,7 +2677,7 @@ app.get('/api/v1/admin/:type/export', authenticateAdmin, async (req, res) => {
         
         switch(type) {
             case 'users':
-                data = await User.find().lean();
+                data = await User.find().select('-password').lean();
                 filename = 'users-export.csv';
                 break;
             case 'trades':
@@ -2689,11 +2689,11 @@ app.get('/api/v1/admin/:type/export', authenticateAdmin, async (req, res) => {
                 filename = 'transactions-export.csv';
                 break;
             case 'tickets':
-                data = await SupportTicket.find().lean();
+                data = await SupportTicket.find().populate('userId', 'email').lean();
                 filename = 'tickets-export.csv';
                 break;
             case 'logs':
-                data = await SystemLog.find().lean();
+                data = await SystemLog.find().populate('userId', 'email').lean();
                 filename = 'logs-export.csv';
                 break;
             default:
@@ -2703,14 +2703,40 @@ app.get('/api/v1/admin/:type/export', authenticateAdmin, async (req, res) => {
         // Convert to CSV
         let csv = '';
         if (data.length > 0) {
+            // Flatten objects and handle special cases
+            const flattenedData = data.map(item => {
+                const flatItem = {};
+                for (const key in item) {
+                    if (key === '_id') {
+                        flatItem.id = item[key].toString();
+                    } else if (key === 'userId' && item[key]) {
+                        flatItem.userId = item[key]._id.toString();
+                        flatItem.userEmail = item[key].email || '';
+                    } else if (item[key] instanceof Date) {
+                        flatItem[key] = item[key].toISOString();
+                    } else if (typeof item[key] === 'object' && item[key] !== null) {
+                        flatItem[key] = JSON.stringify(item[key]);
+                    } else {
+                        flatItem[key] = item[key];
+                    }
+                }
+                return flatItem;
+            });
+            
             // Headers
-            csv = Object.keys(data[0]).join(',') + '\n';
+            const headers = Object.keys(flattenedData[0]);
+            csv = headers.join(',') + '\n';
             
             // Rows
-            data.forEach(item => {
-                csv += Object.values(item).map(val => 
-                    typeof val === 'object' ? JSON.stringify(val) : val
-                ).join(',') + '\n';
+            flattenedData.forEach(item => {
+                csv += headers.map(header => {
+                    const value = item[header];
+                    // Escape quotes and wrap in quotes if contains commas
+                    if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
+                        return `"${value.replace(/"/g, '""')}"`;
+                    }
+                    return value;
+                }).join(',') + '\n';
             });
         }
         
@@ -2718,11 +2744,14 @@ app.get('/api/v1/admin/:type/export', authenticateAdmin, async (req, res) => {
         res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
         res.send(csv);
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Failed to export data' });
+        console.error('Export error:', err);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to export data',
+            details: err.message 
+        });
     }
 });
-
 // Error Handling Middleware
 app.use((err, req, res, next) => {
     console.error(err.stack);
