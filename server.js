@@ -39,12 +39,15 @@ const transporter = nodemailer.createTransport({
 // Security Middleware
 app.use(helmet());
 app.use(cors({
-    origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],    
-    exposedHeaders: ['Content-Disposition'], // Add this for file downloads
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+  origin: ['https://website-7t25.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Content-Disposition']
 }));
+
+// Handle preflight requests
+app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -453,72 +456,72 @@ app.use(express.json({
 
 // Authentication Routes
 app.post('/api/v1/auth/signup', async (req, res) => {
-    try {
-        const { email, password, firstName, lastName, country, currency, confirmPassword } = req.body;
+  try {
+    const { email, password, firstName, lastName, country, currency, confirmPassword } = req.body;
 
-        // Enhanced validation
-        if (!email || !password || !firstName || !lastName || !country || !currency || !confirmPassword) {
-            return res.status(400).json({ error: 'All fields are required' });
-        }
-
-        if (password !== confirmPassword) {
-            return res.status(400).json({ error: 'Passwords do not match' });
-        }
-
-        // Validate email format
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
-            return res.status(400).json({ error: 'Invalid email format' });
-        }
-
-        const existingUser = await User.findOne({ email });
-        if (existingUser) {
-            return res.status(400).json({ error: 'Email already in use' });
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const user = await User.create({
-            email,
-            password: hashedPassword,
-            firstName,
-            lastName,
-            country,
-            currency,
-            balance: 0
-        });
-
-        const token = jwt.sign({ userId: user._id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-
-        await logAction(user._id, 'user_signup', { method: 'email' });
-
-        res.status(201).json({
-            message: 'User created successfully',
-            token,
-            user: {
-                id: user._id,
-                email: user.email,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                balance: user.balance,
-                kycStatus: user.kycStatus
-            }
-        });
-    } catch (err) {
-        console.error('Signup error:', err);
-        
-        // Handle duplicate key errors
-        if (err.code === 11000) {
-            return res.status(400).json({ error: 'Email already in use' });
-        }
-        
-        // Handle validation errors
-        if (err.name === 'ValidationError') {
-            const errors = Object.values(err.errors).map(el => el.message);
-            return res.status(400).json({ error: errors.join(', ') });
-        }
-        
-        res.status(500).json({ error: 'Server error during signup. Please try again.' });
+    // Enhanced validation
+    if (!email || !password || !firstName || !lastName || !country || !currency || !confirmPassword) {
+      return res.status(400).json({ error: 'All fields are required' });
     }
+
+    if (password !== confirmPassword) {
+      return res.status(400).json({ error: 'Passwords do not match' });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ error: 'Email already in use' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.create({
+      email,
+      password: hashedPassword,
+      firstName,
+      lastName,
+      country,
+      currency,
+      balance: 0
+    });
+
+    const token = jwt.sign({ userId: user._id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+
+    await logAction(user._id, 'user_signup', { method: 'email' });
+
+    res.status(201).json({
+      message: 'User created successfully',
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        balance: user.balance,
+        kycStatus: user.kycStatus
+      }
+    });
+  } catch (err) {
+    console.error('Signup error:', err);
+    
+    // Handle duplicate key errors
+    if (err.code === 11000) {
+      return res.status(400).json({ error: 'Email already in use' });
+    }
+    
+    // Handle validation errors
+    if (err.name === 'ValidationError') {
+      const errors = Object.values(err.errors).map(el => el.message);
+      return res.status(400).json({ error: errors.join(', ') });
+    }
+    
+    res.status(500).json({ error: 'Server error during signup. Please try again.' });
+  }
 });
 app.post('/api/v1/auth/wallet-signup', async (req, res) => {
     try {
