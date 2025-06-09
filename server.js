@@ -1662,6 +1662,43 @@ app.post('/api/v1/exchange/convert', authenticate, async (req, res) => {
     }
 });
 
+app.get('/api/v1/admin/users/export', authenticateAdmin, async (req, res) => {
+    try {
+        // Get all users (consider pagination for large datasets)
+        const users = await User.find().lean();
+        
+        // Convert to CSV
+        const fields = ['_id', 'email', 'firstName', 'lastName', 'country', 'balance', 'kycStatus', 'status', 'createdAt'];
+        let csv = fields.join(',') + '\n';
+        
+        users.forEach(user => {
+            const row = fields.map(field => {
+                // Handle nested objects and special characters
+                let value = user[field];
+                if (typeof value === 'object') value = JSON.stringify(value);
+                if (typeof value === 'string') value = `"${value.replace(/"/g, '""')}"`;
+                return value || '';
+            });
+            csv += row.join(',') + '\n';
+        });
+
+        // Set response headers
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', 'attachment; filename=users-export.csv');
+        
+        // Send the CSV
+        res.status(200).send(csv);
+        
+    } catch (err) {
+        console.error('Export error:', err);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to export user data',
+            code: 'EXPORT_ERROR'
+        });
+    }
+});
+
 app.get('/api/v1/exchange/history', authenticate, async (req, res) => {
     try {
         const { limit = 10, offset = 0 } = req.query;
