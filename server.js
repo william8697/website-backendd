@@ -2119,84 +2119,79 @@ app.put('/api/v1/admin/kyc/:id', authenticateAdmin, async (req, res) => {
 });
 
 // Update the logs endpoint in server.js
+const geoip = require('geoip-lite');
+const uaParser = require('ua-parser-js');
+
+// Enhanced log endpoint
 app.get('/api/v1/admin/logs', authenticateAdmin, async (req, res) => {
     try {
-        const { action, userId, limit = 10, offset = 0 } = req.query;
-        const query = {};
-
+        const { page = 1, limit = 5, search, action, date } = req.query;
+        const skip = (page - 1) * limit;
+        
+        let query = {};
+        if (search) query.$or = [
+            { action: { $regex: search, $options: 'i' } },
+            { 'user.email': { $regex: search, $options: 'i' } },
+            { 'user.fullName': { $regex: search, $options: 'i' } }
+        ];
         if (action) query.action = action;
-        if (userId) query.userId = userId;
+        if (date) query.createdAt = { $gte: new Date(date) };
 
         const logs = await SystemLog.find(query)
-            .sort({ createdAt: -1 })
-            .skip(parseInt(offset))
-            .limit(parseInt(limit))
             .populate('userId', 'email firstName lastName')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
             .lean();
 
-        // Enhanced logging with device and location info
-        const enhancedLogs = logs.map(log => {
-            const metadata = log.metadata || {};
+        // Enrich logs with device and location info
+        const enrichedLogs = await Promise.all(logs.map(async log => {
+            const ua = uaParser(log.userAgent || '');
+            const geo = log.ipAddress ? geoip.lookup(log.ipAddress) : null;
+            
             return {
                 ...log,
-                device: metadata.userAgent ? parseUserAgent(metadata.userAgent) : null,
-                location: metadata.ipAddress ? await getLocationInfo(metadata.ipAddress) : null,
-                timestamp: log.createdAt
+                device: {
+                    type: ua.device.type || 'desktop',
+                    model: ua.device.model || 'Unknown',
+                    vendor: ua.device.vendor || 'Unknown'
+                },
+                os: {
+                    name: ua.os.name || 'Unknown',
+                    version: ua.os.version || ''
+                },
+                browser: {
+                    name: ua.browser.name || 'Unknown',
+                    version: ua.browser.version || ''
+                },
+                location: geo ? {
+                    country: geo.country,
+                    region: geo.region,
+                    city: geo.city,
+                    timezone: geo.timezone,
+                    ll: geo.ll
+                } : null
             };
-        });
+        }));
+
+        const total = await SystemLog.countDocuments(query);
 
         res.json({
             success: true,
             data: {
-                logs: enhancedLogs,
-                total: await SystemLog.countDocuments(query)
+                logs: enrichedLogs,
+                total,
+                totalPages: Math.ceil(total / limit)
             }
         });
     } catch (err) {
-        console.error(err);
+        console.error('Error fetching logs:', err);
         res.status(500).json({ 
             success: false,
-            error: 'Server error fetching logs' 
+            error: 'Server error fetching activity logs'
         });
     }
 });
-
-// Helper function to parse user agent
-function parseUserAgent(userAgent) {
-    const parser = new UAParser(userAgent);
-    const result = parser.getResult();
-    
-    return {
-        type: result.device.type || 'desktop',
-        os: result.os.name ? `${result.os.name} ${result.os.version || ''}`.trim() : 'Unknown OS',
-        browser: result.browser.name ? `${result.browser.name} ${result.browser.version || ''}`.trim() : 'Unknown Browser',
-        deviceModel: result.device.model || 'Unknown Device'
-    };
-}
-
-// Helper function to get location info
-async function getLocationInfo(ipAddress) {
-    try {
-        if (ipAddress === '::1' || ipAddress === '127.0.0.1') {
-            return { country: 'Localhost', city: 'Local' };
-        }
-        
-        const response = await fetch(`https://ipinfo.io/${ipAddress}?token=${process.env.IPINFO_TOKEN}`);
-        if (!response.ok) return null;
-        
-        const data = await response.json();
-        return {
-            country: data.country || 'Unknown',
-            city: data.city || 'Unknown',
-            region: data.region || 'Unknown',
-            timezone: data.timezone || 'Unknown',
-            coordinates: data.loc ? data.loc.split(',') : null
-        };
-    } catch (err) {
-        console.error('Error fetching location:', err);
-        return null;
-    }
-}
 app.post('/api/v1/admin/broadcast', authenticateAdmin, async (req, res) => {
     try {
         const { message } = req.body;
