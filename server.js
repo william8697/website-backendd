@@ -1949,6 +1949,7 @@ app.put('/api/v1/admin/users/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
+// Add to server.js
 app.get('/api/v1/admin/trades', authenticateAdmin, async (req, res) => {
     try {
         const { userId, status, from, to, limit = 10, offset = 0 } = req.query;
@@ -1968,17 +1969,29 @@ app.get('/api/v1/admin/trades', authenticateAdmin, async (req, res) => {
         const total = await Trade.countDocuments(query);
 
         res.json({
-            trades,
-            total,
-            limit: parseInt(limit),
-            offset: parseInt(offset)
+            data: {
+                trades: trades.map(trade => ({
+                    _id: trade._id,
+                    user: {
+                        _id: trade.userId._id,
+                        fullName: `${trade.userId.firstName} ${trade.userId.lastName}`,
+                        email: trade.userId.email
+                    },
+                    type: trade.fromCoin === 'USD' ? 'normal' : 'arbitrage',
+                    amount: trade.amount,
+                    profit: trade.toAmount - trade.amount,
+                    status: trade.status,
+                    date: trade.createdAt
+                })),
+                totalPages: Math.ceil(total / parseInt(limit))
+            }
         });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Server error fetching trades' });
     }
 });
-
+// Add to server.js
 app.get('/api/v1/admin/transactions', authenticateAdmin, async (req, res) => {
     try {
         const { userId, type, status, currency, limit = 10, offset = 0 } = req.query;
@@ -1998,10 +2011,22 @@ app.get('/api/v1/admin/transactions', authenticateAdmin, async (req, res) => {
         const total = await Transaction.countDocuments(query);
 
         res.json({
-            transactions,
-            total,
-            limit: parseInt(limit),
-            offset: parseInt(offset)
+            data: {
+                transactions: transactions.map(tx => ({
+                    _id: tx._id,
+                    user: {
+                        _id: tx.userId._id,
+                        fullName: `${tx.userId.firstName} ${tx.userId.lastName}`,
+                        email: tx.userId.email
+                    },
+                    type: tx.type,
+                    amount: tx.amount,
+                    currency: tx.currency,
+                    status: tx.status,
+                    date: tx.createdAt
+                })),
+                totalPages: Math.ceil(total / parseInt(limit))
+            }
         });
     } catch (err) {
         console.error(err);
@@ -2084,6 +2109,66 @@ app.get('/api/v1/admin/tickets', authenticateAdmin, async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Server error fetching tickets' });
+    }
+});
+
+// Add to server.js
+app.post('/api/v1/admin/transactions', authenticateAdmin, async (req, res) => {
+    try {
+        const { userId, type, amount, currency, description } = req.body;
+
+        // Validate input
+        if (!userId || !type || !amount || !currency) {
+            return res.status(400).json({ error: 'User ID, type, amount, and currency are required' });
+        }
+
+        // Check if user exists
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Create transaction
+        const transaction = await Transaction.create({
+            userId,
+            type,
+            amount,
+            currency,
+            description,
+            status: 'completed'
+        });
+
+        // Update user balance if needed
+        if (type === 'deposit') {
+            await User.findByIdAndUpdate(userId, { $inc: { balance: amount } });
+        } else if (type === 'withdrawal') {
+            await User.findByIdAndUpdate(userId, { $inc: { balance: -amount } });
+        }
+
+        // Log the action
+        await logAction(req.admin._id, 'transaction_created_by_admin', { 
+            transactionId: transaction._id,
+            userId,
+            amount,
+            currency
+        });
+
+        res.status(201).json({
+            message: 'Transaction created successfully',
+            data: {
+                transaction
+            }
+        });
+    } catch (err) {
+        console.error('Error creating transaction:', err);
+        
+        // Handle validation errors
+        if (err.name === 'ValidationError') {
+            const errors = Object.values(err.errors).map(el => el.message);
+            return res.status(400).json({ error: errors.join(', ') });
+        }
+        
+        res.status(500).json({ error: 'Server error creating transaction' });
     }
 });
 
