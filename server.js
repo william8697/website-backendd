@@ -12,6 +12,7 @@ const WebSocket = require('ws');
 const nodemailer = require('nodemailer');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
+const UAParser = require('ua-parser-js');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
@@ -369,6 +370,47 @@ adminWss.on('connection', (ws, req) => {
         ws.close(1008, 'Invalid token');
     }
 });
+
+// Add these near your other helper functions (around line 300)
+async function getLocationInfo(ip) {
+    try {
+        // For local testing or when IP is not available
+        if (ip === '::1' || ip === '127.0.0.1') {
+            return {
+                ip: '127.0.0.1',
+                country: 'Localhost',
+                city: 'Local Network'
+            };
+        }
+
+        const response = await fetch(`https://ipinfo.io/${ip}?token=${process.env.IPINFO_TOKEN || 'your_ipinfo_token'}`);
+        if (!response.ok) throw new Error('Failed to fetch location');
+        return await response.json();
+    } catch (err) {
+        console.error('Error fetching location:', err);
+        return {
+            ip,
+            country: 'Unknown',
+            city: 'Unknown'
+        };
+    }
+}
+
+function parseUserAgent(userAgent) {
+    const parser = new UAParser(userAgent);
+    const result = parser.getResult();
+    
+    return {
+        browser: result.browser.name || 'Unknown',
+        browserVersion: result.browser.version || 'Unknown',
+        os: result.os.name || 'Unknown',
+        osVersion: result.os.version || 'Unknown',
+        device: result.device.model || result.device.type || 'Desktop',
+        deviceType: result.device.type || 'desktop',
+        cpu: result.cpu.architecture || 'Unknown'
+    };
+}
+
 // Helper Functions
 function generateApiKey() {
     return crypto.randomBytes(32).toString('hex');
@@ -962,17 +1004,29 @@ app.post('/api/v1/admin/login', async (req, res) => {
         const { email, password } = req.body;
 
         if (!email || !password) {
-            return res.status(400).json({ error: 'Email and password are required' });
+            return res.status(400).json({ 
+                success: false,
+                error: 'Email and password are required',
+                code: 'MISSING_CREDENTIALS'
+            });
         }
 
         const admin = await Admin.findOne({ email });
         if (!admin) {
-            return res.status(401).json({ error: 'Invalid credentials' });
+            return res.status(401).json({ 
+                success: false,
+                error: 'Invalid credentials',
+                code: 'INVALID_CREDENTIALS'
+            });
         }
 
         const isMatch = await bcrypt.compare(password, admin.password);
         if (!isMatch) {
-            return res.status(401).json({ error: 'Invalid credentials' });
+            return res.status(401).json({ 
+                success: false,
+                error: 'Invalid credentials',
+                code: 'INVALID_CREDENTIALS'
+            });
         }
 
         const token = jwt.sign({ 
@@ -983,23 +1037,38 @@ app.post('/api/v1/admin/login', async (req, res) => {
         }, JWT_SECRET, { expiresIn: '7d' });
 
         await Admin.updateOne({ _id: admin._id }, { $set: { lastLogin: new Date() } });
-        await logAction(admin._id, 'admin_login', { ipAddress: req.ip });
+        
+        // Enhanced login logging with device info
+        const userAgent = req.headers['user-agent'] || 'Unknown';
+        const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+        
+        await logAction(admin._id, 'admin_login', { 
+            ipAddress: ip,
+            userAgent,
+            deviceInfo: parseUserAgent(userAgent),
+            location: await getLocationInfo(ip)
+        });
 
-        // Modified response structure to match frontend expectations
         res.json({
+            success: true,
             message: 'Admin login successful',
             token,
             data: {
                 admin: {
                     id: admin._id,
                     email: admin.email,
-                    permissions: admin.permissions
+                    permissions: admin.permissions,
+                    lastLogin: admin.lastLogin
                 }
             }
         });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Server error during admin login' });
+        console.error('Admin login error:', err);
+        res.status(500).json({ 
+            success: false,
+            error: 'Server error during admin login',
+            code: 'SERVER_ERROR'
+        });
     }
 });
 app.get('/api/v1/admin/verify', authenticateAdmin, async (req, res) => {
