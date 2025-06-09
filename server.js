@@ -39,11 +39,11 @@ const transporter = nodemailer.createTransport({
 // Security Middleware
 app.use(helmet());
 app.use(cors({
-    origin: ['https://website-xi-ten-52.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
+    origin: ['https://website-7t25.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
     credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],    
-    exposedHeaders: ['Content-Disposition'], // Add this for file downloads
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-HTTP-Method-Override', 'Accept'],
+    exposedHeaders: ['Content-Disposition']
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -448,6 +448,8 @@ app.use(express.json({
     },
     limit: '10kb'
 }));
+
+app.options('*', cors());
 
 // API Routes
 
