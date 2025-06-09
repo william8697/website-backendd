@@ -183,7 +183,17 @@ const SystemLogSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     ipAddress: String,
     userAgent: String,
-    metadata: mongoose.Schema.Types.Mixed,
+    metadata: {
+        deviceType: String,
+        os: String,
+        browser: String,
+        deviceModel: String,
+        country: String,
+        city: String,
+        region: String,
+        timezone: String,
+        coordinates: [Number]
+    },
     createdAt: { type: Date, default: Date.now }
 });
 
@@ -391,15 +401,54 @@ function notifyAdmins(message) {
 }
 
 async function logAction(userId, action, metadata = {}) {
-    await SystemLog.create({
-        action,
-        userId,
-        ipAddress: metadata.ipAddress || '',
-        userAgent: metadata.userAgent || '',
-        metadata
-    });
-}
+    try {
+        // Parse user agent if available
+        let deviceInfo = {};
+        if (metadata.userAgent) {
+            const parser = new UAParser(metadata.userAgent);
+            const result = parser.getResult();
+            deviceInfo = {
+                deviceType: result.device.type || 'desktop',
+                os: result.os.name || 'Unknown OS',
+                browser: result.browser.name || 'Unknown Browser',
+                deviceModel: result.device.model || 'Unknown Device'
+            };
+        }
 
+        // Get location info if IP is available
+        let locationInfo = {};
+        if (metadata.ipAddress && metadata.ipAddress !== '::1' && metadata.ipAddress !== '127.0.0.1') {
+            try {
+                const response = await fetch(`https://ipinfo.io/${metadata.ipAddress}?token=${process.env.IPINFO_TOKEN}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    locationInfo = {
+                        country: data.country,
+                        city: data.city,
+                        region: data.region,
+                        timezone: data.timezone,
+                        coordinates: data.loc ? data.loc.split(',').map(Number) : null
+                    };
+                }
+            } catch (err) {
+                console.error('Error fetching location:', err);
+            }
+        }
+
+        await SystemLog.create({
+            action,
+            userId,
+            ipAddress: metadata.ipAddress || '',
+            userAgent: metadata.userAgent || '',
+            metadata: {
+                ...deviceInfo,
+                ...locationInfo
+            }
+        });
+    } catch (err) {
+        console.error('Error logging action:', err);
+    }
+}
 // Authentication Middleware
 async function authenticate(req, res, next) {
     const token = req.headers.authorization?.split(' ')[1] || req.cookies?.token;
@@ -2069,6 +2118,7 @@ app.put('/api/v1/admin/kyc/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
+// Update the logs endpoint in server.js
 app.get('/api/v1/admin/logs', authenticateAdmin, async (req, res) => {
     try {
         const { action, userId, limit = 10, offset = 0 } = req.query;
@@ -2081,22 +2131,72 @@ app.get('/api/v1/admin/logs', authenticateAdmin, async (req, res) => {
             .sort({ createdAt: -1 })
             .skip(parseInt(offset))
             .limit(parseInt(limit))
-            .populate('userId', 'email firstName lastName');
+            .populate('userId', 'email firstName lastName')
+            .lean();
 
-        const total = await SystemLog.countDocuments(query);
+        // Enhanced logging with device and location info
+        const enhancedLogs = logs.map(log => {
+            const metadata = log.metadata || {};
+            return {
+                ...log,
+                device: metadata.userAgent ? parseUserAgent(metadata.userAgent) : null,
+                location: metadata.ipAddress ? await getLocationInfo(metadata.ipAddress) : null,
+                timestamp: log.createdAt
+            };
+        });
 
         res.json({
-            logs,
-            total,
-            limit: parseInt(limit),
-            offset: parseInt(offset)
+            success: true,
+            data: {
+                logs: enhancedLogs,
+                total: await SystemLog.countDocuments(query)
+            }
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Server error fetching logs' });
+        res.status(500).json({ 
+            success: false,
+            error: 'Server error fetching logs' 
+        });
     }
 });
 
+// Helper function to parse user agent
+function parseUserAgent(userAgent) {
+    const parser = new UAParser(userAgent);
+    const result = parser.getResult();
+    
+    return {
+        type: result.device.type || 'desktop',
+        os: result.os.name ? `${result.os.name} ${result.os.version || ''}`.trim() : 'Unknown OS',
+        browser: result.browser.name ? `${result.browser.name} ${result.browser.version || ''}`.trim() : 'Unknown Browser',
+        deviceModel: result.device.model || 'Unknown Device'
+    };
+}
+
+// Helper function to get location info
+async function getLocationInfo(ipAddress) {
+    try {
+        if (ipAddress === '::1' || ipAddress === '127.0.0.1') {
+            return { country: 'Localhost', city: 'Local' };
+        }
+        
+        const response = await fetch(`https://ipinfo.io/${ipAddress}?token=${process.env.IPINFO_TOKEN}`);
+        if (!response.ok) return null;
+        
+        const data = await response.json();
+        return {
+            country: data.country || 'Unknown',
+            city: data.city || 'Unknown',
+            region: data.region || 'Unknown',
+            timezone: data.timezone || 'Unknown',
+            coordinates: data.loc ? data.loc.split(',') : null
+        };
+    } catch (err) {
+        console.error('Error fetching location:', err);
+        return null;
+    }
+}
 app.post('/api/v1/admin/broadcast', authenticateAdmin, async (req, res) => {
     try {
         const { message } = req.body;
