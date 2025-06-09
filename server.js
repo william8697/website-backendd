@@ -999,6 +999,68 @@ balance: user.balance,
   });
 });
 // Admin Authentication Routes
+// Add this to your server.js
+app.post('/api/v1/admin/users', authenticateAdmin, async (req, res) => {
+    try {
+        const { fullName, email, password, country, walletAddress, balance, status } = req.body;
+
+        // Validate input
+        if (!fullName || !email || !password || !country) {
+            return res.status(400).json({ error: 'Full name, email, password, and country are required' });
+        }
+
+        // Check if email already exists
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(400).json({ error: 'Email already in use' });
+        }
+
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Split full name into first and last names
+        const nameParts = fullName.split(' ');
+        const firstName = nameParts[0];
+        const lastName = nameParts.slice(1).join(' ') || 'User';
+
+        // Create new user
+        const user = await User.create({
+            firstName,
+            lastName,
+            email,
+            password: hashedPassword,
+            country,
+            walletAddress,
+            balance: balance || 0,
+            status: status || 'active',
+            kycStatus: 'approved' // Admin-created users are auto-verified
+        });
+
+        // Log the action
+        await logAction(req.admin._id, 'user_created_by_admin', { userId: user._id });
+
+        // Return the created user (without password)
+        const userResponse = user.toObject();
+        delete userResponse.password;
+
+        res.status(201).json({
+            message: 'User created successfully',
+            data: {
+                user: userResponse
+            }
+        });
+    } catch (err) {
+        console.error('Error creating user:', err);
+        
+        // Handle validation errors
+        if (err.name === 'ValidationError') {
+            const errors = Object.values(err.errors).map(el => el.message);
+            return res.status(400).json({ error: errors.join(', ') });
+        }
+        
+        res.status(500).json({ error: 'Server error creating user' });
+    }
+});
 app.post('/api/v1/admin/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -1807,6 +1869,7 @@ app.get('/api/v1/admin/users', authenticateAdmin, async (req, res) => {
     }
 });
 
+// Add this to your server.js
 app.get('/api/v1/admin/users/:id', authenticateAdmin, async (req, res) => {
     try {
         const user = await User.findById(req.params.id).select('-password');
@@ -1814,15 +1877,33 @@ app.get('/api/v1/admin/users/:id', authenticateAdmin, async (req, res) => {
             return res.status(404).json({ error: 'User not found' });
         }
 
-        const trades = await Trade.find({ userId: user._id }).sort({ createdAt: -1 }).limit(10);
-        const transactions = await Transaction.find({ userId: user._id }).sort({ createdAt: -1 }).limit(10);
-        const tickets = await SupportTicket.find({ userId: user._id }).sort({ createdAt: -1 }).limit(5);
+        // Get user activities
+        const activities = await SystemLog.find({ userId: user._id })
+            .sort({ createdAt: -1 })
+            .limit(5);
 
+        // Format response to match frontend expectations
         res.json({
-            user,
-            recentTrades: trades,
-            recentTransactions: transactions,
-            recentTickets: tickets
+            data: {
+                user: {
+                    _id: user._id,
+                    fullName: `${user.firstName} ${user.lastName}`,
+                    email: user.email,
+                    walletAddress: user.walletAddress,
+                    country: user.country,
+                    balance: user.balance,
+                    status: user.status,
+                    kycStatus: user.kycStatus,
+                    lastLogin: user.lastLogin,
+                    createdAt: user.createdAt
+                },
+                activities: activities.map(activity => ({
+                    description: activity.action,
+                    type: activity.action.split('_')[0],
+                    ipAddress: activity.ipAddress,
+                    timestamp: activity.createdAt
+                }))
+            }
         });
     } catch (err) {
         console.error(err);
