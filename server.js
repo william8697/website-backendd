@@ -14,7 +14,7 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const UAParser = require('ua-parser-js');
 const crypto = require('crypto');
-const { Parser } = require('json2csv'); 
+const { Parser } = require('@json2csv/plainjs');  
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
