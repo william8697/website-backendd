@@ -1846,8 +1846,8 @@ app.get('/api/v1/admin/users/export', authenticateAdmin, async (req, res) => {
             { label: 'Created At', value: 'createdAt' }
         ];
 
-        const json2csvParser = new Parser({ fields });
-        const csv = json2csvParser.parse(users);
+        const @json2csv/plainjsParser = new Parser({ fields });
+        const csv = @json2csv/plainjsParser.parse(users);
 
         // Set response headers
         res.setHeader('Content-Type', 'text/csv');
