@@ -1,4 +1,4 @@
-require('dotenv').config();
+ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
@@ -16,6 +16,8 @@ const UAParser = require('ua-parser-js');
 const crypto = require('crypto');
 const { Parser } = require('@json2csv/plainjs');  
 const { v4: uuidv4 } = require('uuid');
+
+const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = '17581758Na.%';
 const DEPOSIT_ADDRESS = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
@@ -35,8 +37,6 @@ const transporter = nodemailer.createTransport({
         pass: '6c08aa4f2c679a'
     }
 });
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
 // Security Middleware
 app.use(helmet());
@@ -47,6 +47,10 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-HTTP-Method-Override', 'Accept'],
     exposedHeaders: ['Content-Disposition']
 }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+
 // Add this with your other middleware
 app.use((req, res, next) => {
   // Check for token in cookies, authorization header, or query string
@@ -65,7 +69,6 @@ app.use((req, res, next) => {
   }
   next();
 });
-
 // Rate Limiting
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
