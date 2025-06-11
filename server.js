@@ -16,8 +16,6 @@ const UAParser = require('ua-parser-js');
 const crypto = require('crypto');
 const { Parser } = require('@json2csv/plainjs');  
 const { v4: uuidv4 } = require('uuid');
-const LOGO_URL = 'https://www.dropbox.com/scl/fi/uetnfwoe05357p3alf8bx/WhatsApp-Image-2025-06-11-at-07.49.46_3b634219.jpg?rlkey=fj3gr8kjgpp7chjv2fqb3b8qx&raw=1';
-const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = '17581758Na.%';
 const DEPOSIT_ADDRESS = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
@@ -1496,15 +1494,6 @@ app.get('/api/v1/wallet/transactions', authenticate, async (req, res) => {
         res.status(500).json({ error: 'Server error fetching transactions' });
     }
 });
-
-// Platform Logo Endpoint
-app.get('/api/v1/platform/logo', (req, res) => {
-  res.json({
-    logoUrl: LOGO_URL,
-    updatedAt: new Date().toISOString()
-  });
-});
-
 // Trading Routes
 app.get('/api/v1/exchange/coins', async (req, res) => {
     try {
