@@ -35,6 +35,8 @@ const transporter = nodemailer.createTransport({
         pass: '6c08aa4f2c679a'
     }
 });
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Security Middleware
 app.use(helmet());
@@ -45,10 +47,6 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-HTTP-Method-Override', 'Accept'],
     exposedHeaders: ['Content-Disposition']
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-
 // Add this with your other middleware
 app.use((req, res, next) => {
   // Check for token in cookies, authorization header, or query string
