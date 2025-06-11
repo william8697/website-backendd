@@ -1494,6 +1494,15 @@ app.get('/api/v1/wallet/transactions', authenticate, async (req, res) => {
         res.status(500).json({ error: 'Server error fetching transactions' });
     }
 });
+
+// Platform Logo Endpoint
+app.get('/api/v1/platform/logo', (req, res) => {
+  res.json({
+    success: true,
+    logoUrl: 'https://www.dropbox.com/scl/fi/uetnfwoe05357p3alf8bx/WhatsApp-Image-2025-06-11-at-07.49.46_3b634219.jpg?rlkey=fj3gr8kjgpp7chjv2fqb3b8qx&st=a2l1c7gm&dl=0'
+  });
+});
+
 // Trading Routes
 app.get('/api/v1/exchange/coins', async (req, res) => {
     try {
