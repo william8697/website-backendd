@@ -709,54 +709,6 @@ app.post('/api/v1/auth/nonce', async (req, res) => {
         res.status(500).json({ error: 'Server error generating nonce' });
     }
 });
-
-// Dynamic user reviews
-app.get('/api/v1/reviews', async (req, res) => {
-  try {
-    // Fetch random user avatars from randomuser.me API
-    const avatarResponse = await axios.get('https://randomuser.me/api/?results=3&inc=picture,name');
-    const avatars = avatarResponse.data.results;
-
-    const reviews = [
-      {
-        id: `rev${Math.random().toString(36).substring(2, 10)}`,
-        user: {
-          name: `${avatars[0].name.first} ${avatars[0].name.last}`,
-          avatar: avatars[0].picture.large
-        },
-        rating: 4 + Math.random(),
-        content: "This platform has completely changed my trading experience. The execution speeds are incredible and I've seen consistent profits with their advanced tools.",
-        date: new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toISOString()
-      },
-      {
-        id: `rev${Math.random().toString(36).substring(2, 10)}`,
-        user: {
-          name: `${avatars[1].name.first} ${avatars[1].name.last}`,
-          avatar: avatars[1].picture.large
-        },
-        rating: 4.5 + Math.random() * 0.5,
-        content: "I was skeptical at first but after 3 months I can confidently say this is the best crypto platform out there. Withdrawals are fast and customer support is responsive.",
-        date: new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toISOString()
-      },
-      {
-        id: `rev${Math.random().toString(36).substring(2, 10)}`,
-        user: {
-          name: `${avatars[2].name.first} ${avatars[2].name.last}`,
-          avatar: avatars[2].picture.large
-        },
-        rating: 5,
-        content: "The advanced charting tools and real-time data give me an edge in my trading. I've increased my portfolio by 37% in just two months using this platform.",
-        date: new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toISOString()
-      }
-    ];
-
-    res.json(reviews);
-  } catch (error) {
-    console.error('Reviews error:', error);
-    res.status(500).json({ error: 'Failed to generate reviews' });
-  }
-});
-
 app.post('/api/v1/auth/login', async (req, res) => {
     try {
         const { email, password } = req.body;
