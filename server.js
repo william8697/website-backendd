@@ -574,64 +574,54 @@ app.options('*', cors());
 
 
 // Add this to your server.js in the API routes section
-let startTime = Date.now(); // Track when server started for dynamic counts
-
-// ======================
-// WITHDRAWALS ENDPOINTS
-// ======================
-
-// Store recent withdrawals in memory (in a real app, use a database)
+// Initialize when server starts
 let recentWithdrawals = [];
 
-// Generate initial withdrawals
 function initializeWithdrawals() {
-  recentWithdrawals = generateWithdrawals(50); // Start with 50 withdrawals
-  // Update withdrawals every second
+  // Generate initial withdrawals
+  for (let i = 0; i < 50; i++) {
+    recentWithdrawals.push(generateWithdrawal());
+  }
+  
+  // Add new withdrawal every second
   setInterval(() => {
-    const newWithdrawal = generateWithdrawals(1)[0];
-    recentWithdrawals.unshift(newWithdrawal);
-    // Keep only the last 100 withdrawals
-    if (recentWithdrawals.length > 100) {
-      recentWithdrawals.pop();
-    }
+    recentWithdrawals.unshift(generateWithdrawal());
+    if (recentWithdrawals.length > 100) recentWithdrawals.pop();
   }, 1000);
 }
 
-// Generate realistic withdrawal transactions
-function generateWithdrawals(count) {
-  const coins = ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA', 'DOGE', 'DOT', 'LTC'];
-  const withdrawals = [];
+function generateWithdrawal() {
+  const coins = ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA'];
+  const coin = coins[Math.floor(Math.random() * coins.length)];
+  const amount = parseFloat((Math.random() * 7.8368).toFixed(4)); // Ensure number type
   
-  for (let i = 0; i < count; i++) {
-    const coin = coins[Math.floor(Math.random() * coins.length)];
-    const amount = (Math.random() * 7.8368).toFixed(4); // Max 7.8368 as requested
-    const userId = `nHc1qf${Math.random().toString(36).substring(2, 6)}****${Math.random().toString(36).substring(2, 6)}`;
-    
-    withdrawals.push({
-      id: `wd_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-      user: userId,
-      amount: parseFloat(amount),
-      asset: coin,
-      timestamp: new Date()
-    });
-  }
-  
-  return withdrawals;
+  return {
+    id: `wd_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+    user: `nHc1qf${Math.random().toString(36).substring(2, 6)}****${Math.random().toString(36).substring(2, 6)}`,
+    amount: amount,
+    asset: coin,
+    timestamp: new Date().toISOString()
+  };
 }
 
-// Dynamic withdrawals feed (max 7.8368 per transaction)
+// Initialize when server starts
+initializeWithdrawals();
+
+// Withdrawals endpoint
 app.get('/api/v1/withdrawals', async (req, res) => {
   try {
-    // Get the most recent withdrawals (default 5)
     const limit = parseInt(req.query.limit) || 5;
-    const withdrawals = recentWithdrawals.slice(0, limit);
+    const withdrawals = recentWithdrawals.slice(0, limit).map(w => ({
+      ...w,
+      amount: parseFloat(w.amount.toFixed(8)) // Ensure proper number formatting
+    }));
     
     res.json({
       success: true,
       data: withdrawals
     });
   } catch (error) {
-    console.error('Withdrawals error:', error);
+    console.error('Withdrawals endpoint error:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to load withdrawals',
@@ -639,9 +629,6 @@ app.get('/api/v1/withdrawals', async (req, res) => {
     });
   }
 });
-
-// Initialize withdrawals when server starts
-initializeWithdrawals();
 
 // API Routes
 
