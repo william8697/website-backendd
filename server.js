@@ -306,7 +306,7 @@ const storage = multer.diskStorage({
 });
 
 /**
- * Enhanced Logo Endpoint with CORS, Cache Control, and Multiple Formats
+ * Enhanced Logo Endpoint with CORS and Cache Control
  */
 app.get('/api/v1/platform/logo', (req, res) => {
   try {
@@ -322,11 +322,11 @@ app.get('/api/v1/platform/logo', (req, res) => {
     const response = {
       success: true,
       data: {
-        default: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&dl=1',
-        circular: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&dl=1',
+        default: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=0giw8txx&dl=0',
+        circular: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=0giw8txx&dl=0',
         versions: {
-          light: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&dl=1',
-          dark: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&dl=1'
+          light: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=0giw8txx&dl=0',
+          dark: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=0giw8txx&dl=0'
         },
         styling: {
           circular: true,
@@ -334,6 +334,10 @@ app.get('/api/v1/platform/logo', (req, res) => {
             width: '2px',
             color: 'transparent',
             hoverColor: 'rgba(255,255,255,0.2)'
+          },
+          dimensions: {
+            width: '40px',
+            height: '40px'
           }
         }
       },
@@ -356,6 +360,8 @@ app.get('/api/v1/platform/logo', (req, res) => {
       }
     });
   }
+});
+
 });
 
 const upload = multer({ 
