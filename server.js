@@ -306,7 +306,7 @@ const storage = multer.diskStorage({
 });
 
 /**
- * Enhanced Logo Endpoint with CORS and Cache Control
+ * Enhanced Logo Endpoint with CORS, Cache Control, and Multiple Formats
  */
 app.get('/api/v1/platform/logo', (req, res) => {
   try {
@@ -318,15 +318,15 @@ app.get('/api/v1/platform/logo', (req, res) => {
     res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
     res.setHeader('Last-Modified', 'Wed, 11 Jun 2025 18:44:15 GMT');
     
-    // Response with multiple logo versions
+    // Response with multiple logo versions and styling instructions
     const response = {
       success: true,
       data: {
-        default: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0',
-        circular: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0', // Same URL but will be styled
+        default: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&dl=1',
+        circular: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&dl=1',
         versions: {
-          light: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0',
-          dark: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0'
+          light: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&dl=1',
+          dark: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&dl=1'
         },
         styling: {
           circular: true,
