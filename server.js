@@ -580,32 +580,6 @@ function generateWithdrawal() {
   };
 }
 
-// Initialize when server starts
-initializeWithdrawals();
-
-// Withdrawals endpoint
-app.get('/api/v1/withdrawals', async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 5;
-    const withdrawals = recentWithdrawals.slice(0, limit).map(w => ({
-      ...w,
-      amount: parseFloat(w.amount.toFixed(8)) // Ensure proper number formatting
-    }));
-    
-    res.json({
-      success: true,
-      data: withdrawals
-    });
-  } catch (error) {
-    console.error('Withdrawals endpoint error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to load withdrawals',
-      code: 'WITHDRAWALS_ERROR'
-    });
-  }
-});
-
 // API Routes
 
 // Authentication Routes
@@ -2958,20 +2932,97 @@ function getTotalTradersCount() {
   return totalTradersBase + Math.floor(newTraders);
 }
 
-// ======================
-// WITHDRAWALS ENDPOINTS
-// ======================
+// Add this near the top with other constants
+const WITHDRAWAL_RANGE = {
+  BTC: { min: 0.0035, max: 7.8368 },
+  ETH: { min: 0.035, max: 78.368 },
+  USDT: { min: 100, max: 50000 },
+  BNB: { min: 0.5, max: 1000 },
+  XRP: { min: 100, max: 50000 },
+  SOL: { min: 1, max: 5000 },
+  ADA: { min: 100, max: 50000 }
+};
 
-// Dynamic withdrawals feed (max 7.8368 per transaction)
+// Initialize withdrawals data
+let withdrawalHistory = [];
+let lastWithdrawalUpdate = Date.now();
+
+// Function to generate a new withdrawal
+function generateWithdrawal() {
+  const coins = Object.keys(WITHDRAWAL_RANGE);
+  const coin = coins[Math.floor(Math.random() * coins.length)];
+  const range = WITHDRAWAL_RANGE[coin];
+  
+  // Generate random amount within range
+  const amount = parseFloat((range.min + Math.random() * (range.max - range.min)).toFixed(8);
+  
+  // Generate random user ID with masking
+  const prefix = Math.random().toString(36).substring(2, 6);
+  const suffix = Math.random().toString(36).substring(2, 6);
+  const userId = `nHc1qf${prefix}****${suffix}`;
+  
+  return {
+    id: `wd_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+    userId: userId,
+    amount: parseFloat(amount),
+    coin: coin,
+    timestamp: new Date().toISOString(),
+    status: 'completed',
+    txHash: `0x${crypto.randomBytes(16).toString('hex')}`
+  };
+}
+
+// Update withdrawals every second
+function updateWithdrawals() {
+  const now = Date.now();
+  
+  // Add new withdrawal every second
+  if (now - lastWithdrawalUpdate >= 1000) {
+    const newWithdrawal = generateWithdrawal();
+    withdrawalHistory.unshift(newWithdrawal);
+    
+    // Keep only the last 100 withdrawals
+    if (withdrawalHistory.length > 100) {
+      withdrawalHistory.pop();
+    }
+    
+    lastWithdrawalUpdate = now;
+    
+    // Broadcast to connected clients
+    if (wss) {
+      wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({
+            type: 'NEW_WITHDRAWAL',
+            withdrawal: newWithdrawal
+          }));
+        }
+      });
+    }
+  }
+  
+  // Schedule next update
+  setTimeout(updateWithdrawals, 1000 - (Date.now() - lastWithdrawalUpdate));
+}
+
+// Start the withdrawal updates
+updateWithdrawals();
+
+// Withdrawals endpoint
 app.get('/api/v1/withdrawals', async (req, res) => {
   try {
-    const withdrawals = generateWithdrawals(5); // Generate 5 recent withdrawals
+    const limit = parseInt(req.query.limit) || 5;
+    const withdrawals = withdrawalHistory.slice(0, limit).map(w => ({
+      ...w,
+      amount: parseFloat(w.amount.toFixed(8)) // Ensure proper number formatting
+    }));
+    
     res.json({
       success: true,
       data: withdrawals
     });
   } catch (error) {
-    console.error('Withdrawals error:', error);
+    console.error('Withdrawals endpoint error:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to load withdrawals',
@@ -2979,27 +3030,6 @@ app.get('/api/v1/withdrawals', async (req, res) => {
     });
   }
 });
-
-// Generate realistic withdrawal transactions
-function generateWithdrawals(count) {
-  const coins = ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA'];
-  const withdrawals = [];
-  
-  for (let i = 0; i < count; i++) {
-    const coin = coins[Math.floor(Math.random() * coins.length)];
-    const amount = (Math.random() * 7.8368).toFixed(4);
-    const userId = `nHc1qf${Math.random().toString(36).substring(2, 6)}***${Math.random().toString(36).substring(2, 6)}`;
-    
-    withdrawals.push({
-      user: userId,
-      amount: amount,
-      asset: coin,
-      timestamp: new Date(Date.now() - Math.random() * 24 * 60 * 60 * 1000)
-    });
-  }
-  
-  return withdrawals;
-}
 
 // ======================
 // REVIEWS ENDPOINTS
