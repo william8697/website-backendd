@@ -342,7 +342,7 @@ app.get('/api/v1/platform/logo', (req, res) => {
     res.setHeader('Last-Modified', 'Wed, 11 Jun 2025 18:44:15 GMT');
     
     // Correct Dropbox URL format (using raw=1 to get direct image)
-    const logoUrl = 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&raw=1';
+    const logoUrl = 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&raw=0';
     
     // Response with CDN-ready URL
     const response = {
