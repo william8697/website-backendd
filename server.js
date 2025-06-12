@@ -307,12 +307,22 @@ const storage = multer.diskStorage({
 
 // Platform Logo Endpoint
 app.get('/api/v1/platform/logo', (req, res) => {
-  res.json({
-    success: true,
-    logoUrl: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0'
-  });
+  try {
+    res.json({
+      success: true,
+      logoUrl: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0',
+      updatedAt: new Date().toISOString(),
+      message: 'Platform logo retrieved successfully'
+    });
+  } catch (err) {
+    console.error('Error fetching platform logo:', err);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch platform logo',
+      code: 'LOGO_FETCH_ERROR'
+    });
+  }
 });
-
 const upload = multer({ 
     storage: storage,
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB
