@@ -572,159 +572,53 @@ app.use(express.json({
 
 app.options('*', cors());
 
-// Initialize withdrawals data
-let withdrawalsHistory = [];
-let lastWithdrawalUpdate = Date.now();
 
-// Function to generate random withdrawals
-function generateRandomWithdrawal() {
-  const coins = ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA'];
-  const coin = coins[Math.floor(Math.random() * coins.length)];
-  
-  // Generate amount between 0.0035 and 7.8368
-  const amount = (Math.random() * (7.8368 - 0.0035) + 0.0035).toFixed(4);
-  
-  // Generate random user ID with masking
-  const userIdPrefix = 'nHc1qf';
-  const userIdSuffix = '78uf9k';
-  const randomMiddle1 = Math.random().toString(36).substring(2, 6);
-  const randomMiddle2 = Math.random().toString(36).substring(2, 6);
-  const userId = `${userIdPrefix}${randomMiddle1}****${randomMiddle2}****${userIdSuffix}`;
-  
-  return {
-    id: `wd_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-    userId: userId,
-    amount: parseFloat(amount),
-    coin: coin,
-    timestamp: new Date().toISOString(),
-    status: 'completed'
-  };
-}
+// Add this to your server.js in the API routes section
+// Initialize when server starts
+let recentWithdrawals = [];
 
-// Update withdrawals every second
-setInterval(() => {
-  const newWithdrawal = generateRandomWithdrawal();
-  withdrawalsHistory.unshift(newWithdrawal);
-  
-  // Keep only the last 100 withdrawals
-  if (withdrawalsHistory.length > 100) {
-    withdrawalsHistory.pop();
+function initializeWithdrawals() {
+  // Generate initial withdrawals
+  for (let i = 0; i < 50; i++) {
+    recentWithdrawals.push(generateWithdrawal());
   }
   
-  lastWithdrawalUpdate = Date.now();
-}, 1000);
-
-// Withdrawals endpoint
-// Add this near the top with other constants
-const MIN_WITHDRAWAL = 0.0035; // Minimum BTC equivalent
-const MAX_WITHDRAWAL = 7.8368; // Maximum BTC equivalent
-const BTC_EQUIVALENTS = {
-  BTC: 1,
-  ETH: 16.5, // Example: 1 ETH = 0.0606 BTC (adjust based on current rates)
-  USDT: 0.000025, // Example: 1 USDT = 0.000025 BTC (adjust based on current rates)
-  BNB: 0.08,
-  XRP: 0.0001,
-  SOL: 0.004,
-  ADA: 0.00005
-};
-
-// Initialize withdrawal tracking
-let withdrawalHistory = [];
-// Function to generate a realistic withdrawal
-function generateWithdrawal() {
-  const coins = Object.keys(BTC_EQUIVALENTS);
-  const coin = coins[Math.floor(Math.random() * coins.length)];
-  
-  // Generate amount in BTC equivalent first to enforce limits
-  const btcAmount = MIN_WITHDRAWAL + Math.random() * (MAX_WITHDRAWAL - MIN_WITHDRAWAL);
-  
-  // Convert to the selected coin's amount
-  const amount = btcAmount / BTC_EQUIVALENTS[coin];
-  
-  // Format based on coin type (more decimals for BTC, less for others)
-  let formattedAmount;
-  if (coin === 'BTC' || coin === 'ETH') {
-    formattedAmount = amount.toFixed(6);
-  } else {
-    formattedAmount = amount.toFixed(coin === 'USDT' ? 2 : 4);
-  }
-  
-  // Generate realistic user ID with masking
-  const userId = `nHc1q${Math.random().toString(36).substring(2, 6)}****${Math.random().toString(36).substring(2, 6)}`;
-  
-  return {
-    id: `wd_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-    userId: userId,
-    amount: parseFloat(formattedAmount),
-    asset: coin,
-    timestamp: new Date().toISOString(),
-    btcEquivalent: btcAmount.toFixed(6)
-  };
-}
-
-// Background process to keep adding withdrawals
-function startWithdrawalGeneration() {
+  // Add new withdrawal every second
   setInterval(() => {
-    const now = Date.now();
-    
-    // Add new withdrawals at random intervals (average 1 per second)
-    if (Math.random() < 0.3 || withdrawalHistory.length < 5) {
-      const newWithdrawal = generateWithdrawal();
-      withdrawalHistory.unshift(newWithdrawal);
-      
-      // Keep history manageable
-      if (withdrawalHistory.length > 100) {
-        withdrawalHistory.pop();
-      }
-      
-      lastWithdrawalUpdate = now;
-    }
-    
-    // Notify connected clients of new withdrawals
-    if (withdrawalHistory.length > 0) {
-      notifyWithdrawalUpdate();
-    }
+    recentWithdrawals.unshift(generateWithdrawal());
+    if (recentWithdrawals.length > 100) recentWithdrawals.pop();
   }, 1000);
 }
 
-// Notify all connected clients about new withdrawals
-function notifyWithdrawalUpdate() {
-  const latestWithdrawals = withdrawalHistory.slice(0, 5);
-  const message = {
-    type: 'WITHDRAWAL_UPDATE',
-    withdrawals: latestWithdrawals
-  };
+function generateWithdrawal() {
+  const coins = ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA'];
+  const coin = coins[Math.floor(Math.random() * coins.length)];
+  const amount = parseFloat((Math.random() * 7.8368).toFixed(4)); // Ensure number type
   
-  // Send to all connected clients
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(message));
-    }
-  });
+  return {
+    id: `wd_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+    user: `nHc1qf${Math.random().toString(36).substring(2, 6)}****${Math.random().toString(36).substring(2, 6)}`,
+    amount: amount,
+    asset: coin,
+    timestamp: new Date().toISOString()
+  };
 }
 
-// Withdrawals endpoint with rate limiting
-const withdrawalLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 30, // limit each IP to 30 requests per minute
-  message: 'Too many requests, please try again later'
-});
+// Initialize when server starts
+initializeWithdrawals();
 
-app.get('/api/v1/withdrawals', withdrawalLimiter, async (req, res) => {
+// Withdrawals endpoint
+app.get('/api/v1/withdrawals', async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 5, 20);
-    const withdrawals = withdrawalHistory.slice(0, limit).map(w => ({
+    const limit = parseInt(req.query.limit) || 5;
+    const withdrawals = recentWithdrawals.slice(0, limit).map(w => ({
       ...w,
-      // Format amounts appropriately
-      amount: w.asset === 'BTC' || w.asset === 'ETH' ? 
-        parseFloat(w.amount.toFixed(6)) : 
-        parseFloat(w.amount.toFixed(2))
+      amount: parseFloat(w.amount.toFixed(8)) // Ensure proper number formatting
     }));
     
     res.json({
       success: true,
-      data: withdrawals,
-      lastUpdated: new Date().toISOString()
+      data: withdrawals
     });
   } catch (error) {
     console.error('Withdrawals endpoint error:', error);
@@ -735,9 +629,6 @@ app.get('/api/v1/withdrawals', withdrawalLimiter, async (req, res) => {
     });
   }
 });
-
-// Start the withdrawal generation when server starts
-startWithdrawalGeneration();
 
 // API Routes
 
@@ -3506,7 +3397,6 @@ function generateReferralCode() {
 // ======================
 
 // WebSocket message handler for real-time updates
-// Modify the WebSocket server setup
 wss.on('connection', (ws, req) => {
   const token = req.url.split('token=')[1] || req.headers.cookie?.split('token=')[1]?.split(';')[0];
   
@@ -3518,13 +3408,6 @@ wss.on('connection', (ws, req) => {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     clients.set(decoded.userId, ws);
-
-    // Send initial withdrawals data
-    const initialWithdrawals = withdrawalHistory.slice(0, 5);
-    ws.send(JSON.stringify({
-      type: 'INITIAL_WITHDRAWALS',
-      withdrawals: initialWithdrawals
-    }));
 
     ws.on('message', (message) => {
       try {
@@ -3538,11 +3421,6 @@ wss.on('connection', (ws, req) => {
     ws.on('close', () => {
       clients.delete(decoded.userId);
     });
-
-  } catch (err) {
-    ws.close(1008, 'Invalid token');
-  }
-});
 
     // Send initial data
     ws.send(JSON.stringify({
@@ -3618,4 +3496,4 @@ process.on('SIGTERM', () => {
             process.exit(0);
         });
     });
-});
+}); 
