@@ -1,4 +1,4 @@
- require('dotenv').config();
+  require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
@@ -361,9 +361,6 @@ app.get('/api/v1/platform/logo', (req, res) => {
     });
   }
 });
-
-});
-
 const upload = multer({ 
     storage: storage,
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB
