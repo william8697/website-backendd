@@ -3008,28 +3008,6 @@ function updateWithdrawals() {
 // Start the withdrawal updates
 updateWithdrawals();
 
-// Withdrawals endpoint
-app.get('/api/v1/withdrawals', async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 5;
-    const withdrawals = withdrawalHistory.slice(0, limit).map(w => ({
-      ...w,
-      amount: parseFloat(w.amount.toFixed(8)) // Ensure proper number formatting
-    }));
-    
-    res.json({
-      success: true,
-      data: withdrawals
-    });
-  } catch (error) {
-    console.error('Withdrawals endpoint error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to load withdrawals',
-      code: 'WITHDRAWALS_ERROR'
-    });
-  }
-});
 
 // ======================
 // REVIEWS ENDPOINTS
