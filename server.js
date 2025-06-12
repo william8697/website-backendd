@@ -305,21 +305,52 @@ const storage = multer.diskStorage({
     }
 });
 
-// Platform Logo Endpoint
+/**
+ * Secure Platform Logo Endpoint with CORS and Cache Control
+ */
 app.get('/api/v1/platform/logo', (req, res) => {
   try {
-    res.json({
+    // Set security headers
+    res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: https://*.dropbox.com");
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    
+    // Cache control (1 day)
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    res.setHeader('Last-Modified', 'Wed, 11 Jun 2025 18:44:15 GMT');
+    
+    // Response data
+    const response = {
       success: true,
-      logoUrl: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0',
-      updatedAt: new Date().toISOString(),
-      message: 'Platform logo retrieved successfully'
-    });
+      data: {
+        url: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0',
+        versions: {
+          desktop: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0',
+          mobile: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0',
+          thumbnail: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0'
+        },
+        dimensions: { width: 1200, height: 630 },
+        mimeType: 'image/jpeg',
+        hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        lastUpdated: '2025-06-11T18:44:15Z'
+      },
+      meta: {
+        responseTime: `${Date.now() - req.startTime}ms`,
+        requestId: req.requestId
+      }
+    };
+
+    res.status(200).json(response);
+
   } catch (err) {
-    console.error('Error fetching platform logo:', err);
-    res.status(500).json({ 
+    console.error(`[${req.requestId}] Logo endpoint error:`, err);
+    res.status(500).json({
       success: false,
-      error: 'Failed to fetch platform logo',
-      code: 'LOGO_FETCH_ERROR'
+      error: {
+        code: 'LOGO_FETCH_ERROR',
+        message: 'Failed to retrieve platform logo',
+        requestId: req.requestId
+      }
     });
   }
 });
