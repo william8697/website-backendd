@@ -306,33 +306,36 @@ const storage = multer.diskStorage({
 });
 
 /**
- * Secure Platform Logo Endpoint with CORS and Cache Control
+ * Enhanced Logo Endpoint with CORS and Cache Control
  */
 app.get('/api/v1/platform/logo', (req, res) => {
   try {
-    // Set security headers
+    // Security headers
     res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: https://*.dropbox.com");
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     
-    // Cache control (1 day)
-    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    // Cache control (1 week)
+    res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
     res.setHeader('Last-Modified', 'Wed, 11 Jun 2025 18:44:15 GMT');
     
-    // Response data
+    // Response with multiple logo versions
     const response = {
       success: true,
       data: {
-        url: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0',
+        default: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0',
+        circular: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0', // Same URL but will be styled
         versions: {
-          desktop: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0',
-          mobile: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0',
-          thumbnail: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0'
+          light: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0',
+          dark: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=a1vhjnqu&dl=0'
         },
-        dimensions: { width: 1200, height: 630 },
-        mimeType: 'image/jpeg',
-        hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-        lastUpdated: '2025-06-11T18:44:15Z'
+        styling: {
+          circular: true,
+          border: {
+            width: '2px',
+            color: 'transparent',
+            hoverColor: 'rgba(255,255,255,0.2)'
+          }
+        }
       },
       meta: {
         responseTime: `${Date.now() - req.startTime}ms`,
@@ -354,6 +357,7 @@ app.get('/api/v1/platform/logo', (req, res) => {
     });
   }
 });
+
 const upload = multer({ 
     storage: storage,
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB
