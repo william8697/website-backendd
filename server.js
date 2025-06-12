@@ -572,63 +572,74 @@ app.use(express.json({
 
 app.options('*', cors());
 
-
 // Initialize withdrawals data
 let withdrawalsHistory = [];
 let lastWithdrawalUpdate = Date.now();
 
-// Generate initial withdrawals
-function initializeWithdrawals() {
-  for (let i = 0; i < 50; i++) {
-    withdrawalsHistory.push(generateWithdrawal());
-  }
-  
-  // Update withdrawals every second
-  setInterval(() => {
-    const now = Date.now();
-    if (now - lastWithdrawalUpdate >= 1000) {
-      withdrawalsHistory.unshift(generateWithdrawal());
-      if (withdrawalsHistory.length > 100) {
-        withdrawalsHistory.pop();
-      }
-      lastWithdrawalUpdate = now;
-    }
-  }, 1000);
-}
-
-// Generate a single withdrawal
-function generateWithdrawal() {
+// Function to generate random withdrawals
+function generateRandomWithdrawal() {
   const coins = ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA'];
   const coin = coins[Math.floor(Math.random() * coins.length)];
-  const amount = parseFloat((Math.random() * 7.8368).toFixed(4));
+  
+  // Generate amount between 0.0035 and 7.8368
+  const amount = (Math.random() * (7.8368 - 0.0035) + 0.0035).toFixed(4);
+  
+  // Generate random user ID with masking
+  const userIdPrefix = 'nHc1qf';
+  const userIdSuffix = '78uf9k';
+  const randomMiddle1 = Math.random().toString(36).substring(2, 6);
+  const randomMiddle2 = Math.random().toString(36).substring(2, 6);
+  const userId = `${userIdPrefix}${randomMiddle1}****${randomMiddle2}****${userIdSuffix}`;
   
   return {
     id: `wd_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-    user: `nHc1qf${Math.random().toString(36).substring(2, 6)}****${Math.random().toString(36).substring(2, 6)}`,
-    amount: amount,
-    asset: coin,
-    timestamp: new Date().toISOString()
+    userId: userId,
+    amount: parseFloat(amount),
+    coin: coin,
+    timestamp: new Date().toISOString(),
+    status: 'completed'
   };
 }
 
-// Initialize when server starts
-initializeWithdrawals();
+// Update withdrawals every second
+setInterval(() => {
+  const newWithdrawal = generateRandomWithdrawal();
+  withdrawalsHistory.unshift(newWithdrawal);
+  
+  // Keep only the last 100 withdrawals
+  if (withdrawalsHistory.length > 100) {
+    withdrawalsHistory.pop();
+  }
+  
+  lastWithdrawalUpdate = Date.now();
+}, 1000);
 
 // Withdrawals endpoint
 app.get('/api/v1/withdrawals', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 5;
+    const skip = parseInt(req.query.skip) || 0;
     
     // Get the most recent withdrawals
-    const withdrawals = withdrawalsHistory.slice(0, limit).map(w => ({
+    const recentWithdrawals = withdrawalsHistory.slice(skip, skip + limit);
+    
+    // Format amounts based on coin type
+    const formattedWithdrawals = recentWithdrawals.map(w => ({
       ...w,
-      amount: parseFloat(w.amount.toFixed(8)) // Ensure proper number formatting
+      amount: w.coin === 'BTC' || w.coin === 'ETH' ? 
+        w.amount.toFixed(6) : 
+        w.amount.toFixed(2),
+      displayAmount: `${w.amount.toFixed(w.coin === 'BTC' || w.coin === 'ETH' ? 6 : 2)} ${w.coin}`,
+      timestamp: new Date(w.timestamp).toLocaleString()
     }));
     
     res.json({
       success: true,
-      data: withdrawals
+      data: formattedWithdrawals,
+      total: withdrawalsHistory.length,
+      lastUpdated: lastWithdrawalUpdate
     });
+    
   } catch (error) {
     console.error('Withdrawals endpoint error:', error);
     res.status(500).json({
