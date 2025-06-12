@@ -573,27 +573,34 @@ app.use(express.json({
 app.options('*', cors());
 
 
-// Add this to your server.js in the API routes section
-// Initialize when server starts
-let recentWithdrawals = [];
+// Initialize withdrawals data
+let withdrawalsHistory = [];
+let lastWithdrawalUpdate = Date.now();
 
+// Generate initial withdrawals
 function initializeWithdrawals() {
-  // Generate initial withdrawals
   for (let i = 0; i < 50; i++) {
-    recentWithdrawals.push(generateWithdrawal());
+    withdrawalsHistory.push(generateWithdrawal());
   }
   
-  // Add new withdrawal every second
+  // Update withdrawals every second
   setInterval(() => {
-    recentWithdrawals.unshift(generateWithdrawal());
-    if (recentWithdrawals.length > 100) recentWithdrawals.pop();
+    const now = Date.now();
+    if (now - lastWithdrawalUpdate >= 1000) {
+      withdrawalsHistory.unshift(generateWithdrawal());
+      if (withdrawalsHistory.length > 100) {
+        withdrawalsHistory.pop();
+      }
+      lastWithdrawalUpdate = now;
+    }
   }, 1000);
 }
 
+// Generate a single withdrawal
 function generateWithdrawal() {
   const coins = ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA'];
   const coin = coins[Math.floor(Math.random() * coins.length)];
-  const amount = parseFloat((Math.random() * 7.8368).toFixed(4)); // Ensure number type
+  const amount = parseFloat((Math.random() * 7.8368).toFixed(4));
   
   return {
     id: `wd_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
@@ -611,7 +618,9 @@ initializeWithdrawals();
 app.get('/api/v1/withdrawals', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 5;
-    const withdrawals = recentWithdrawals.slice(0, limit).map(w => ({
+    
+    // Get the most recent withdrawals
+    const withdrawals = withdrawalsHistory.slice(0, limit).map(w => ({
       ...w,
       amount: parseFloat(w.amount.toFixed(8)) // Ensure proper number formatting
     }));
