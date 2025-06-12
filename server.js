@@ -305,31 +305,7 @@ const storage = multer.diskStorage({
     }
 });
 
-/**
- * @api {get} /api/v1/platform/logo Get Platform Logo
- * @apiName GetPlatformLogo
- * @apiGroup Platform
- * @apiDescription Returns the platform logo in various formats and styles
- * 
- * @apiSuccess {Boolean} success Request status
- * @apiSuccess {Object} data Logo information
- * @apiSuccess {String} data.default Default logo URL
- * @apiSuccess {String} data.circular Circular logo URL (same as default)
- * @apiSuccess {Object} data.versions Logo variations
- * @apiSuccess {String} data.versions.light Light version URL
- * @apiSuccess {String} data.versions.dark Dark version URL
- * @apiSuccess {Object} data.styling Logo styling information
- * @apiSuccess {Boolean} data.styling.circular Whether logo is circular
- * @apiSuccess {Object} data.styling.border Border styling
- * @apiSuccess {String} data.styling.border.width Border width
- * @apiSuccess {String} data.styling.border.color Border color
- * @apiSuccess {String} data.styling.border.hoverColor Hover border color
- * @apiSuccess {Object} data.styling.dimensions Logo dimensions
- * @apiSuccess {String} data.styling.dimensions.width Logo width
- * @apiSuccess {String} data.styling.dimensions.height Logo height
- * @apiSuccess {Object} data.styling.fallback Fallback options
- * @apiSuccess {String} data.styling.fallback.svg SVG fallback data
- */
+
 app.get('/api/v1/platform/logo', (req, res) => {
   try {
     // Security headers
