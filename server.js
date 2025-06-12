@@ -306,27 +306,31 @@ const storage = multer.diskStorage({
 });
 
 /**
- * Enhanced Logo Endpoint with CORS and Cache Control
+ * Robust Logo Endpoint with CDN Support
  */
 app.get('/api/v1/platform/logo', (req, res) => {
   try {
     // Security headers
     res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: https://*.dropbox.com");
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Access-Control-Allow-Origin', '*');
     
-    // Cache control (1 week)
+    // Cache control
     res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
     res.setHeader('Last-Modified', 'Wed, 11 Jun 2025 18:44:15 GMT');
     
-    // Response with multiple logo versions and styling instructions
+    // Correct Dropbox URL format (using dl=1 to force download)
+    const logoUrl = 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&raw=1';
+    
+    // Response with CDN-ready URL
     const response = {
       success: true,
       data: {
-        default: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=0giw8txx&dl=0',
-        circular: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=0giw8txx&dl=0',
+        default: logoUrl,
+        circular: logoUrl,
         versions: {
-          light: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=0giw8txx&dl=0',
-          dark: 'https://www.dropbox.com/scl/fi/mszp447wg42d87rzb6dbd/WhatsApp-Image-2025-06-11-at-18.44.15_8c7a9952.jpg?rlkey=lu1faomaybqiuuvbnb8tv94ht&st=0giw8txx&dl=0'
+          light: logoUrl,
+          dark: logoUrl
         },
         styling: {
           circular: true,
@@ -338,29 +342,26 @@ app.get('/api/v1/platform/logo', (req, res) => {
           dimensions: {
             width: '40px',
             height: '40px'
+          },
+          fallback: {
+            svg: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMTgiIHN0cm9rZT0iI2YwYjkwYiIgc3Ryb2tlLXdpZHRoPSIyIi8+CjxwYXRoIGQ9Ik0yMCAxMGM1LjUyMyAwIDEwIDQuNDc3IDEwIDEwcy00LjQ3NyAxMC0xMCAxMCIgc3Ryb2tlPSIjZjBkYzNhIiBzdHJva2Utd2lkdGg9IjIiLz4KPC9zdmc+'
           }
         }
-      },
-      meta: {
-        responseTime: `${Date.now() - req.startTime}ms`,
-        requestId: req.requestId
       }
     };
 
     res.status(200).json(response);
 
   } catch (err) {
-    console.error(`[${req.requestId}] Logo endpoint error:`, err);
+    console.error('Logo endpoint error:', err);
     res.status(500).json({
       success: false,
-      error: {
-        code: 'LOGO_FETCH_ERROR',
-        message: 'Failed to retrieve platform logo',
-        requestId: req.requestId
-      }
+      error: 'Failed to retrieve platform logo',
+      code: 'LOGO_FETCH_ERROR'
     });
   }
 });
+
 const upload = multer({ 
     storage: storage,
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB
