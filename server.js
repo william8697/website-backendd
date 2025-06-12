@@ -549,47 +549,103 @@ app.use(express.json({
 app.options('*', cors());
 
 
-// Add this to your server.js in the API routes section
-// Initialize when server starts
-let recentWithdrawals = [];
+// Add this near your other initialization code
+const withdrawalAssets = ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA', 'DOT', 'DOGE', 'LTC'];
+let withdrawalHistory = [];
+let withdrawalRates = {}; // Stores conversion rates for assets
 
-function initializeWithdrawals() {
+// Initialize withdrawal system
+async function initializeWithdrawals() {
   // Generate initial withdrawals
   for (let i = 0; i < 50; i++) {
-    recentWithdrawals.push(generateWithdrawal());
+    await generateWithdrawal();
   }
-  
+
+  // Update rates periodically
+  setInterval(updateWithdrawalRates, 60000); // Update rates every minute
+  await updateWithdrawalRates();
+
   // Add new withdrawal every second
-  setInterval(() => {
-    recentWithdrawals.unshift(generateWithdrawal());
-    if (recentWithdrawals.length > 100) recentWithdrawals.pop();
+  setInterval(async () => {
+    await generateWithdrawal();
+    if (withdrawalHistory.length > 100) {
+      withdrawalHistory.shift();
+    }
   }, 1000);
 }
 
-function generateWithdrawal() {
-  const coins = ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA'];
-  const coin = coins[Math.floor(Math.random() * coins.length)];
-  const amount = parseFloat((Math.random() * 7.8368).toFixed(4)); // Ensure number type
-  
-  return {
-    id: `wd_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-    user: `nHc1qf${Math.random().toString(36).substring(2, 6)}****${Math.random().toString(36).substring(2, 6)}`,
-    amount: amount,
-    asset: coin,
-    timestamp: new Date().toISOString()
-  };
+// Update conversion rates for assets
+async function updateWithdrawalRates() {
+  try {
+    const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,tether,binancecoin,ripple,solana,cardano,polkadot,dogecoin,litecoin&vs_currencies=btc');
+    const data = await response.json();
+    
+    withdrawalRates = {
+      BTC: 1,
+      ETH: data.ethereum.btc,
+      USDT: data.tether.btc,
+      BNB: data.binancecoin.btc,
+      XRP: data.ripple.btc,
+      SOL: data.solana.btc,
+      ADA: data.cardano.btc,
+      DOT: data.polkadot.btc,
+      DOGE: data.dogecoin.btc,
+      LTC: data.litecoin.btc
+    };
+  } catch (err) {
+    console.error('Failed to update withdrawal rates, using defaults', err);
+    // Fallback rates if API fails
+    withdrawalRates = {
+      BTC: 1,
+      ETH: 0.07,
+      USDT: 0.00002,
+      BNB: 0.008,
+      XRP: 0.00001,
+      SOL: 0.003,
+      ADA: 0.00002,
+      DOT: 0.0002,
+      DOGE: 0.000001,
+      LTC: 0.0015
+    };
+  }
 }
 
-// Initialize when server starts
-initializeWithdrawals();
+// Generate a realistic withdrawal
+async function generateWithdrawal() {
+  const coin = withdrawalAssets[Math.floor(Math.random() * withdrawalAssets.length)];
+  const minBTC = 0.0035;
+  const maxBTC = 7.8368;
+  
+  // Generate amount in BTC equivalent
+  const btcAmount = parseFloat((Math.random() * (maxBTC - minBTC) + minBTC).toFixed(8);
+  
+  // Convert to selected asset
+  const rate = withdrawalRates[coin] || 1;
+  const amount = parseFloat((btcAmount / rate).toFixed(8));
+  
+  const userId = `nHc1qf${Math.random().toString(36).substring(2, 6)}****${Math.random().toString(36).substring(2, 6)}`;
+  
+  const withdrawal = {
+    id: `wd_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+    user: userId,
+    amount: amount,
+    asset: coin,
+    btcEquivalent: btcAmount,
+    timestamp: new Date().toISOString()
+  };
 
-// Withdrawals endpoint
+  withdrawalHistory.unshift(withdrawal);
+  return withdrawal;
+}
+
+// Withdrawals endpoint with rate limiting removed
 app.get('/api/v1/withdrawals', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 5;
-    const withdrawals = recentWithdrawals.slice(0, limit).map(w => ({
+    const withdrawals = withdrawalHistory.slice(0, limit).map(w => ({
       ...w,
-      amount: parseFloat(w.amount.toFixed(8)) // Ensure proper number formatting
+      amount: parseFloat(w.amount.toFixed(8)),
+      btcEquivalent: parseFloat(w.btcEquivalent.toFixed(8))
     }));
     
     res.json({
@@ -605,6 +661,9 @@ app.get('/api/v1/withdrawals', async (req, res) => {
     });
   }
 });
+
+// Initialize when server starts
+initializeWithdrawals().catch(console.error);
 
 // API Routes
 
@@ -2957,50 +3016,6 @@ function getTotalTradersCount() {
   const newTraders = secondsSinceStart * (11 + Math.random() * (7999 - 11));
   return totalTradersBase + Math.floor(newTraders);
 }
-
-// ======================
-// WITHDRAWALS ENDPOINTS
-// ======================
-
-// Dynamic withdrawals feed (max 7.8368 per transaction)
-app.get('/api/v1/withdrawals', async (req, res) => {
-  try {
-    const withdrawals = generateWithdrawals(5); // Generate 5 recent withdrawals
-    res.json({
-      success: true,
-      data: withdrawals
-    });
-  } catch (error) {
-    console.error('Withdrawals error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to load withdrawals',
-      code: 'WITHDRAWALS_ERROR'
-    });
-  }
-});
-
-// Generate realistic withdrawal transactions
-function generateWithdrawals(count) {
-  const coins = ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA'];
-  const withdrawals = [];
-  
-  for (let i = 0; i < count; i++) {
-    const coin = coins[Math.floor(Math.random() * coins.length)];
-    const amount = (Math.random() * 7.8368).toFixed(4);
-    const userId = `nHc1qf${Math.random().toString(36).substring(2, 6)}***${Math.random().toString(36).substring(2, 6)}`;
-    
-    withdrawals.push({
-      user: userId,
-      amount: amount,
-      asset: coin,
-      timestamp: new Date(Date.now() - Math.random() * 24 * 60 * 60 * 1000)
-    });
-  }
-  
-  return withdrawals;
-}
-
 // ======================
 // REVIEWS ENDPOINTS
 // ======================
