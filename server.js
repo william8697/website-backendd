@@ -630,8 +630,6 @@ const BTC_EQUIVALENTS = {
 
 // Initialize withdrawal tracking
 let withdrawalHistory = [];
-let lastWithdrawalUpdate = Date.now();
-
 // Function to generate a realistic withdrawal
 function generateWithdrawal() {
   const coins = Object.keys(BTC_EQUIVALENTS);
