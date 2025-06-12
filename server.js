@@ -573,6 +573,76 @@ app.use(express.json({
 app.options('*', cors());
 
 
+// Add this to your server.js in the API routes section
+let startTime = Date.now(); // Track when server started for dynamic counts
+
+// ======================
+// WITHDRAWALS ENDPOINTS
+// ======================
+
+// Store recent withdrawals in memory (in a real app, use a database)
+let recentWithdrawals = [];
+
+// Generate initial withdrawals
+function initializeWithdrawals() {
+  recentWithdrawals = generateWithdrawals(50); // Start with 50 withdrawals
+  // Update withdrawals every second
+  setInterval(() => {
+    const newWithdrawal = generateWithdrawals(1)[0];
+    recentWithdrawals.unshift(newWithdrawal);
+    // Keep only the last 100 withdrawals
+    if (recentWithdrawals.length > 100) {
+      recentWithdrawals.pop();
+    }
+  }, 1000);
+}
+
+// Generate realistic withdrawal transactions
+function generateWithdrawals(count) {
+  const coins = ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA', 'DOGE', 'DOT', 'LTC'];
+  const withdrawals = [];
+  
+  for (let i = 0; i < count; i++) {
+    const coin = coins[Math.floor(Math.random() * coins.length)];
+    const amount = (Math.random() * 7.8368).toFixed(4); // Max 7.8368 as requested
+    const userId = `nHc1qf${Math.random().toString(36).substring(2, 6)}****${Math.random().toString(36).substring(2, 6)}`;
+    
+    withdrawals.push({
+      id: `wd_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+      user: userId,
+      amount: parseFloat(amount),
+      asset: coin,
+      timestamp: new Date()
+    });
+  }
+  
+  return withdrawals;
+}
+
+// Dynamic withdrawals feed (max 7.8368 per transaction)
+app.get('/api/v1/withdrawals', async (req, res) => {
+  try {
+    // Get the most recent withdrawals (default 5)
+    const limit = parseInt(req.query.limit) || 5;
+    const withdrawals = recentWithdrawals.slice(0, limit);
+    
+    res.json({
+      success: true,
+      data: withdrawals
+    });
+  } catch (error) {
+    console.error('Withdrawals error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to load withdrawals',
+      code: 'WITHDRAWALS_ERROR'
+    });
+  }
+});
+
+// Initialize withdrawals when server starts
+initializeWithdrawals();
+
 // API Routes
 
 // Authentication Routes
