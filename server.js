@@ -44,7 +44,7 @@ app.use(cors({
     origin: ['https://website-7t25.vercel.app', 'http://localhost:3000', 'http://127.0.0.1:5500'],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-HTTP-Method-Override', 'Accept'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-HTTP-Method-Override', 'Accept', 'X-Screen-Width'],
     exposedHeaders: ['Content-Disposition']
 }));
 app.use(express.json());
