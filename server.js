@@ -806,6 +806,266 @@ process.on('SIGTERM', () => {
   isRunning = false;
 });
 
+// Add this to your server.js file
+
+// Cache for reviews with timestamp
+let cachedReviews = {
+    data: [],
+    lastUpdated: 0
+};
+
+// Real human profile picture sources (no AI generated images)
+const PROFILE_PICTURE_SOURCES = [
+    'https://images.unsplash.com/photo-', // Unsplash real people photos
+    'https://source.unsplash.com/300x300/?portrait,man',
+    'https://source.unsplash.com/300x300/?portrait,woman',
+    'https://randomuser.me/api/portraits/men',
+    'https://randomuser.me/api/portraits/women'
+];
+
+// Review templates specific to Crypto Trading Market platform
+const REVIEW_TEMPLATES = [
+    {
+        base: "I quit my {job} job after {timeframe} trading on Crypto Trading Market. {specific}",
+        jobs: ["corporate", "office", "retail", "bank", "9-5"],
+        timeframes: ["3 months", "6 months", "a year"],
+        specifics: [
+            "The low 0.1% trading fees and fast withdrawals made all the difference in my profitability.",
+            "Their arbitrage opportunities between exchanges helped me grow my account faster than I imagined.",
+            "The platform's advanced tools gave me an edge I couldn't find elsewhere.",
+            "Now I make more in a week than I did in a month at my old job."
+        ]
+    },
+    {
+        base: "Crypto Trading Market's {feature} allowed me to {achievement}. {additional}",
+        features: [
+            "low withdrawal fees",
+            "arbitrage scanner",
+            "real-time market data",
+            "advanced order types",
+            "portfolio tracking tools"
+        ],
+        achievements: [
+            "scale my trading to full-time",
+            "identify profitable opportunities I was missing before",
+            "reduce my trading costs significantly",
+            "manage risk more effectively",
+            "automate parts of my strategy"
+        ],
+        additional: [
+            "I've never looked back since going pro.",
+            "The difference in my P&L was noticeable within weeks.",
+            "This platform pays for itself many times over.",
+            "Worth every penny of the subscription."
+        ]
+    },
+    {
+        base: "As a {type} trader, Crypto Trading Market's {aspect} has been {description}. {result}",
+        types: [
+            "full-time",
+            "arbitrage",
+            "swing",
+            "day",
+            "crypto-to-crypto"
+        ],
+        aspects: [
+            "withdrawal processing speed",
+            "fee structure",
+            "liquidity aggregation",
+            "API reliability",
+            "mobile experience"
+        ],
+        descriptions: [
+            "a complete game-changer",
+            "the best I've found across 5+ platforms",
+            "consistently impressive",
+            "far superior to competitors",
+            "worth switching platforms for"
+        ],
+        results: [
+            "I've doubled my monthly profits since switching.",
+            "My stress levels have decreased while profits increased.",
+            "I can finally trade the way I always wanted to.",
+            "It's like having a professional trading desk at my fingertips."
+        ]
+    }
+];
+
+// Generate realistic human name
+function generateRandomName() {
+    const firstNames = ['James', 'Emma', 'Liam', 'Olivia', 'Noah', 'Ava', 'William', 'Sophia', 'Benjamin', 'Isabella'];
+    const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis', 'Rodriguez', 'Martinez'];
+    
+    return `${firstNames[Math.floor(Math.random() * firstNames.length)]} ${lastNames[Math.floor(Math.random() * lastNames.length)]}`;
+}
+
+// Generate random date within last 6 months
+function generateRandomDate() {
+    const now = new Date();
+    const sixMonthsAgo = new Date(now);
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    
+    return new Date(sixMonthsAgo.getTime() + Math.random() * (now.getTime() - sixMonthsAgo.getTime()));
+}
+
+// Generate profile picture URL from real human sources
+function generateProfilePicture(gender = null) {
+    const source = PROFILE_PICTURE_SOURCES[Math.floor(Math.random() * PROFILE_PICTURE_SOURCES.length)];
+    
+    if (source.includes('unsplash.com')) {
+        // Use Unsplash's random portrait API
+        const genders = gender ? [gender] : ['man', 'woman'];
+        const genderParam = genders[Math.floor(Math.random() * genders.length)];
+        return `https://source.unsplash.com/300x300/?portrait,${genderParam}&${Math.floor(Math.random() * 1000)}`;
+    } else if (source.includes('randomuser.me')) {
+        // Use randomuser.me API
+        const genderParam = gender || (Math.random() > 0.5 ? 'men' : 'women');
+        const id = Math.floor(Math.random() * 100);
+        return `https://randomuser.me/api/portraits/${genderParam}/${id}.jpg`;
+    }
+}
+
+// Generate a single review with trading-specific content
+function generateSingleReview() {
+    const template = REVIEW_TEMPLATES[Math.floor(Math.random() * REVIEW_TEMPLATES.length)];
+    let reviewText = template.base;
+    
+    // Replace placeholders with random selections
+    if (template.jobs) {
+        reviewText = reviewText.replace('{job}', 
+            template.jobs[Math.floor(Math.random() * template.jobs.length)]);
+    }
+    
+    if (template.timeframes) {
+        reviewText = reviewText.replace('{timeframe}', 
+            template.timeframes[Math.floor(Math.random() * template.timeframes.length)]);
+    }
+    
+    if (template.specifics) {
+        reviewText = reviewText.replace('{specific}', 
+            template.specifics[Math.floor(Math.random() * template.specifics.length)]);
+    }
+    
+    if (template.features) {
+        reviewText = reviewText.replace('{feature}', 
+            template.features[Math.floor(Math.random() * template.features.length)]);
+    }
+    
+    if (template.achievements) {
+        reviewText = reviewText.replace('{achievement}', 
+            template.achievements[Math.floor(Math.random() * template.achievements.length)]);
+    }
+    
+    if (template.additional) {
+        reviewText = reviewText.replace('{additional}', 
+            template.additional[Math.floor(Math.random() * template.additional.length)]);
+    }
+    
+    if (template.types) {
+        reviewText = reviewText.replace('{type}', 
+            template.types[Math.floor(Math.random() * template.types.length)]);
+    }
+    
+    if (template.aspects) {
+        reviewText = reviewText.replace('{aspect}', 
+            template.aspects[Math.floor(Math.random() * template.aspects.length)]);
+    }
+    
+    if (template.descriptions) {
+        reviewText = reviewText.replace('{description}', 
+            template.descriptions[Math.floor(Math.random() * template.descriptions.length)]);
+    }
+    
+    if (template.results) {
+        reviewText = reviewText.replace('{result}', 
+            template.results[Math.floor(Math.random() * template.results.length)]);
+    }
+    
+    // Add trading-specific closing remarks
+    const closings = [
+        " The 0.1% withdrawal fee is the lowest I've found!",
+        " Arbitrage trading has never been easier.",
+        " My only regret is not starting sooner.",
+        " The profits speak for themselves.",
+        " I'm finally living the trader lifestyle I dreamed of."
+    ];
+    
+    if (Math.random() > 0.3) { // 70% chance of adding a closing
+        reviewText += closings[Math.floor(Math.random() * closings.length)];
+    }
+    
+    // Rating distribution (mostly 4-5 stars)
+    const ratingRoll = Math.random();
+    const rating = ratingRoll > 0.9 ? 3 : 
+                  ratingRoll > 0.7 ? 4 : 5;
+    
+    // Determine gender for profile picture (optional)
+    const gender = Math.random() > 0.5 ? 'man' : 'woman';
+    
+    return {
+        id: `rev_${Math.random().toString(36).substring(2, 10)}`,
+        name: generateRandomName(),
+        rating: rating,
+        content: reviewText,
+        date: generateRandomDate().toISOString(),
+        avatar: generateProfilePicture(gender),
+        platform: 'Trustpilot',
+        verified: Math.random() > 0.3, // 70% verified
+        isProTrader: Math.random() > 0.7 // 30% marked as pro traders
+    };
+}
+
+// Reviews endpoint with caching and rate limiting
+const reviewsLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 30, // limit each IP to 30 requests per minute
+    message: {
+        success: false,
+        error: "Too many requests, please try again later",
+        code: "RATE_LIMITED"
+    }
+});
+
+app.get('/api/v1/reviews', reviewsLimiter, async (req, res) => {
+    try {
+        const now = Date.now();
+        const tenMinutes = 10 * 60 * 1000;
+        
+        // Regenerate reviews if cache is empty or expired
+        if (cachedReviews.data.length === 0 || now - cachedReviews.lastUpdated > tenMinutes) {
+            const newReviews = [];
+            for (let i = 0; i < 3; i++) {
+                newReviews.push(generateSingleReview());
+            }
+            
+            cachedReviews = {
+                data: newReviews,
+                lastUpdated: now
+            };
+            
+            console.log('Generated new set of reviews at', new Date(now).toISOString());
+        }
+        
+        res.json({
+            success: true,
+            data: cachedReviews.data,
+            generatedAt: cachedReviews.lastUpdated,
+            platform: "Crypto Trading Market"
+        });
+        
+    } catch (error) {
+        console.error('Reviews endpoint error:', error);
+        res.status(500).json({
+            success: false,
+            error: "Failed to generate reviews",
+            code: "REVIEWS_ERROR",
+            platform: "Crypto Trading Market"
+        });
+    }
+});
+
+
+
 // API Routes
 
 // Authentication Routes
