@@ -806,216 +806,227 @@ process.on('SIGTERM', () => {
   isRunning = false;
 });
 
-// Add this to your server.js file
+const axios = require('axios');
+const NodeCache = require('node-cache');
+const crypto = require('crypto');
 
-// Cache for storing current reviews
-let cachedReviews = [];
-let lastReviewUpdate = 0;
-const REVIEW_REFRESH_INTERVAL = 600000; // 10 minutes in milliseconds
-
-// Real user profile pictures from Picsum
-const profilePictures = [
-  'https://i.pravatar.cc/150?img=1',
-  'https://i.pravatar.cc/150?img=3',
-  'https://i.pravatar.cc/150?img=5',
-  'https://i.pravatar.cc/150?img=7',
-  'https://i.pravatar.cc/150?img=9',
-  'https://i.pravatar.cc/150?img=11',
-  'https://i.pravatar.cc/150?img=13',
-  'https://i.pravatar.cc/150?img=15',
-  'https://i.pravatar.cc/150?img=17',
-  'https://i.pravatar.cc/150?img=19'
-];
-
-// Review templates with realistic human expressions
-const reviewTemplates = [
-  {
-    base: "I've been trading on Crypto Trading Market for {timePeriod} and it's completely transformed my {aspect}. The {feature} is a game-changer!",
-    aspects: ["financial life", "trading strategy", "approach to crypto"],
-    features: [
-      "low withdrawal fees", 
-      "arbitrage opportunities", 
-      "real-time charting tools",
-      "instant order execution"
-    ],
-    timePeriods: ["3 months", "6 months", "a year", "the past 8 months"]
-  },
-  {
-    base: "After trying multiple platforms, Crypto Trading Market stands out for its {positiveQuality}. I was able to {achievement} thanks to their {feature}.",
-    positiveQualities: [
-      "transparent fee structure",
-      "reliable order execution",
-      "responsive customer support",
-      "intuitive interface"
-    ],
-    achievements: [
-      "quit my 9-5 job to trade full-time",
-      "double my portfolio in 6 months",
-      "consistently profit from arbitrage",
-      "withdraw profits with minimal fees"
-    ],
-    features: [
-      "advanced trading tools",
-      "API access",
-      "mobile app",
-      "portfolio tracking"
-    ]
-  },
-  {
-    base: "What I love most about Crypto Trading Market is how {positiveAspect}. Unlike other exchanges, they {differentiator} which makes all the difference for {userType}.",
-    positiveAspects: [
-      "user-friendly it is",
-      "transparent they are with fees",
-      "fast withdrawals process",
-      "reliable the platform is"
-    ],
-    differentiators: [
-      "don't hide fees in small print",
-      "process withdrawals within hours",
-      "offer true arbitrage opportunities",
-      "provide real market prices"
-    ],
-    userTypes: [
-      "serious traders",
-      "arbitrage seekers",
-      "full-time crypto investors",
-      "those looking to maximize profits"
-    ]
-  },
-  {
-    base: "I was skeptical at first, but after {timePeriod} on Crypto Trading Market, I'm convinced it's the best platform for {tradingStyle}. The {feature} alone is worth it!",
-    timePeriods: ["a month", "3 weeks", "two months", "45 days"],
-    tradingStyles: [
-      "arbitrage trading",
-      "day trading",
-      "swing trading",
-      "portfolio diversification"
-    ],
-    features: [
-      "1% withdrawal fee",
-      "instant deposits",
-      "advanced order types",
-      "profit tracking dashboard"
-    ]
-  }
-];
-
-// Helper function to generate realistic human reviews
-function generateReviews() {
-  const reviews = [];
-  const usedIndices = new Set();
-  
-  // Generate 4 unique reviews
-  while (reviews.length < 4) {
-    const templateIndex = Math.floor(Math.random() * reviewTemplates.length);
-    if (usedIndices.has(templateIndex)) continue;
-    
-    usedIndices.add(templateIndex);
-    const template = reviewTemplates[templateIndex];
-    
-    // Build the review text by replacing placeholders
-    let reviewText = template.base;
-    for (const [key, values] of Object.entries(template)) {
-      if (key !== 'base') {
-        const randomValue = values[Math.floor(Math.random() * values.length)];
-        reviewText = reviewText.replace(`{${key}}`, randomValue);
-      }
-    }
-    
-    // Add some natural variations
-    const variations = [
-      " Definitely recommending to my trader friends!",
-      " Can't imagine using any other platform now.",
-      " Worth every penny of the small fees they charge.",
-      " 10/10 would recommend for serious traders.",
-      " The support team actually knows their stuff too!"
-    ];
-    reviewText += variations[Math.floor(Math.random() * variations.length)];
-    
-    // Random rating (mostly 4-5 stars with occasional 3)
-    const rating = Math.random() > 0.9 ? 3 : 4 + Math.floor(Math.random() * 2);
-    
-    // Random date within last 3 months
-    const reviewDate = new Date();
-    reviewDate.setDate(reviewDate.getDate() - Math.floor(Math.random() * 90));
-    
-    reviews.push({
-      id: `rev_${crypto.randomBytes(4).toString('hex')}`,
-      user: {
-        name: generateRandomName(),
-        avatar: profilePictures[Math.floor(Math.random() * profilePictures.length)]
+// 1. Configuration - Adjust these for your environment
+const CONFIG = {
+  CACHE_TTL: 600, // 10 minutes (matches frontend refresh)
+  REVIEW_COUNT: 4, // Number of reviews to show
+  PHOTO_SOURCES: [
+    {
+      name: 'Unsplash',
+      url: 'https://api.unsplash.com/photos/random',
+      params: {
+        query: 'professional portrait headshot',
+        orientation: 'squarish',
+        count: 4
       },
-      rating: rating,
-      content: reviewText,
-      date: reviewDate.toISOString(),
-      platform: "Trustpilot"
-    });
-  }
+      transform: (photo) => ({
+        url: `${photo.urls.raw}&w=300&h=300&fit=crop&crop=faces`,
+        credit: photo.user.name
+      })
+    },
+    {
+      name: 'Pravatar',
+      url: 'https://pravatar.cc/api',
+      params: (index) => ({
+        size: 300,
+        id: 100 + index // Start from varied IDs
+      }),
+      transform: (data, index) => ({
+        url: `https://i.pravatar.cc/300?img=${100 + index}`,
+        credit: 'Pravatar'
+      })
+    }
+  ],
+  REVIEW_TEMPLATES: [
+    {
+      base: "Crypto Trading Market's {feature} helped me {achievement} as a {userType}. The {positiveAspect} is game-changing!",
+      features: [
+        "1% withdrawal fee structure",
+        "arbitrage scanner",
+        "real-time profit calculator",
+        "institutional-grade charts"
+      ],
+      achievements: [
+        "go full-time trading",
+        "3x my portfolio in 6 months",
+        "withdraw profits same-day",
+        "reduce trading costs by 40%"
+      ],
+      userTypes: [
+        "day trader",
+        "arbitrage specialist",
+        "crypto investor",
+        "swing trader"
+      ],
+      positiveAspects: [
+        "execution speed",
+        "fee transparency",
+        "platform reliability",
+        "customer support"
+      ]
+    }
+  ]
+};
+
+// 2. Cache Setup
+const reviewsCache = new NodeCache({
+  stdTTL: CONFIG.CACHE_TTL,
+  checkperiod: 60,
+  useClones: false
+});
+
+// 3. Photo Service - Multiple fallback sources
+async function fetchUserPhotos(count) {
+  let errors = [];
   
-  return reviews;
+  for (const source of CONFIG.PHOTO_SOURCES) {
+    try {
+      if (source.name === 'Unsplash' && !process.env.UNSPLASH_ACCESS_KEY) {
+        throw new Error('Unsplash access key not configured');
+      }
+
+      let photos = [];
+      if (source.name === 'Unsplash') {
+        const response = await axios.get(source.url, {
+          params: {
+            ...source.params,
+            client_id: process.env.UNSPLASH_ACCESS_KEY,
+            count
+          },
+          timeout: 2000
+        });
+        photos = response.data.map(source.transform);
+      } else {
+        // Pravatar or other fallbacks
+        photos = await Promise.all(
+          Array(count).fill().map((_, i) => 
+            axios.get(source.url, {
+              params: typeof source.params === 'function' 
+                ? source.params(i) 
+                : source.params,
+              timeout: 2000
+            }).then(res => source.transform(res.data, i))
+          )
+        );
+      }
+
+      console.log(`Successfully fetched ${photos.length} photos from ${source.name}`);
+      return photos;
+    } catch (error) {
+      errors.push(`${source.name}: ${error.message}`);
+      continue;
+    }
+  }
+
+  throw new Error(`All photo sources failed: ${errors.join('; ')}`);
 }
 
-// Helper to generate random names
-function generateRandomName() {
-  const firstNames = ["James", "Emma", "Liam", "Olivia", "Noah", "Ava", "William", "Sophia"];
-  const lastNames = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller"];
-  return `${firstNames[Math.floor(Math.random() * firstNames.length)]} ${lastNames[Math.floor(Math.random() * lastNames.length)]}`;
-}
-
-// Reviews endpoint
-app.get('/api/v1/reviews', async (req, res) => {
+// 4. Review Generator
+async function generateReviews() {
   try {
-    const currentTime = Date.now();
-    
-    // Regenerate reviews if cache is empty or expired
-    if (cachedReviews.length === 0 || currentTime - lastReviewUpdate > REVIEW_REFRESH_INTERVAL) {
-      cachedReviews = generateReviews();
-      lastReviewUpdate = currentTime;
-      console.log('Generated new set of reviews');
+    const [photos, currentDate] = await Promise.all([
+      fetchUserPhotos(CONFIG.REVIEW_COUNT),
+      new Date()
+    ]);
+
+    return CONFIG.REVIEW_TEMPLATES.flatMap(template => {
+      const variables = {};
+      Object.keys(template)
+        .filter(key => key !== 'base')
+        .forEach(key => {
+          const options = template[key];
+          variables[key] = options[Math.floor(Math.random() * options.length)];
+        });
+
+      let content = template.base;
+      for (const [key, value] of Object.entries(variables)) {
+        content = content.replace(`{${key}}`, value);
+      }
+
+      // Add organic conclusion
+      const conclusions = [
+        " Withdrew profits 15+ times without issues!",
+        " The platform just works - no surprises.",
+        " Worth every penny of the small fees.",
+        " My trading career wouldn't be the same."
+      ];
+      content += conclusions[Math.floor(Math.random() * conclusions.length)];
+
+      // Generate rating (weighted toward 4-5 stars)
+      const rating = Math.random() > 0.9 ? 3 : 4 + Math.floor(Math.random() * 2);
+
+      // Random date in last 90 days
+      const reviewDate = new Date(currentDate);
+      reviewDate.setDate(currentDate.getDate() - Math.floor(Math.random() * 90));
+
+      return photos.map((photo, i) => ({
+        id: `rev_${crypto.randomBytes(4).toString('hex')}`,
+        user: {
+          name: photo.credit.split(' ')[0] + ' ' + 
+                ['Smith', 'Johnson', 'Williams', 'Brown'][Math.floor(Math.random() * 4)],
+          avatar: photo.url
+        },
+        rating,
+        content: i === 0 ? content : generateVariation(content), // First gets template, others get variations
+        date: reviewDate.toISOString(),
+        platform: "Trustpilot"
+      }));
+    }).slice(0, CONFIG.VIEW_COUNT);
+  } catch (error) {
+    console.error('Review generation failed:', error);
+    throw new Error('Failed to generate reviews: ' + error.message);
+  }
+}
+
+function generateVariation(content) {
+  const variations = {
+    "game-changing!": ["revolutionary!", "a complete game-changer!", "industry-leading!"],
+    "helped me": ["enabled me to", "allowed me to", "gave me the tools to"]
+  };
+
+  return content.replace(/game-changing!|helped me/g, match => {
+    return variations[match][Math.floor(Math.random() * variations[match].length)];
+  });
+}
+
+// 5. Controller
+const getReviews = async (req, res) => {
+  try {
+    let reviews = reviewsCache.get('current');
+    const cacheStatus = reviews ? 'hit' : 'miss';
+
+    if (!reviews) {
+      reviews = await generateReviews();
+      reviewsCache.set('current', reviews);
     }
-    
-    // Rate limiting check
-    const clientIp = req.ip || req.connection.remoteAddress;
-    const rateLimitKey = `review_${clientIp}`;
-    
-    // Simple in-memory rate limiting (for production, use Redis or similar)
-    if (!global.rateLimits) global.rateLimits = {};
-    if (!global.rateLimits[rateLimitKey]) global.rateLimits[rateLimitKey] = { count: 0, lastReset: Date.now() };
-    
-    const limit = global.rateLimits[rateLimitKey];
-    
-    // Reset counter if last reset was more than 1 minute ago
-    if (Date.now() - limit.lastReset > 60000) {
-      limit.count = 0;
-      limit.lastReset = Date.now();
-    }
-    
-    // Check if limit exceeded (100 requests per minute)
-    if (limit.count >= 100) {
-      return res.status(429).json({
-        success: false,
-        error: 'Too many requests',
-        retryAfter: Math.ceil((limit.lastReset + 60000 - Date.now()) / 1000)
-      });
-    }
-    
-    limit.count++;
-    
-    // Return cached reviews
+
     res.json({
       success: true,
-      data: cachedReviews
+      data: reviews,
+      meta: {
+        generatedAt: new Date().toISOString(),
+        cache: cacheStatus,
+        count: reviews.length
+      }
     });
-    
   } catch (error) {
-    console.error('Error in reviews endpoint:', error);
+    console.error('Reviews endpoint error:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to load reviews',
-      code: 'REVIEWS_ERROR'
+      code: 'REVIEWS_UNAVAILABLE',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
-});
+};
+
+module.exports = {
+  getReviews
+};
 
 // API Routes
 
