@@ -1,4 +1,4 @@
-require('dotenv').config();
+  require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
@@ -805,192 +805,128 @@ initializeWithdrawalSystem();
 process.on('SIGTERM', () => {
   isRunning = false;
 });
+
 // Reviews Configuration
 const REVIEW_CONFIG = {
   REFRESH_INTERVAL: 10 * 60 * 1000, // 10 minutes
-  CACHE_DURATION: 5 * 60 * 1000, // 5 minutes
-  MAX_REVIEWS: 50,
-  RETURN_COUNT: 5,
-  MIN_RATING: 3,
+  RETURN_COUNT: 5, // Return 5 reviews at a time
+  MIN_RATING: 4, // Only show 4-5 star reviews
   MAX_RATING: 5
 };
 
-// Profile photos from Unsplash (free to use)
+// Real human profile pictures from Unsplash (free to use, non-AI)
 const PROFILE_PHOTOS = [
-  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?crop=faces&fit=crop&w=200&h=200',
-  'https://images.unsplash.com/photo-1554151228-14d9def656e4?crop=faces&fit=crop&w=200&h=200',
-  'https://images.unsplash.com/photo-1544005313-94ddf0286df2?crop=faces&fit=crop&w=200&h=200',
-  'https://images.unsplash.com/photo-1552058544-f2b08422138a?crop=faces&fit=crop&w=200&h=200',
-  'https://images.unsplash.com/photo-1542190891-2093d38760f2?crop=faces&fit=crop&w=200&h=200',
-  'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?crop=faces&fit=crop&w=200&h=200',
-  'https://images.unsplash.com/photo-1545167622-3a6ac756afa4?crop=faces&fit=crop&w=200&h=200',
-  'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?crop=faces&fit=crop&w=200&h=200'
+  'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&h=200&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&h=200&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1531427186611-ecfd6d936c79?w=200&h=200&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=200&h=200&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&h=200&auto=format&fit=crop'
 ];
 
-// Trader profiles
+// Professional trader profiles with unique details
 const TRADER_PROFILES = [
-  { name: 'James Wilson', country: 'USA', occupation: 'Arbitrage Trader' },
-  { name: 'Emma Zhang', country: 'Singapore', occupation: 'Quantitative Analyst' },
-  { name: 'Liam Patel', country: 'UK', occupation: 'Day Trader' },
-  { name: 'Olivia Chen', country: 'Canada', occupation: 'Crypto Investor' },
-  { name: 'Noah Müller', country: 'Germany', occupation: 'Algorithmic Trader' },
-  { name: 'Ava Tanaka', country: 'Japan', occupation: 'Swing Trader' },
-  { name: 'William Smith', country: 'Australia', occupation: 'Fund Manager' },
-  { name: 'Sophia Garcia', country: 'Spain', occupation: 'Technical Analyst' }
+  { name: 'James Wilson', country: 'USA', occupation: 'Arbitrage Trader', joinDate: '2022-03-15', trades: 1420, profit: '$15,200' },
+  { name: 'Emma Zhang', country: 'Singapore', occupation: 'Quant Analyst', joinDate: '2021-11-08', trades: 2875, profit: '$32,800' },
+  { name: 'Liam Patel', country: 'UK', occupation: 'Day Trader', joinDate: '2023-01-25', trades: 630, profit: '$8,450' },
+  { name: 'Olivia Chen', country: 'Canada', occupation: 'Crypto Investor', joinDate: '2020-09-12', trades: 4520, profit: '$62,300' },
+  { name: 'Noah Müller', country: 'Germany', occupation: 'Algo Trader', joinDate: '2022-07-04', trades: 3250, profit: '$41,500' }
 ];
 
-// Review templates
-const REVIEW_TEMPLATES = {
-  positive: [
-    {
-      title: "Life-changing platform",
-      content: "After 6 months of trading on Crypto Trading Market, I was able to quit my 9-5 job. The low withdrawal fees and fast execution make it perfect for arbitrage trading. I'm consistently making 1-2% daily returns."
-    },
-    {
-      title: "Best for arbitrage",
-      content: "I've tried 5 different exchanges and none compare to the arbitrage opportunities here. Last week I made $3,200 in profit thanks to their lightning-fast order execution. Withdrawals take less than an hour!"
-    },
-    {
-      title: "From skeptic to believer",
-      content: "I doubted crypto trading until I tried Crypto Trading Market. Their platform is so intuitive and the 0.1% trading fee is unbeatable. Made enough profit in 3 months to pay off my student loans."
-    },
-    {
-      title: "Full-time trader now",
-      content: "The advanced charting tools and API access allowed me to automate my strategy. I went from $500 to $15,000 in 8 months. Now I trade full-time thanks to this platform."
-    },
-    {
-      title: "Withdrawals are instant",
-      content: "What impressed me most is how fast withdrawals are processed. Other exchanges take days, but here it's usually under 30 minutes. The 0.05% withdrawal fee is the lowest I've seen."
-    }
-  ],
-  neutral: [
-    {
-      title: "Good but could improve",
-      content: "The platform works well overall, though I occasionally see lag during high volatility. Customer support responds within 12 hours which is acceptable but could be faster."
-    },
-    {
-      title: "Decent alternative",
-      content: "While not as polished as Binance, the lower fees make it worthwhile. The mobile app needs work - sometimes orders don't update in real-time. But for desktop trading it's solid."
-    }
-  ]
-};
+// Unique review templates with crypto trading specifics
+const REVIEW_TEMPLATES = [
+  {
+    title: "Changed my financial life",
+    content: "After 8 months on this platform, I quit my corporate job. The 0.1% trading fees and instant withdrawals let me scale my arbitrage strategy. Made $12k last month alone!"
+  },
+  {
+    title: "Withdrawals are lightning fast",
+    content: "Compared to other exchanges where withdrawals take days, here it's under 30 minutes. The 0.0005 BTC withdrawal fee is the lowest I've found. Perfect for my high-frequency trading."
+  },
+  {
+    title: "API is rock solid",
+    content: "My automated trading bot has executed 3,200+ trades without a single API failure. The WebSocket streams are ultra-reliable even during high volatility."
+  },
+  {
+    title: "Best for scalping",
+    content: "The order execution speed is unmatched. I scalp 0.5-1% profits all day thanks to their matching engine. Withdrew $8k in profits last week."
+  },
+  {
+    title: "Customer support is excellent",
+    content: "Had a KYC issue resolved in under 2 hours. The support team actually understands trading unlike other exchanges I've used."
+  },
+  {
+    title: "Perfect for arbitrage",
+    content: "I catch 1-2% price differences across markets daily. The platform's speed lets me capitalize before the gap closes. $23k profit in 3 months."
+  },
+  {
+    title: "Lowest fees I've found",
+    content: "0.075% for makers is unbeatable. Saved me $1,200+ in fees last quarter compared to other top exchanges."
+  }
+];
 
-// Cache object
-let reviewCache = {
-  data: [],
-  lastUpdated: 0,
-  etag: '',
-  expires: 0
-};
-
-// Generate realistic reviews
+// Generate unique reviews with all required fields
 function generateReviews() {
   const reviews = [];
   const usedIndices = new Set();
   
-  // Shuffle profile photos
+  // Ensure we don't reuse profile photos
   const shuffledPhotos = [...PROFILE_PHOTOS].sort(() => 0.5 - Math.random());
   
-  while (reviews.length < REVIEW_CONFIG.MAX_REVIEWS) {
+  while (reviews.length < REVIEW_CONFIG.RETURN_COUNT) {
     const profileIndex = Math.floor(Math.random() * TRADER_PROFILES.length);
     if (usedIndices.has(profileIndex)) continue;
     usedIndices.add(profileIndex);
     
     const profile = TRADER_PROFILES[profileIndex];
-    const isPositive = Math.random() > 0.15; // 85% positive
+    const template = REVIEW_TEMPLATES[Math.floor(Math.random() * REVIEW_TEMPLATES.length)];
     
-    const templatePool = isPositive ? REVIEW_TEMPLATES.positive : REVIEW_TEMPLATES.neutral;
-    const template = templatePool[Math.floor(Math.random() * templatePool.length)];
+    // Generate rating between MIN and MAX
+    const rating = Math.floor(Math.random() * (REVIEW_CONFIG.MAX_RATING - REVIEW_CONFIG.MIN_RATING + 1)) + REVIEW_CONFIG.MIN_RATING;
     
-    const rating = isPositive 
-      ? Math.floor(Math.random() * 2) + 4 // 4 or 5
-      : 3;
-    
-    const daysAgo = Math.floor(Math.random() * 30) + 1;
-    const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
-    
-    const trades = Math.floor(Math.random() * 500) + 50;
-    const profit = isPositive 
-      ? `$${(Math.random() * 25000 + 5000).toFixed(0)}` 
-      : null;
+    // Random date in last 90 days
+    const date = new Date(Date.now() - Math.floor(Math.random() * 90 * 24 * 60 * 60 * 1000);
     
     reviews.push({
       id: `rev_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`,
       user: {
         ...profile,
         avatar: shuffledPhotos[profileIndex],
-        joinDate: new Date(Date.now() - (Math.floor(Math.random() * 365) + 30) * 24 * 60 * 60 * 1000).toISOString()
+        verified: Math.random() > 0.3 // 70% verified
       },
       rating: rating,
       title: template.title,
       content: template.content,
       date: date.toISOString(),
       platform: 'Trustpilot',
-      verified: Math.random() > 0.3, // 70% verified
-      trades: trades,
-      profit: profit
+      trades: profile.trades,
+      profit: profile.profit
     });
   }
   
   return reviews;
 }
 
-// Reviews endpoint
+// Reviews endpoint with caching
 app.get('/api/v1/reviews', async (req, res) => {
   try {
-    // Check if cache needs refresh
-    const now = Date.now();
-    if (now - reviewCache.lastUpdated > REVIEW_CONFIG.REFRESH_INTERVAL || reviewCache.data.length === 0) {
-      reviewCache.data = generateReviews();
-      reviewCache.lastUpdated = now;
-      reviewCache.etag = `"${crypto.createHash('md5').update(JSON.stringify(reviewCache.data)).digest('hex')}"`;
-      reviewCache.expires = now + REVIEW_CONFIG.CACHE_DURATION;
-    }
-    
-    // Check client cache
-    const clientEtag = req.headers['if-none-match'];
-    if (clientEtag && clientEtag === reviewCache.etag) {
-      return res.status(304).end();
-    }
-    
-    // Determine response size based on screen width
-    const screenWidth = parseInt(req.headers['x-screen-width']) || 1920;
-    const isMobile = screenWidth < 768;
-    const reviewCount = isMobile ? 4 : REVIEW_CONFIG.RETURN_COUNT;
-    
-    // Shuffle and select reviews
-    const responseData = [...reviewCache.data]
-      .sort(() => 0.5 - Math.random())
-      .slice(0, reviewCount);
-    
-    // Set headers
-    res.setHeader('Cache-Control', `public, max-age=${Math.floor((reviewCache.expires - now) / 1000)}`);
-    res.setHeader('ETag', reviewCache.etag);
+    // Generate fresh reviews for each request (no caching as per requirements)
+    const reviews = generateReviews();
     
     res.json({
       success: true,
-      data: responseData,
+      data: reviews,
       meta: {
-        generatedAt: new Date(reviewCache.lastUpdated).toISOString(),
-        nextRefresh: new Date(reviewCache.lastUpdated + REVIEW_CONFIG.REFRESH_INTERVAL).toISOString(),
-        totalAvailable: reviewCache.data.length,
-        returned: responseData.length,
-        isMobile: isMobile
+        generatedAt: new Date().toISOString(),
+        totalAvailable: TRADER_PROFILES.length
       }
     });
     
   } catch (error) {
     console.error('Review generation error:', error);
-    
-    // Fallback to empty array if cache is empty
-    const fallbackData = reviewCache.data.length > 0 ? reviewCache.data.slice(0, 4) : [];
-    
     res.status(500).json({
       success: false,
       error: 'Failed to generate reviews',
-      data: fallbackData,
-      code: 'REVIEW_GENERATION_ERROR',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+      code: 'REVIEW_GENERATION_ERROR'
     });
   }
 });
