@@ -819,226 +819,123 @@ process.on('SIGTERM', () => {
   isRunning = false;
 });
 
-const axios = require('axios');
-const NodeCache = require('node-cache');
+const REVIEW_INTERVAL = 10 * 60 * 1000; // 10 minutes
+let lastReviewGeneration = 0;
+let cachedReviews = [];
 
-// 1. Configuration - Adjust these for your environment
-const CONFIG = {
-  CACHE_TTL: 600, // 10 minutes (matches frontend refresh)
-  REVIEW_COUNT: 4, // Number of reviews to show
-  PHOTO_SOURCES: [
+// Helper function to generate realistic reviews
+async function generateReviews(count) {
+  const reviews = [];
+  
+  // Real profile photos from randomuser.me API
+  const profilePhotos = [
+    'https://randomuser.me/api/portraits/men/32.jpg',
+    'https://randomuser.me/api/portraits/women/44.jpg',
+    'https://randomuser.me/api/portraits/men/67.jpg',
+    'https://randomuser.me/api/portraits/women/63.jpg',
+    'https://randomuser.me/api/portraits/men/89.jpg',
+    'https://randomuser.me/api/portraits/women/71.jpg'
+  ];
+  
+  const firstNames = ['James', 'Emma', 'Liam', 'Olivia', 'Noah', 'Ava'];
+  const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia'];
+  
+  const comments = [
     {
-      name: 'Unsplash',
-      url: 'https://api.unsplash.com/photos/random',
-      params: {
-        query: 'professional portrait headshot',
-        orientation: 'squarish',
-        count: 4
-      },
-      transform: (photo) => ({
-        url: `${photo.urls.raw}&w=300&h=300&fit=crop&crop=faces`,
-        credit: photo.user.name
-      })
+      content: "I quit my job thanks to Crypto Trading Market! The arbitrage opportunities are incredible. Made $15,000 in my first month trading full-time.",
+      rating: 5
     },
     {
-      name: 'Pravatar',
-      url: 'https://pravatar.cc/api',
-      params: (index) => ({
-        size: 300,
-        id: 100 + index // Start from varied IDs
-      }),
-      transform: (data, index) => ({
-        url: `https://i.pravatar.cc/300?img=${100 + index}`,
-        credit: 'Pravatar'
-      })
-    }
-  ],
-  REVIEW_TEMPLATES: [
+      content: "Withdrawal fee is only 0.0005 BTC - the lowest I've seen. Processed my $8,000 withdrawal in under 30 minutes. This platform is legit!",
+      rating: 5
+    },
     {
-      base: "Crypto Trading Market's {feature} helped me {achievement} as a {userType}. The {positiveAspect} is game-changing!",
-      features: [
-        "1% withdrawal fee structure",
-        "arbitrage scanner",
-        "real-time profit calculator",
-        "institutional-grade charts"
-      ],
-      achievements: [
-        "go full-time trading",
-        "3x my portfolio in 6 months",
-        "withdraw profits same-day",
-        "reduce trading costs by 40%"
-      ],
-      userTypes: [
-        "day trader",
-        "arbitrage specialist",
-        "crypto investor",
-        "swing trader"
-      ],
-      positiveAspects: [
-        "execution speed",
-        "fee transparency",
-        "platform reliability",
-        "customer support"
-      ]
+      content: "Been trading here for 6 months. The API is rock solid for my arbitrage bot. Consistently making 2-3% daily profits with their tight spreads.",
+      rating: 4
+    },
+    {
+      content: "Customer support actually responds in minutes, not days. Had a trade issue resolved while I was still on the phone. These guys know trading.",
+      rating: 5
+    },
+    {
+      content: "The advanced charting tools helped me spot a market inefficiency that netted me $5,200 in one trade. Withdrawal was in my bank next day.",
+      rating: 5
+    },
+    {
+      content: "Took some getting used to but now I'm making consistent profits. Their educational resources are top-notch for new traders.",
+      rating: 4
     }
-  ]
-};
+  ];
 
-// 2. Cache Setup
-const reviewsCache = new NodeCache({
-  stdTTL: CONFIG.CACHE_TTL,
-  checkperiod: 60,
-  useClones: false
-});
+  for (let i = 0; i < count; i++) {
+    const firstName = firstNames[Math.floor(Math.random() * firstNames.length)];
+    const lastName = lastNames[Math.floor(Math.random() * lastNames.length)];
+    const comment = comments[Math.floor(Math.random() * comments.length)];
+    const daysAgo = Math.floor(Math.random() * 30) + 1;
+    
+    const review = new Review({
+      name: `${firstName} ${lastName}`,
+      avatar: profilePhotos[Math.floor(Math.random() * profilePhotos.length)],
+      rating: comment.rating,
+      content: comment.content,
+      date: new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000)
+    });
 
-// 3. Photo Service - Multiple fallback sources
-async function fetchUserPhotos(count) {
-  let errors = [];
-  
-  for (const source of CONFIG.PHOTO_SOURCES) {
-    try {
-      if (source.name === 'Unsplash' && !process.env.UNSPLASH_ACCESS_KEY) {
-        throw new Error('Unsplash access key not configured');
-      }
-
-      let photos = [];
-      if (source.name === 'Unsplash') {
-        const response = await axios.get(source.url, {
-          params: {
-            ...source.params,
-            client_id: process.env.UNSPLASH_ACCESS_KEY,
-            count
-          },
-          timeout: 2000
-        });
-        photos = response.data.map(source.transform);
-      } else {
-        // Pravatar or other fallbacks
-        photos = await Promise.all(
-          Array(count).fill().map((_, i) => 
-            axios.get(source.url, {
-              params: typeof source.params === 'function' 
-                ? source.params(i) 
-                : source.params,
-              timeout: 2000
-            }).then(res => source.transform(res.data, i))
-          )
-        );
-      }
-
-      console.log(`Successfully fetched ${photos.length} photos from ${source.name}`);
-      return photos;
-    } catch (error) {
-      errors.push(`${source.name}: ${error.message}`);
-      continue;
-    }
+    reviews.push(review);
+    await review.save(); // Save to database for persistence
   }
 
-  throw new Error(`All photo sources failed: ${errors.join('; ')}`);
+  return reviews;
 }
 
-// 4. Review Generator
-async function generateReviews() {
+// Reviews endpoint
+app.get('/api/v1/reviews', async (req, res) => {
   try {
-    const [photos, currentDate] = await Promise.all([
-      fetchUserPhotos(CONFIG.REVIEW_COUNT),
-      new Date()
-    ]);
+    const now = Date.now();
+    
+    // Regenerate reviews if cache is empty or 10 minutes have passed
+    if (cachedReviews.length === 0 || now - lastReviewGeneration > REVIEW_INTERVAL) {
+      cachedReviews = await generateReviews(6); // Generate 6 new reviews
+      lastReviewGeneration = now;
+      
+      // Also fetch 2 random older reviews from database for variety
+      const oldReviews = await Review.aggregate([{ $sample: { size: 2 } }]);
+      cachedReviews = [...cachedReviews, ...oldReviews];
+      
+      // Shuffle the array
+      cachedReviews = cachedReviews.sort(() => Math.random() - 0.5);
+    }
 
-    return CONFIG.REVIEW_TEMPLATES.flatMap(template => {
-      const variables = {};
-      Object.keys(template)
-        .filter(key => key !== 'base')
-        .forEach(key => {
-          const options = template[key];
-          variables[key] = options[Math.floor(Math.random() * options.length)];
-        });
-
-      let content = template.base;
-      for (const [key, value] of Object.entries(variables)) {
-        content = content.replace(`{${key}}`, value);
-      }
-
-      // Add organic conclusion
-      const conclusions = [
-        " Withdrew profits 15+ times without issues!",
-        " The platform just works - no surprises.",
-        " Worth every penny of the small fees.",
-        " My trading career wouldn't be the same."
-      ];
-      content += conclusions[Math.floor(Math.random() * conclusions.length)];
-
-      // Generate rating (weighted toward 4-5 stars)
-      const rating = Math.random() > 0.9 ? 3 : 4 + Math.floor(Math.random() * 2);
-
-      // Random date in last 90 days
-      const reviewDate = new Date(currentDate);
-      reviewDate.setDate(currentDate.getDate() - Math.floor(Math.random() * 90));
-
-      return photos.map((photo, i) => ({
-        id: `rev_${crypto.randomBytes(4).toString('hex')}`,
+    // Return 4 random reviews from cache
+    const responseReviews = cachedReviews
+      .sort(() => Math.random() - 0.5)
+      .slice(0, 4)
+      .map(review => ({
+        id: review._id,
         user: {
-          name: photo.credit.split(' ')[0] + ' ' + 
-                ['Smith', 'Johnson', 'Williams', 'Brown'][Math.floor(Math.random() * 4)],
-          avatar: photo.url
+          name: review.name,
+          avatar: review.avatar
         },
-        rating,
-        content: i === 0 ? content : generateVariation(content), // First gets template, others get variations
-        date: reviewDate.toISOString(),
-        platform: "Trustpilot"
+        rating: review.rating,
+        content: review.content,
+        date: review.date,
+        platform: review.platform,
+        isVerified: review.isVerified
       }));
-    }).slice(0, CONFIG.VIEW_COUNT);
-  } catch (error) {
-    console.error('Review generation failed:', error);
-    throw new Error('Failed to generate reviews: ' + error.message);
-  }
-}
-
-function generateVariation(content) {
-  const variations = {
-    "game-changing!": ["revolutionary!", "a complete game-changer!", "industry-leading!"],
-    "helped me": ["enabled me to", "allowed me to", "gave me the tools to"]
-  };
-
-  return content.replace(/game-changing!|helped me/g, match => {
-    return variations[match][Math.floor(Math.random() * variations[match].length)];
-  });
-}
-
-// 5. Controller
-const getReviews = async (req, res) => {
-  try {
-    let reviews = reviewsCache.get('current');
-    const cacheStatus = reviews ? 'hit' : 'miss';
-
-    if (!reviews) {
-      reviews = await generateReviews();
-      reviewsCache.set('current', reviews);
-    }
 
     res.json({
       success: true,
-      data: reviews,
-      meta: {
-        generatedAt: new Date().toISOString(),
-        cache: cacheStatus,
-        count: reviews.length
-      }
+      data: responseReviews
     });
   } catch (error) {
-    console.error('Reviews endpoint error:', error);
+    console.error('Reviews error:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to load reviews',
-      code: 'REVIEWS_UNAVAILABLE',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      code: 'REVIEWS_ERROR'
     });
   }
-};
-
-module.exports = {
-  getReviews
-};
+});
 
 // API Routes
 
