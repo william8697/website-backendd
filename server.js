@@ -864,11 +864,11 @@ const REVIEW_INTERVAL = 10 * 60 * 1000; // 10 minutes
 let lastReviewGeneration = 0;
 let cachedReviews = [];
 
-// Helper function to generate realistic reviews
+// Helper function to generate realistic reviews with proper validation
 async function generateReviews(count) {
   const reviews = [];
   
-  // Real profile photos from randomuser.me API
+  // Real profile photos from randomuser.me API with fallbacks
   const profilePhotos = [
     'https://randomuser.me/api/portraits/men/32.jpg',
     'https://randomuser.me/api/portraits/women/44.jpg',
@@ -909,59 +909,102 @@ async function generateReviews(count) {
   ];
 
   for (let i = 0; i < count; i++) {
-    const firstName = firstNames[Math.floor(Math.random() * firstNames.length)];
-    const lastName = lastNames[Math.floor(Math.random() * lastNames.length)];
-    const comment = comments[Math.floor(Math.random() * comments.length)];
-    const daysAgo = Math.floor(Math.random() * 30) + 1;
-    
-    const review = new Review({
-      name: `${firstName} ${lastName}`,
-      avatar: profilePhotos[Math.floor(Math.random() * profilePhotos.length)],
-      rating: comment.rating,
-      content: comment.content,
-      date: new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000)
-    });
+    try {
+      const firstName = firstNames[Math.floor(Math.random() * firstNames.length)];
+      const lastName = lastNames[Math.floor(Math.random() * lastNames.length)];
+      const comment = comments[Math.floor(Math.random() * comments.length)];
+      const daysAgo = Math.floor(Math.random() * 30) + 1;
+      const avatar = profilePhotos[Math.floor(Math.random() * profilePhotos.length)];
+      
+      const review = new Review({
+        name: `${firstName} ${lastName}`,
+        avatar: avatar,
+        rating: comment.rating,
+        content: comment.content,
+        date: new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000),
+        platform: ['Trustpilot', 'Google', 'Sitejabber'][Math.floor(Math.random() * 3)],
+        isVerified: Math.random() > 0.3 // 70% chance of being verified
+      });
 
-    reviews.push(review);
-    await review.save(); // Save to database for persistence
+      // Validate before saving
+      await review.validate();
+      await review.save();
+      reviews.push(review);
+    } catch (error) {
+      console.error('Error generating review:', error.message);
+      // Skip this review if validation fails
+    }
   }
 
   return reviews;
 }
 
-// Reviews endpoint
+// Improved reviews endpoint with proper error handling
 app.get('/api/v1/reviews', async (req, res) => {
   try {
     const now = Date.now();
     
     // Regenerate reviews if cache is empty or 10 minutes have passed
     if (cachedReviews.length === 0 || now - lastReviewGeneration > REVIEW_INTERVAL) {
-      cachedReviews = await generateReviews(6); // Generate 6 new reviews
-      lastReviewGeneration = now;
-      
-      // Also fetch 2 random older reviews from database for variety
-      const oldReviews = await Review.aggregate([{ $sample: { size: 2 } }]);
-      cachedReviews = [...cachedReviews, ...oldReviews];
-      
-      // Shuffle the array
-      cachedReviews = cachedReviews.sort(() => Math.random() - 0.5);
+      try {
+        cachedReviews = await generateReviews(6); // Generate 6 new reviews
+        
+        // Also fetch 2 random older reviews from database for variety
+        const oldReviews = await Review.aggregate([
+          { $match: { _id: { $nin: cachedReviews.map(r => r._id) } } },
+          { $sample: { size: 2 } }
+        ]);
+        
+        cachedReviews = [...cachedReviews, ...oldReviews];
+        
+        // Shuffle the array
+        cachedReviews = cachedReviews.sort(() => Math.random() - 0.5);
+        lastReviewGeneration = now;
+      } catch (genError) {
+        console.error('Error generating new reviews:', genError);
+        // Fallback to only cached reviews if generation fails
+      }
     }
 
-    // Return 4 random reviews from cache
+    // Ensure we always have reviews to show
+    if (cachedReviews.length === 0) {
+      // Ultimate fallback - hardcoded reviews
+      cachedReviews = [{
+        _id: 'fallback1',
+        name: 'Michael Johnson',
+        avatar: 'https://randomuser.me/api/portraits/men/32.jpg',
+        rating: 5,
+        content: "Great platform for arbitrage trading. Made consistent profits since I started.",
+        date: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+        platform: 'Trustpilot',
+        isVerified: true
+      }, {
+        _id: 'fallback2',
+        name: 'Sarah Williams',
+        avatar: 'https://randomuser.me/api/portraits/women/44.jpg',
+        rating: 4,
+        content: "Low withdrawal fees and fast processing. Highly recommended for serious traders.",
+        date: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+        platform: 'Google',
+        isVerified: true
+      }];
+    }
+
+    // Return 4 random reviews from cache with proper null checks
     const responseReviews = cachedReviews
       .sort(() => Math.random() - 0.5)
       .slice(0, 4)
       .map(review => ({
-        id: review._id,
+        id: review._id?.toString() || `temp-${Math.random().toString(36).substr(2, 9)}`,
         user: {
-          name: review.name,
-          avatar: review.avatar
+          name: review.name || 'Anonymous Trader',
+          avatar: review.avatar || 'https://randomuser.me/api/portraits/lego/1.jpg'
         },
-        rating: review.rating,
-        content: review.content,
-        date: review.date,
-        platform: review.platform,
-        isVerified: review.isVerified
+        rating: review.rating || 5,
+        content: review.content || 'This platform has been great for my trading strategy.',
+        date: review.date || new Date(),
+        platform: review.platform || 'Trustpilot',
+        isVerified: review.isVerified !== undefined ? review.isVerified : true
       }));
 
     res.json({
@@ -969,11 +1012,12 @@ app.get('/api/v1/reviews', async (req, res) => {
       data: responseReviews
     });
   } catch (error) {
-    console.error('Reviews error:', error);
+    console.error('Reviews endpoint error:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to load reviews',
-      code: 'REVIEWS_ERROR'
+      code: 'REVIEWS_ERROR',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
