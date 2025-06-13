@@ -806,17 +806,6 @@ process.on('SIGTERM', () => {
   isRunning = false;
 });
 
-const express = require('express');
-const cors = require('cors');
-const crypto = require('crypto');
-const app = express();
-const PORT = process.env.PORT || 5000;
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Configuration
 const REVIEW_CONFIG = {
   REFRESH_INTERVAL: 10 * 60 * 1000, // 10 minutes
   MAX_REVIEWS: 50,
