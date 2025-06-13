@@ -809,115 +809,148 @@ process.on('SIGTERM', () => {
 // Reviews Configuration
 const REVIEW_CONFIG = {
   REFRESH_INTERVAL: 10 * 60 * 1000, // 10 minutes
-  RETURN_COUNT: 5, // Return 5 reviews at a time
-  MIN_RATING: 4, // Only show 4-5 star reviews
+  MAX_REVIEWS: 50,
+  RETURN_COUNT: 5,
+  MIN_RATING: 3,
   MAX_RATING: 5
 };
 
-// Real human profile pictures from Unsplash (free to use, non-AI)
+// Real human profile pictures from Unsplash (free to use)
 const PROFILE_PHOTOS = [
-  'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&h=200&auto=format&fit=crop',
-  'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&h=200&auto=format&fit=crop',
-  'https://images.unsplash.com/photo-1531427186611-ecfd6d936c79?w=200&h=200&auto=format&fit=crop',
-  'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=200&h=200&auto=format&fit=crop',
-  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&h=200&auto=format&fit=crop'
+  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1554151228-14d9def656e4?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1544005313-94ddf0286df2?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1552058544-f2b08422138a?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1542190891-2093d38760f2?crop=faces&fit=crop&w=200&h=200'
 ];
 
-// Professional trader profiles with unique details
+// Professional trader profiles
 const TRADER_PROFILES = [
-  { name: 'James Wilson', country: 'USA', occupation: 'Arbitrage Trader', joinDate: '2022-03-15', trades: 1420, profit: '$15,200' },
-  { name: 'Emma Zhang', country: 'Singapore', occupation: 'Quant Analyst', joinDate: '2021-11-08', trades: 2875, profit: '$32,800' },
-  { name: 'Liam Patel', country: 'UK', occupation: 'Day Trader', joinDate: '2023-01-25', trades: 630, profit: '$8,450' },
-  { name: 'Olivia Chen', country: 'Canada', occupation: 'Crypto Investor', joinDate: '2020-09-12', trades: 4520, profit: '$62,300' },
-  { name: 'Noah Müller', country: 'Germany', occupation: 'Algo Trader', joinDate: '2022-07-04', trades: 3250, profit: '$41,500' }
+  { name: 'James Wilson', country: 'USA', occupation: 'Arbitrage Trader' },
+  { name: 'Emma Zhang', country: 'Singapore', occupation: 'Quantitative Analyst' },
+  { name: 'Liam Patel', country: 'UK', occupation: 'Day Trader' },
+  { name: 'Olivia Chen', country: 'Canada', occupation: 'Crypto Investor' },
+  { name: 'Noah Müller', country: 'Germany', occupation: 'Algorithmic Trader' }
 ];
 
-// Unique review templates with crypto trading specifics
-const REVIEW_TEMPLATES = [
-  {
-    title: "Changed my financial life",
-    content: "After 8 months on this platform, I quit my corporate job. The 0.1% trading fees and instant withdrawals let me scale my arbitrage strategy. Made $12k last month alone!"
-  },
-  {
-    title: "Withdrawals are lightning fast",
-    content: "Compared to other exchanges where withdrawals take days, here it's under 30 minutes. The 0.0005 BTC withdrawal fee is the lowest I've found. Perfect for my high-frequency trading."
-  },
-  {
-    title: "API is rock solid",
-    content: "My automated trading bot has executed 3,200+ trades without a single API failure. The WebSocket streams are ultra-reliable even during high volatility."
-  },
-  {
-    title: "Best for scalping",
-    content: "The order execution speed is unmatched. I scalp 0.5-1% profits all day thanks to their matching engine. Withdrew $8k in profits last week."
-  },
-  {
-    title: "Customer support is excellent",
-    content: "Had a KYC issue resolved in under 2 hours. The support team actually understands trading unlike other exchanges I've used."
-  },
-  {
-    title: "Perfect for arbitrage",
-    content: "I catch 1-2% price differences across markets daily. The platform's speed lets me capitalize before the gap closes. $23k profit in 3 months."
-  },
-  {
-    title: "Lowest fees I've found",
-    content: "0.075% for makers is unbeatable. Saved me $1,200+ in fees last quarter compared to other top exchanges."
-  }
-];
+// Cache object
+let reviewCache = {
+  data: [],
+  lastUpdated: 0
+};
 
-// Generate unique reviews with all required fields
+// Generate realistic reviews with trading scenarios
 function generateReviews() {
   const reviews = [];
   const usedIndices = new Set();
   
-  // Ensure we don't reuse profile photos
+  // Shuffle profile photos to ensure random assignment
   const shuffledPhotos = [...PROFILE_PHOTOS].sort(() => 0.5 - Math.random());
   
-  while (reviews.length < REVIEW_CONFIG.RETURN_COUNT) {
+  // Generate unique reviews
+  while (reviews.length < REVIEW_CONFIG.MAX_REVIEWS) {
     const profileIndex = Math.floor(Math.random() * TRADER_PROFILES.length);
     if (usedIndices.has(profileIndex)) continue;
     usedIndices.add(profileIndex);
     
     const profile = TRADER_PROFILES[profileIndex];
-    const template = REVIEW_TEMPLATES[Math.floor(Math.random() * REVIEW_TEMPLATES.length)];
+    const isPositive = Math.random() > 0.15; // 85% positive, 15% neutral
     
-    // Generate rating between MIN and MAX
-    const rating = Math.floor(Math.random() * (REVIEW_CONFIG.MAX_RATING - REVIEW_CONFIG.MIN_RATING + 1)) + REVIEW_CONFIG.MIN_RATING;
+    // Generate unique trading scenarios
+    const trades = Math.floor(Math.random() * 500) + 50;
+    const profit = isPositive ? `$${(Math.random() * 25000 + 5000).toFixed(0)}` : null;
+    const daysActive = Math.floor(Math.random() * 365) + 30;
+    const rating = isPositive ? Math.floor(Math.random() * 2) + 4 : 3; // 4-5 for positive, 3 for neutral
     
-    // Random date in last 90 days
-    const date = new Date(Date.now() - Math.floor(Math.random() * 90 * 24 * 60 * 60 * 1000));
+    // Generate unique review content
+    const reviewContent = generateUniqueReviewContent(isPositive, profile.occupation);
+    
+    // Random date in last 30 days
+    const date = new Date(Date.now() - Math.floor(Math.random() * 30) * 24 * 60 * 60 * 1000);
     
     reviews.push({
       id: `rev_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`,
       user: {
         ...profile,
         avatar: shuffledPhotos[profileIndex],
-        verified: Math.random() > 0.3 // 70% verified
+        joinDate: new Date(Date.now() - daysActive * 24 * 60 * 60 * 1000).toISOString()
       },
       rating: rating,
-      title: template.title,
-      content: template.content,
+      title: reviewContent.title,
+      content: reviewContent.content,
       date: date.toISOString(),
       platform: 'Trustpilot',
-      trades: profile.trades,
-      profit: profile.profit
+      verified: Math.random() > 0.3, // 70% verified
+      trades: trades,
+      profit: profit
     });
   }
   
   return reviews;
 }
 
+// Generate unique review content
+function generateUniqueReviewContent(isPositive, occupation) {
+  const scenarios = {
+    positive: [
+      {
+        title: "Life-changing platform",
+        content: `After 6 months of trading here, I was able to quit my job. The low fees and fast execution make it perfect for ${occupation.toLowerCase()}. I'm consistently making 1-2% daily returns.`
+      },
+      {
+        title: "Best for my strategy",
+        content: `As a ${occupation}, I've tried 5 different exchanges and none compare. Last week I made $3,200 in profit thanks to their lightning-fast order execution. Withdrawals take less than an hour!`
+      },
+      {
+        title: "From skeptic to believer",
+        content: `I doubted crypto trading until I tried this platform. Their tools are perfect for ${occupation.toLowerCase()} and the 0.1% trading fee is unbeatable. Made enough profit to pay off my debts.`
+      },
+      {
+        title: "Full-time trader now",
+        content: `The advanced charting tools and API access allowed me to automate my ${occupation.toLowerCase()} strategy. Went from $500 to $15,000 in 8 months. Now I trade full-time thanks to this platform.`
+      },
+      {
+        title: "Withdrawals are instant",
+        content: `What impressed me most is how fast withdrawals are processed. Other exchanges take days, but here it's under 30 minutes. The 0.05% withdrawal fee is the lowest I've seen for ${occupation.toLowerCase()}.`
+      }
+    ],
+    neutral: [
+      {
+        title: "Good but could improve",
+        content: `The platform works well for ${occupation.toLowerCase()}, though I occasionally see lag during high volatility. Customer support responds within 12 hours which is acceptable but could be faster.`
+      },
+      {
+        title: "Decent alternative",
+        content: `While not as polished as some competitors, the lower fees make it worthwhile for ${occupation.toLowerCase()}. The mobile app needs work but the desktop trading experience is solid.`
+      }
+    ]
+  };
+
+  const pool = isPositive ? scenarios.positive : scenarios.neutral;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 // Reviews endpoint with caching
 app.get('/api/v1/reviews', async (req, res) => {
   try {
-    // Generate fresh reviews for each request (no caching as per requirements)
-    const reviews = generateReviews();
+    // Check if cache needs refresh
+    const now = Date.now();
+    if (now - reviewCache.lastUpdated > REVIEW_CONFIG.REFRESH_INTERVAL || reviewCache.data.length === 0) {
+      reviewCache.data = generateReviews();
+      reviewCache.lastUpdated = now;
+    }
+    
+    // Shuffle and select reviews
+    const responseData = [...reviewCache.data]
+      .sort(() => 0.5 - Math.random())
+      .slice(0, REVIEW_CONFIG.RETURN_COUNT);
     
     res.json({
       success: true,
-      data: reviews,
+      data: responseData,
       meta: {
-        generatedAt: new Date().toISOString(),
-        totalAvailable: TRADER_PROFILES.length
+        generatedAt: new Date(reviewCache.lastUpdated).toISOString(),
+        totalAvailable: reviewCache.data.length
       }
     });
     
