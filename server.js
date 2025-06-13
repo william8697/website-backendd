@@ -806,164 +806,119 @@ process.on('SIGTERM', () => {
   isRunning = false;
 });
 
-const REVIEW_INTERVAL = 10 * 60 * 1000; // 10 minutes
-let lastReviewGeneration = 0;
+// Reviews Endpoint with Real Human Photos and Dynamic Content
+const REVIEW_INTERVAL = 10 * 60 * 1000; // 10 minutes in milliseconds
+let lastReviewUpdate = 0;
 let cachedReviews = [];
 
-// Helper function to generate realistic reviews with proper validation
-async function generateReviews(count) {
+// Real human profile pictures from Pexels (free stock photos)
+const PROFILE_PHOTOS = [
+  'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1',
+  'https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1',
+  'https://images.pexels.com/photos/1222271/pexels-photo-1222271.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1',
+  'https://images.pexels.com/photos/1681010/pexels-photo-1681010.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1',
+  'https://images.pexels.com/photos/1587009/pexels-photo-1587009.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1',
+  'https://images.pexels.com/photos/1310522/pexels-photo-1310522.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1'
+];
+
+// Generate realistic trading platform reviews
+function generateReviews() {
+  const firstNames = ['James', 'Emma', 'Liam', 'Olivia', 'Noah', 'Ava', 'William', 'Sophia'];
+  const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis'];
+  const countries = ['USA', 'UK', 'Canada', 'Australia', 'Germany', 'France', 'Japan', 'Singapore'];
+  const jobTitles = ['Day Trader', 'Crypto Investor', 'Financial Analyst', 'Arbitrage Specialist', 'Retired Banker'];
+  
   const reviews = [];
+  const usedNames = new Set();
   
-  // Real profile photos from randomuser.me API with fallbacks
-  const profilePhotos = [
-    'https://randomuser.me/api/portraits/men/32.jpg',
-    'https://randomuser.me/api/portraits/women/44.jpg',
-    'https://randomuser.me/api/portraits/men/67.jpg',
-    'https://randomuser.me/api/portraits/women/63.jpg',
-    'https://randomuser.me/api/portraits/men/89.jpg',
-    'https://randomuser.me/api/portraits/women/71.jpg'
-  ];
-  
-  const firstNames = ['James', 'Emma', 'Liam', 'Olivia', 'Noah', 'Ava'];
-  const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia'];
-  
-  const comments = [
-    {
-      content: "I quit my job thanks to Crypto Trading Market! The arbitrage opportunities are incredible. Made $15,000 in my first month trading full-time.",
-      rating: 5
-    },
-    {
-      content: "Withdrawal fee is only 0.0005 BTC - the lowest I've seen. Processed my $8,000 withdrawal in under 30 minutes. This platform is legit!",
-      rating: 5
-    },
-    {
-      content: "Been trading here for 6 months. The API is rock solid for my arbitrage bot. Consistently making 2-3% daily profits with their tight spreads.",
-      rating: 4
-    },
-    {
-      content: "Customer support actually responds in minutes, not days. Had a trade issue resolved while I was still on the phone. These guys know trading.",
-      rating: 5
-    },
-    {
-      content: "The advanced charting tools helped me spot a market inefficiency that netted me $5,200 in one trade. Withdrawal was in my bank next day.",
-      rating: 5
-    },
-    {
-      content: "Took some getting used to but now I'm making consistent profits. Their educational resources are top-notch for new traders.",
-      rating: 4
+  // Generate 6 unique reviews (we'll send 4-5 based on screen size)
+  while (reviews.length < 6) {
+    const firstName = firstNames[Math.floor(Math.random() * firstNames.length)];
+    const lastName = lastNames[Math.floor(Math.random() * lastNames.length)];
+    const fullName = `${firstName} ${lastName}`;
+    
+    // Ensure unique names
+    if (usedNames.has(fullName)) continue;
+    usedNames.add(fullName);
+    
+    const rating = Math.random() > 0.1 ? 4 + Math.floor(Math.random() * 2) : 3; // Mostly 4-5 stars, occasional 3
+    const country = countries[Math.floor(Math.random() * countries.length)];
+    const job = jobTitles[Math.floor(Math.random() * jobTitles.length)];
+    const daysAgo = Math.floor(Math.random() * 30) + 1;
+    const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+    
+    // Realistic review content
+    let content;
+    if (rating >= 4) {
+      const positiveComments = [
+        `After quitting my 9-5 job, I needed a reliable platform for arbitrage trading. Crypto Trading Market's low 0.1% fees and fast execution have helped me make consistent profits. Last month I cleared $8,500 in profits!`,
+        `The withdrawal process is lightning fast compared to other exchanges I've used. Funds hit my bank in under 2 hours. The 0.05% withdrawal fee is very reasonable for this level of service.`,
+        `I've tried 5 different exchanges and none match the liquidity here. My large orders (15+ BTC) get filled without significant slippage. The advanced charting tools are perfect for my trading strategy.`,
+        `As a full-time day trader, I need reliable execution. Crypto Trading Market has the lowest latency of any platform I've used. The $10 minimum trade size is perfect for testing strategies.`,
+        `The arbitrage opportunities here are incredible! I've been making 1.2-1.8% daily profits thanks to the price discrepancies between this exchange and others. The API makes automation easy.`
+      ];
+      content = positiveComments[Math.floor(Math.random() * positiveComments.length)];
+    } else {
+      const neutralComments = [
+        `Decent platform overall, but the mobile app could use some improvements. Sometimes the charts lag during high volatility periods.`,
+        `Customer support response time is about 6 hours, which is okay but could be better. The trading fees are competitive though.`,
+        `Platform works well most of the time, but I've experienced two outages during major market moves in the past 3 months.`
+      ];
+      content = neutralComments[Math.floor(Math.random() * neutralComments.length)];
     }
-  ];
-
-  for (let i = 0; i < count; i++) {
-    try {
-      const firstName = firstNames[Math.floor(Math.random() * firstNames.length)];
-      const lastName = lastNames[Math.floor(Math.random() * lastNames.length)];
-      const comment = comments[Math.floor(Math.random() * comments.length)];
-      const daysAgo = Math.floor(Math.random() * 30) + 1;
-      const avatar = profilePhotos[Math.floor(Math.random() * profilePhotos.length)];
-      
-      const review = new Review({
-        name: `${firstName} ${lastName}`,
-        avatar: avatar,
-        rating: comment.rating,
-        content: comment.content,
-        date: new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000),
-        platform: ['Trustpilot', 'Google', 'Sitejabber'][Math.floor(Math.random() * 3)],
-        isVerified: Math.random() > 0.3 // 70% chance of being verified
-      });
-
-      // Validate before saving
-      await review.validate();
-      await review.save();
-      reviews.push(review);
-    } catch (error) {
-      console.error('Error generating review:', error.message);
-      // Skip this review if validation fails
-    }
+    
+    reviews.push({
+      id: `rev_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      user: {
+        name: fullName,
+        avatar: PROFILE_PHOTOS[(reviews.length % PROFILE_PHOTOS.length)],
+        country: country,
+        occupation: job
+      },
+      rating: rating,
+      content: content,
+      date: date.toISOString(),
+      platform: 'Trustpilot',
+      verified: Math.random() > 0.3 // 70% verified
+    });
   }
-
+  
   return reviews;
 }
 
-// Improved reviews endpoint with proper error handling
-app.get('/api/v1/reviews', async (req, res) => {
+// Reviews API endpoint
+app.get('/api/v1/reviews', (req, res) => {
   try {
     const now = Date.now();
     
-    // Regenerate reviews if cache is empty or 10 minutes have passed
-    if (cachedReviews.length === 0 || now - lastReviewGeneration > REVIEW_INTERVAL) {
-      try {
-        cachedReviews = await generateReviews(6); // Generate 6 new reviews
-        
-        // Also fetch 2 random older reviews from database for variety
-        const oldReviews = await Review.aggregate([
-          { $match: { _id: { $nin: cachedReviews.map(r => r._id) } } },
-          { $sample: { size: 2 } }
-        ]);
-        
-        cachedReviews = [...cachedReviews, ...oldReviews];
-        
-        // Shuffle the array
-        cachedReviews = cachedReviews.sort(() => Math.random() - 0.5);
-        lastReviewGeneration = now;
-      } catch (genError) {
-        console.error('Error generating new reviews:', genError);
-        // Fallback to only cached reviews if generation fails
-      }
+    // Regenerate reviews if interval has passed or no cached reviews
+    if (now - lastReviewUpdate > REVIEW_INTERVAL || cachedReviews.length === 0) {
+      cachedReviews = generateReviews();
+      lastReviewUpdate = now;
+      console.log('Generated new set of reviews');
     }
-
-    // Ensure we always have reviews to show
-    if (cachedReviews.length === 0) {
-      // Ultimate fallback - hardcoded reviews
-      cachedReviews = [{
-        _id: 'fallback1',
-        name: 'Michael Johnson',
-        avatar: 'https://randomuser.me/api/portraits/men/32.jpg',
-        rating: 5,
-        content: "Great platform for arbitrage trading. Made consistent profits since I started.",
-        date: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
-        platform: 'Trustpilot',
-        isVerified: true
-      }, {
-        _id: 'fallback2',
-        name: 'Sarah Williams',
-        avatar: 'https://randomuser.me/api/portraits/women/44.jpg',
-        rating: 4,
-        content: "Low withdrawal fees and fast processing. Highly recommended for serious traders.",
-        date: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
-        platform: 'Google',
-        isVerified: true
-      }];
-    }
-
-    // Return 4 random reviews from cache with proper null checks
-    const responseReviews = cachedReviews
-      .sort(() => Math.random() - 0.5)
-      .slice(0, 4)
-      .map(review => ({
-        id: review._id?.toString() || `temp-${Math.random().toString(36).substr(2, 9)}`,
-        user: {
-          name: review.name || 'Anonymous Trader',
-          avatar: review.avatar || 'https://randomuser.me/api/portraits/lego/1.jpg'
-        },
-        rating: review.rating || 5,
-        content: review.content || 'This platform has been great for my trading strategy.',
-        date: review.date || new Date(),
-        platform: review.platform || 'Trustpilot',
-        isVerified: review.isVerified !== undefined ? review.isVerified : true
-      }));
-
+    
+    // Determine how many reviews to send based on screen size header
+    const screenSize = req.headers['x-screen-size'] || 'desktop';
+    const reviewCount = screenSize === 'mobile' ? 4 : 5;
+    
+    // Select random subset of reviews
+    const shuffled = [...cachedReviews].sort(() => 0.5 - Math.random());
+    const selectedReviews = shuffled.slice(0, reviewCount);
+    
     res.json({
       success: true,
-      data: responseReviews
+      data: selectedReviews,
+      generatedAt: new Date(lastReviewUpdate).toISOString(),
+      nextRefresh: new Date(lastReviewUpdate + REVIEW_INTERVAL).toISOString()
     });
+    
   } catch (error) {
     console.error('Reviews endpoint error:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to load reviews',
-      code: 'REVIEWS_ERROR',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      code: 'REVIEWS_ERROR'
     });
   }
 });
