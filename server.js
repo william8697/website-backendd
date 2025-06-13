@@ -807,12 +807,12 @@ process.on('SIGTERM', () => {
 });
 
 // Reviews Configuration
+// Reviews Configuration
 const REVIEW_CONFIG = {
-  REFRESH_INTERVAL: 10 * 60 * 1000, // 10 minutes
   MAX_REVIEWS: 50,
   RETURN_COUNT: 5,
-  MIN_RATING: 3,
-  MAX_RATING: 5
+  REFRESH_INTERVAL: 10 * 60 * 1000, // 10 minutes
+  CACHE_DURATION: 5 * 60 * 1000 // 5 minutes
 };
 
 // Real human profile pictures from Unsplash (free to use)
@@ -821,25 +821,53 @@ const PROFILE_PHOTOS = [
   'https://images.unsplash.com/photo-1554151228-14d9def656e4?crop=faces&fit=crop&w=200&h=200',
   'https://images.unsplash.com/photo-1544005313-94ddf0286df2?crop=faces&fit=crop&w=200&h=200',
   'https://images.unsplash.com/photo-1552058544-f2b08422138a?crop=faces&fit=crop&w=200&h=200',
-  'https://images.unsplash.com/photo-1542190891-2093d38760f2?crop=faces&fit=crop&w=200&h=200'
+  'https://images.unsplash.com/photo-1542190891-2093d38760f2?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1545167622-3a6ac756afa4?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?crop=faces&fit=crop&w=200&h=200'
 ];
 
-// Professional trader profiles
-const TRADER_PROFILES = [
-  { name: 'James Wilson', country: 'USA', occupation: 'Arbitrage Trader' },
-  { name: 'Emma Zhang', country: 'Singapore', occupation: 'Quantitative Analyst' },
-  { name: 'Liam Patel', country: 'UK', occupation: 'Day Trader' },
-  { name: 'Olivia Chen', country: 'Canada', occupation: 'Crypto Investor' },
-  { name: 'Noah Müller', country: 'Germany', occupation: 'Algorithmic Trader' }
+// Review templates with crypto trading experiences
+const REVIEW_TEMPLATES = [
+  {
+    title: "Life-changing platform",
+    content: "After 6 months of trading on this platform, I was able to quit my job. The low withdrawal fees and fast execution make it perfect for arbitrage trading. I'm consistently making 1-2% daily returns."
+  },
+  {
+    title: "Best for arbitrage",
+    content: "I've tried 5 different exchanges and none compare to the arbitrage opportunities here. Last week I made $3,200 in profit thanks to their lightning-fast order execution."
+  },
+  {
+    title: "From skeptic to believer",
+    content: "I doubted crypto trading until I tried this platform. Their interface is so intuitive and the 0.1% trading fee is unbeatable. Made enough profit in 3 months to pay off my student loans."
+  },
+  {
+    title: "Full-time trader now",
+    content: "The advanced charting tools and API access allowed me to automate my strategy. I went from $500 to $15,000 in 8 months. Now I trade full-time thanks to this platform."
+  },
+  {
+    title: "Withdrawals are instant",
+    content: "What impressed me most is how fast withdrawals are processed. Other exchanges take days, but here it's usually under 30 minutes. The 0.05% withdrawal fee is the lowest I've seen."
+  },
+  {
+    title: "Perfect for day trading",
+    content: "The real-time market data and execution speed have transformed my day trading results. I've increased my profits by 40% since switching to this exchange."
+  },
+  {
+    title: "Excellent customer support",
+    content: "Had an issue with a withdrawal and support resolved it in under an hour. Their team actually understands crypto trading, unlike other platforms I've used."
+  }
 ];
 
 // Cache object
 let reviewCache = {
   data: [],
-  lastUpdated: 0
+  lastUpdated: 0,
+  etag: '',
+  expires: 0
 };
 
-// Generate realistic reviews with trading scenarios
+// Generate unique reviews
 function generateReviews() {
   const reviews = [];
   const usedIndices = new Set();
@@ -847,37 +875,35 @@ function generateReviews() {
   // Shuffle profile photos to ensure random assignment
   const shuffledPhotos = [...PROFILE_PHOTOS].sort(() => 0.5 - Math.random());
   
-  // Generate unique reviews
+  // Generate reviews until we reach max count
   while (reviews.length < REVIEW_CONFIG.MAX_REVIEWS) {
-    const profileIndex = Math.floor(Math.random() * TRADER_PROFILES.length);
-    if (usedIndices.has(profileIndex)) continue;
-    usedIndices.add(profileIndex);
+    const photoIndex = Math.floor(Math.random() * PROFILE_PHOTOS.length);
+    if (usedIndices.has(photoIndex)) continue;
+    usedIndices.add(photoIndex);
     
-    const profile = TRADER_PROFILES[profileIndex];
-    const isPositive = Math.random() > 0.15; // 85% positive, 15% neutral
+    const templateIndex = Math.floor(Math.random() * REVIEW_TEMPLATES.length);
+    const template = REVIEW_TEMPLATES[templateIndex];
     
-    // Generate unique trading scenarios
-    const trades = Math.floor(Math.random() * 500) + 50;
-    const profit = isPositive ? `$${(Math.random() * 25000 + 5000).toFixed(0)}` : null;
-    const daysActive = Math.floor(Math.random() * 365) + 30;
-    const rating = isPositive ? Math.floor(Math.random() * 2) + 4 : 3; // 4-5 for positive, 3 for neutral
-    
-    // Generate unique review content
-    const reviewContent = generateUniqueReviewContent(isPositive, profile.occupation);
+    // Generate realistic rating (4-5 stars)
+    const rating = Math.floor(Math.random() * 2) + 4; // 4 or 5
     
     // Random date in last 30 days
-    const date = new Date(Date.now() - Math.floor(Math.random() * 30) * 24 * 60 * 60 * 1000);
+    const daysAgo = Math.floor(Math.random() * 30) + 1;
+    const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+    
+    // Generate realistic trade count and profit
+    const trades = Math.floor(Math.random() * 500) + 50;
+    const profit = `$${(Math.random() * 25000 + 5000).toFixed(0)}`;
     
     reviews.push({
       id: `rev_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`,
       user: {
-        ...profile,
-        avatar: shuffledPhotos[profileIndex],
-        joinDate: new Date(Date.now() - daysActive * 24 * 60 * 60 * 1000).toISOString()
+        name: `User${Math.floor(Math.random() * 10000)}`,
+        avatar: shuffledPhotos[photoIndex]
       },
       rating: rating,
-      title: reviewContent.title,
-      content: reviewContent.content,
+      title: template.title,
+      content: template.content,
       date: date.toISOString(),
       platform: 'Trustpilot',
       verified: Math.random() > 0.3, // 70% verified
@@ -889,47 +915,6 @@ function generateReviews() {
   return reviews;
 }
 
-// Generate unique review content
-function generateUniqueReviewContent(isPositive, occupation) {
-  const scenarios = {
-    positive: [
-      {
-        title: "Life-changing platform",
-        content: `After 6 months of trading here, I was able to quit my job. The low fees and fast execution make it perfect for ${occupation.toLowerCase()}. I'm consistently making 1-2% daily returns.`
-      },
-      {
-        title: "Best for my strategy",
-        content: `As a ${occupation}, I've tried 5 different exchanges and none compare. Last week I made $3,200 in profit thanks to their lightning-fast order execution. Withdrawals take less than an hour!`
-      },
-      {
-        title: "From skeptic to believer",
-        content: `I doubted crypto trading until I tried this platform. Their tools are perfect for ${occupation.toLowerCase()} and the 0.1% trading fee is unbeatable. Made enough profit to pay off my debts.`
-      },
-      {
-        title: "Full-time trader now",
-        content: `The advanced charting tools and API access allowed me to automate my ${occupation.toLowerCase()} strategy. Went from $500 to $15,000 in 8 months. Now I trade full-time thanks to this platform.`
-      },
-      {
-        title: "Withdrawals are instant",
-        content: `What impressed me most is how fast withdrawals are processed. Other exchanges take days, but here it's under 30 minutes. The 0.05% withdrawal fee is the lowest I've seen for ${occupation.toLowerCase()}.`
-      }
-    ],
-    neutral: [
-      {
-        title: "Good but could improve",
-        content: `The platform works well for ${occupation.toLowerCase()}, though I occasionally see lag during high volatility. Customer support responds within 12 hours which is acceptable but could be faster.`
-      },
-      {
-        title: "Decent alternative",
-        content: `While not as polished as some competitors, the lower fees make it worthwhile for ${occupation.toLowerCase()}. The mobile app needs work but the desktop trading experience is solid.`
-      }
-    ]
-  };
-
-  const pool = isPositive ? scenarios.positive : scenarios.neutral;
-  return pool[Math.floor(Math.random() * pool.length)];
-}
-
 // Reviews endpoint with caching
 app.get('/api/v1/reviews', async (req, res) => {
   try {
@@ -938,28 +923,55 @@ app.get('/api/v1/reviews', async (req, res) => {
     if (now - reviewCache.lastUpdated > REVIEW_CONFIG.REFRESH_INTERVAL || reviewCache.data.length === 0) {
       reviewCache.data = generateReviews();
       reviewCache.lastUpdated = now;
+      reviewCache.etag = `"${crypto.createHash('md5').update(JSON.stringify(reviewCache.data)).digest('hex')}"`;
+      reviewCache.expires = now + REVIEW_CONFIG.CACHE_DURATION;
     }
+    
+    // Check client cache
+    const clientEtag = req.headers['if-none-match'];
+    if (clientEtag && clientEtag === reviewCache.etag) {
+      return res.status(304).end();
+    }
+    
+    // Determine response size based on screen width
+    const screenWidth = parseInt(req.headers['x-screen-width']) || 1920;
+    const isMobile = screenWidth < 768;
+    const reviewCount = isMobile ? 4 : REVIEW_CONFIG.RETURN_COUNT;
     
     // Shuffle and select reviews
     const responseData = [...reviewCache.data]
       .sort(() => 0.5 - Math.random())
-      .slice(0, REVIEW_CONFIG.RETURN_COUNT);
+      .slice(0, reviewCount);
     
+    // Set headers
+    res.setHeader('Cache-Control', `public, max-age=${Math.floor((reviewCache.expires - now) / 1000)}`);
+    res.setHeader('ETag', reviewCache.etag);
+    
+    // Send response
     res.json({
       success: true,
       data: responseData,
       meta: {
         generatedAt: new Date(reviewCache.lastUpdated).toISOString(),
-        totalAvailable: reviewCache.data.length
+        nextRefresh: new Date(reviewCache.lastUpdated + REVIEW_CONFIG.REFRESH_INTERVAL).toISOString(),
+        totalAvailable: reviewCache.data.length,
+        returned: responseData.length,
+        isMobile: isMobile
       }
     });
     
   } catch (error) {
     console.error('Review generation error:', error);
+    
+    // Fallback to empty array if cache is empty
+    const fallbackData = reviewCache.data.length > 0 ? reviewCache.data.slice(0, 4) : [];
+    
     res.status(500).json({
       success: false,
       error: 'Failed to generate reviews',
-      code: 'REVIEW_GENERATION_ERROR'
+      data: fallbackData,
+      code: 'REVIEW_GENERATION_ERROR',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
