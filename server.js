@@ -194,15 +194,56 @@ const FAQ = mongoose.model('FAQ', FAQSchema);
 const Coin = mongoose.model('Coin', CoinSchema);
 const SystemLog = mongoose.model('SystemLog', SystemLogSchema);
 
+// Add this to your models section
 const ReviewSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   name: { type: String, required: true },
-  avatar: { type: String, required: true },
-  rating: { type: Number, min: 1, max: 5, required: true },
-  content: { type: String, required: true },
-  date: { type: Date, default: Date.now },
-  platform: { type: String, default: 'Trustpilot' },
-  isVerified: { type: Boolean, default: true }
+  avatar: { 
+    type: String, 
+    required: true,
+    validate: {
+      validator: function(v) {
+        return /^https?:\/\/.+\..+/.test(v);
+      },
+      message: props => `${props.value} is not a valid URL!`
+    }
+  },
+  rating: { 
+    type: Number, 
+    required: true,
+    min: [1, 'Rating must be at least 1'],
+    max: [5, 'Rating cannot be more than 5']
+  },
+  content: { 
+    type: String, 
+    required: true,
+    minlength: [20, 'Review must be at least 20 characters long'],
+    maxlength: [500, 'Review cannot exceed 500 characters']
+  },
+  date: { 
+    type: Date, 
+    default: Date.now,
+    validate: {
+      validator: function(v) {
+        return v <= new Date();
+      },
+      message: 'Review date cannot be in the future'
+    }
+  },
+  platform: { 
+    type: String, 
+    default: 'Trustpilot',
+    enum: ['Trustpilot', 'Google', 'Sitejabber', 'Cryptowisser']
+  },
+  isVerified: { 
+    type: Boolean, 
+    default: true 
+  },
+  language: {
+    type: String,
+    default: 'en',
+    enum: ['en', 'es', 'fr', 'de', 'zh']
+  }
 });
 
 const Review = mongoose.model('Review', ReviewSchema);
