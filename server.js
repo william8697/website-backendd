@@ -806,151 +806,209 @@ process.on('SIGTERM', () => {
   isRunning = false;
 });
 
-// Enhanced Reviews System for Crypto Trading Market
-// Add this to your server.js
+// Add this to your server.js file
 
-// ======================
-// REVIEWS CONFIGURATION
-// ======================
-const REVIEWS_CONFIG = {
-  UPDATE_INTERVAL: 600000, // 10 minutes
-  MAX_REVIEWS: 4,         // Maximum reviews to return
-  PLATFORM_NAME: "Crypto Trading Market",
-  
-  // Real human photos from diverse sources
-  PROFILE_PICTURES: [
-    "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200",  // Man 1
-    "https://images.unsplash.com/photo-1554151228-14d9def656e4?w=200",    // Woman 1
-    "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200", // Man 2
-    "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=200",    // Woman 2
-    "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=200", // Man 3
-    "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=200", // Woman 3
-    "https://images.unsplash.com/photo-1530268729831-4b0b9e170218?w=200", // Man 4
-    "https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?w=200"   // Woman 4
-  ],
-  
-  TRADER_TYPES: [
-    { type: "arbitrage", emoji: "🔄", adjectives: ["consistent", "reliable", "steady"] },
-    { type: "scalper", emoji: "⚡", adjectives: ["fast-paced", "intense", "quick"] },
-    { type: "swing", emoji: "📈", adjectives: ["calculated", "strategic", "patient"] },
-    { type: "HODLer", emoji: "💎", adjectives: ["long-term", "committed", "steady"] }
-  ],
-  
-  // Realistic trading scenarios
-  TRADING_SCENARIOS: [
-    "After 3 months of arbitrage trading on Crypto Trading Market, I'm consistently making 1.2-1.8% daily profits thanks to the lightning-fast order execution.",
-    "The low 0.1% trading fees let me maximize my scalping strategy - I make 20-30 trades daily and the costs don't eat into my profits.",
-    "As a swing trader, I appreciate the advanced charting tools. Last month I caught a 15% BTC move thanks to the platform's indicators.",
-    "Withdrawal fees are the lowest I've found at just 0.0005 BTC - crucial for my arbitrage strategy across multiple exchanges.",
-    "The API is rock solid for my trading bots. I've been running arbitrage strategies 24/7 with zero downtime.",
-    "Customer support actually understands trading. When I had a withdrawal question, they resolved it in under 30 minutes."
-  ],
-  
-  SUCCESS_STORIES: [
-    "After 6 months, I quit my job to trade full-time. Crypto Trading Market's reliability made this possible.",
-    "My portfolio is up 127% this year thanks to the platform's advanced tools.",
-    "I went from $500 to $15,000 in 8 months using their arbitrage opportunities.",
-    "The low fees saved me over $2,300 last quarter compared to other exchanges."
-  ]
-};
+// Cache for storing current reviews
+let cachedReviews = [];
+let lastReviewUpdate = 0;
+const REVIEW_REFRESH_INTERVAL = 600000; // 10 minutes in milliseconds
 
-// ======================
-// REVIEW GENERATION
-// ======================
+// Real user profile pictures from Picsum
+const profilePictures = [
+  'https://i.pravatar.cc/150?img=1',
+  'https://i.pravatar.cc/150?img=3',
+  'https://i.pravatar.cc/150?img=5',
+  'https://i.pravatar.cc/150?img=7',
+  'https://i.pravatar.cc/150?img=9',
+  'https://i.pravatar.cc/150?img=11',
+  'https://i.pravatar.cc/150?img=13',
+  'https://i.pravatar.cc/150?img=15',
+  'https://i.pravatar.cc/150?img=17',
+  'https://i.pravatar.cc/150?img=19'
+];
+
+// Review templates with realistic human expressions
+const reviewTemplates = [
+  {
+    base: "I've been trading on Crypto Trading Market for {timePeriod} and it's completely transformed my {aspect}. The {feature} is a game-changer!",
+    aspects: ["financial life", "trading strategy", "approach to crypto"],
+    features: [
+      "low withdrawal fees", 
+      "arbitrage opportunities", 
+      "real-time charting tools",
+      "instant order execution"
+    ],
+    timePeriods: ["3 months", "6 months", "a year", "the past 8 months"]
+  },
+  {
+    base: "After trying multiple platforms, Crypto Trading Market stands out for its {positiveQuality}. I was able to {achievement} thanks to their {feature}.",
+    positiveQualities: [
+      "transparent fee structure",
+      "reliable order execution",
+      "responsive customer support",
+      "intuitive interface"
+    ],
+    achievements: [
+      "quit my 9-5 job to trade full-time",
+      "double my portfolio in 6 months",
+      "consistently profit from arbitrage",
+      "withdraw profits with minimal fees"
+    ],
+    features: [
+      "advanced trading tools",
+      "API access",
+      "mobile app",
+      "portfolio tracking"
+    ]
+  },
+  {
+    base: "What I love most about Crypto Trading Market is how {positiveAspect}. Unlike other exchanges, they {differentiator} which makes all the difference for {userType}.",
+    positiveAspects: [
+      "user-friendly it is",
+      "transparent they are with fees",
+      "fast withdrawals process",
+      "reliable the platform is"
+    ],
+    differentiators: [
+      "don't hide fees in small print",
+      "process withdrawals within hours",
+      "offer true arbitrage opportunities",
+      "provide real market prices"
+    ],
+    userTypes: [
+      "serious traders",
+      "arbitrage seekers",
+      "full-time crypto investors",
+      "those looking to maximize profits"
+    ]
+  },
+  {
+    base: "I was skeptical at first, but after {timePeriod} on Crypto Trading Market, I'm convinced it's the best platform for {tradingStyle}. The {feature} alone is worth it!",
+    timePeriods: ["a month", "3 weeks", "two months", "45 days"],
+    tradingStyles: [
+      "arbitrage trading",
+      "day trading",
+      "swing trading",
+      "portfolio diversification"
+    ],
+    features: [
+      "1% withdrawal fee",
+      "instant deposits",
+      "advanced order types",
+      "profit tracking dashboard"
+    ]
+  }
+];
+
+// Helper function to generate realistic human reviews
 function generateReviews() {
   const reviews = [];
-  const usedPhotos = new Set();
+  const usedIndices = new Set();
   
-  // Determine how many reviews to generate (1-4)
-  const reviewCount = Math.min(REVIEWS_CONFIG.MAX_REVIEWS, Math.max(1, Math.floor(Math.random() * 4) + 1));
-  
-  for (let i = 0; i < reviewCount; i++) {
-    // Get unique profile picture
-    let photoIndex;
-    do {
-      photoIndex = Math.floor(Math.random() * REVIEWS_CONFIG.PROFILE_PICTURES.length);
-    } while (usedPhotos.has(photoIndex));
-    usedPhotos.add(photoIndex);
+  // Generate 4 unique reviews
+  while (reviews.length < 4) {
+    const templateIndex = Math.floor(Math.random() * reviewTemplates.length);
+    if (usedIndices.has(templateIndex)) continue;
     
-    // Generate realistic trader profile
-    const traderType = REVIEWS_CONFIG.TRADER_TYPES[Math.floor(Math.random() * REVIEWS_CONFIG.TRADER_TYPES.length)];
-    const monthsUsing = Math.floor(Math.random() * 12) + 1;
-    const rating = 4 + Math.floor(Math.random() * 2); // 4-5 stars
-    const daysAgo = Math.floor(Math.random() * 30) + 1;
-    const reviewDate = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+    usedIndices.add(templateIndex);
+    const template = reviewTemplates[templateIndex];
     
-    // Construct natural-sounding review
-    const reviewParts = [
-      `${REVIEWS_CONFIG.PLATFORM_NAME} has been a game-changer for my ${traderType.type} trading ${traderType.emoji}`,
-      REVIEWS_CONFIG.TRADING_SCENARIOS[Math.floor(Math.random() * REVIEWS_CONFIG.TRADING_SCENARIOS.length)],
-      REVIEWS_CONFIG.SUCCESS_STORIES[Math.floor(Math.random() * REVIEWS_CONFIG.SUCCESS_STORIES.length)],
-      `The platform is perfect for ${traderType.adjectives.join(", ")} traders like me.`
+    // Build the review text by replacing placeholders
+    let reviewText = template.base;
+    for (const [key, values] of Object.entries(template)) {
+      if (key !== 'base') {
+        const randomValue = values[Math.floor(Math.random() * values.length)];
+        reviewText = reviewText.replace(`{${key}}`, randomValue);
+      }
+    }
+    
+    // Add some natural variations
+    const variations = [
+      " Definitely recommending to my trader friends!",
+      " Can't imagine using any other platform now.",
+      " Worth every penny of the small fees they charge.",
+      " 10/10 would recommend for serious traders.",
+      " The support team actually knows their stuff too!"
     ];
+    reviewText += variations[Math.floor(Math.random() * variations.length)];
     
-    // Shuffle and join review parts naturally
-    const shuffledParts = reviewParts.sort(() => 0.5 - Math.random());
-    const reviewContent = shuffledParts.slice(0, 3).join(" ") + " Highly recommend!";
+    // Random rating (mostly 4-5 stars with occasional 3)
+    const rating = Math.random() > 0.9 ? 3 : 4 + Math.floor(Math.random() * 2);
+    
+    // Random date within last 3 months
+    const reviewDate = new Date();
+    reviewDate.setDate(reviewDate.getDate() - Math.floor(Math.random() * 90));
     
     reviews.push({
-      id: `rev_${Date.now()}_${i}`,
+      id: `rev_${crypto.randomBytes(4).toString('hex')}`,
       user: {
-        name: `Trader${Math.floor(Math.random() * 1000)}`,
-        avatar: `${REVIEWS_CONFIG.PROFILE_PICTURES[photoIndex]}`,
-        type: traderType.type,
-        memberSince: new Date(Date.now() - monthsUsing * 30 * 24 * 60 * 60 * 1000).toISOString()
+        name: generateRandomName(),
+        avatar: profilePictures[Math.floor(Math.random() * profilePictures.length)]
       },
       rating: rating,
-      content: reviewContent,
+      content: reviewText,
       date: reviewDate.toISOString(),
-      platform: "Trustpilot",
-      verified: Math.random() > 0.3 // 70% verified
+      platform: "Trustpilot"
     });
   }
   
   return reviews;
 }
 
-// ======================
-// REVIEWS ENDPOINT
-// ======================
-let cachedReviews = [];
-let lastGeneratedTime = 0;
+// Helper to generate random names
+function generateRandomName() {
+  const firstNames = ["James", "Emma", "Liam", "Olivia", "Noah", "Ava", "William", "Sophia"];
+  const lastNames = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller"];
+  return `${firstNames[Math.floor(Math.random() * firstNames.length)]} ${lastNames[Math.floor(Math.random() * lastNames.length)]}`;
+}
 
+// Reviews endpoint
 app.get('/api/v1/reviews', async (req, res) => {
   try {
-    const now = Date.now();
+    const currentTime = Date.now();
     
-    // Generate new reviews if cache is empty or expired
-    if (now - lastGeneratedTime > REVIEWS_CONFIG.UPDATE_INTERVAL || cachedReviews.length === 0) {
+    // Regenerate reviews if cache is empty or expired
+    if (cachedReviews.length === 0 || currentTime - lastReviewUpdate > REVIEW_REFRESH_INTERVAL) {
       cachedReviews = generateReviews();
-      lastGeneratedTime = now;
+      lastReviewUpdate = currentTime;
+      console.log('Generated new set of reviews');
     }
     
-    // Get client screen size from headers
-    const userAgent = req.headers['user-agent'] || '';
-    const isMobile = /Mobile|Android|iPhone/i.test(userAgent);
-    const reviewCount = isMobile ? Math.min(2, cachedReviews.length) : Math.min(4, cachedReviews.length);
+    // Rate limiting check
+    const clientIp = req.ip || req.connection.remoteAddress;
+    const rateLimitKey = `review_${clientIp}`;
     
-    // Select subset of reviews based on device
-    const responseReviews = cachedReviews.slice(0, reviewCount);
+    // Simple in-memory rate limiting (for production, use Redis or similar)
+    if (!global.rateLimits) global.rateLimits = {};
+    if (!global.rateLimits[rateLimitKey]) global.rateLimits[rateLimitKey] = { count: 0, lastReset: Date.now() };
     
+    const limit = global.rateLimits[rateLimitKey];
+    
+    // Reset counter if last reset was more than 1 minute ago
+    if (Date.now() - limit.lastReset > 60000) {
+      limit.count = 0;
+      limit.lastReset = Date.now();
+    }
+    
+    // Check if limit exceeded (100 requests per minute)
+    if (limit.count >= 100) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many requests',
+        retryAfter: Math.ceil((limit.lastReset + 60000 - Date.now()) / 1000)
+      });
+    }
+    
+    limit.count++;
+    
+    // Return cached reviews
     res.json({
       success: true,
-      data: responseReviews,
-      meta: {
-        generatedAt: new Date(lastGeneratedTime).toISOString(),
-        nextRefresh: new Date(lastGeneratedTime + REVIEWS_CONFIG.UPDATE_INTERVAL).toISOString(),
-        deviceType: isMobile ? 'mobile' : 'desktop'
-      }
+      data: cachedReviews
     });
     
   } catch (error) {
-    console.error('Reviews error:', {
-      error: error.message,
-      stack: error.stack,
-      timestamp: new Date().toISOString()
-    });
-    
+    console.error('Error in reviews endpoint:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to load reviews',
@@ -958,7 +1016,6 @@ app.get('/api/v1/reviews', async (req, res) => {
     });
   }
 });
-
 
 // API Routes
 
