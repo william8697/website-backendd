@@ -194,6 +194,19 @@ const FAQ = mongoose.model('FAQ', FAQSchema);
 const Coin = mongoose.model('Coin', CoinSchema);
 const SystemLog = mongoose.model('SystemLog', SystemLogSchema);
 
+const ReviewSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  name: { type: String, required: true },
+  avatar: { type: String, required: true },
+  rating: { type: Number, min: 1, max: 5, required: true },
+  content: { type: String, required: true },
+  date: { type: Date, default: Date.now },
+  platform: { type: String, default: 'Trustpilot' },
+  isVerified: { type: Boolean, default: true }
+});
+
+const Review = mongoose.model('Review', ReviewSchema);
+
 // Initialize default admin if not exists
 async function initializeAdmin() {
     const adminExists = await Admin.findOne({ email: 'admin@cryptotradingmarket.com' });
