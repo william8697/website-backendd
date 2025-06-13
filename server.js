@@ -820,41 +820,19 @@ const REVIEW_CONFIG = {
   }
 };
 
-// Rate limiter for reviews endpoint
-const reviewRateLimiter = rateLimit({
-  windowMs: REVIEW_CONFIG.rateLimit.windowMs,
-  max: REVIEW_CONFIG.rateLimit.max,
-  handler: (req, res) => {
-    res.status(429).json({
-      success: false,
-      error: 'Too many requests',
-      message: `Please try again after ${REVIEW_CONFIG.rateLimit.windowMs / (60 * 1000)} minutes`,
-      code: 'RATE_LIMITED'
-    });
-  }
-});
-
-// Cache setup
-let reviewCache = {
-  data: [],
-  lastUpdated: 0,
-  etag: '',
-  expires: 0
-};
-
-// Real human profile pictures (rotated periodically)
+// Real human profile pictures from Unsplash (free to use)
 const PROFILE_PHOTOS = [
-  'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg',
-  'https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg',
-  'https://images.pexels.com/photos/1222271/pexels-photo-1222271.jpeg',
-  'https://images.pexels.com/photos/1681010/pexels-photo-1681010.jpeg',
-  'https://images.pexels.com/photos/1587009/pexels-photo-1587009.jpeg',
-  'https://images.pexels.com/photos/1310522/pexels-photo-1310522.jpeg',
-  'https://images.pexels.com/photos/1130626/pexels-photo-1130626.jpeg',
-  'https://images.pexels.com/photos/1858175/pexels-photo-1858175.jpeg'
+  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1554151228-14d9def656e4?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1544005313-94ddf0286df2?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1552058544-f2b08422138a?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1542190891-2093d38760f2?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1545167622-3a6ac756afa4?crop=faces&fit=crop&w=200&h=200',
+  'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?crop=faces&fit=crop&w=200&h=200'
 ];
 
-// Professional trader names and backgrounds
+// Professional trader profiles
 const TRADER_PROFILES = [
   { name: 'James Wilson', country: 'USA', occupation: 'Arbitrage Trader' },
   { name: 'Emma Zhang', country: 'Singapore', occupation: 'Quantitative Analyst' },
@@ -870,63 +848,78 @@ const TRADER_PROFILES = [
 const REVIEW_TEMPLATES = {
   positive: [
     {
-      title: "Life-changing profits",
-      content: "After implementing the arbitrage strategies I learned here, I'm consistently making 1.2-1.8% daily returns. Last month I withdrew $12,500 in profits - more than my old salary!"
+      title: "Game-changing platform",
+      content: "The arbitrage opportunities here are unmatched. I've consistently made 0.8-1.5% daily returns using their lightning-fast execution. Withdrew $8,200 profit last week alone!"
     },
     {
-      title: "Lightning-fast execution",
-      content: "The order execution speed is incredible - I get fills in under 50ms during volatile periods. This precision has increased my scalping profits by at least 30% compared to other platforms."
+      title: "Institutional-grade execution",
+      content: "As a professional trader, I need sub-100ms execution and this platform delivers. My scalping strategy performs 25% better here than on other exchanges due to the superior order matching."
     },
     {
-      title: "Withdrawals that actually work",
-      content: "Unlike other exchanges that hold funds for days, my withdrawals here complete in under 2 hours. The 0.05% fee is very reasonable for this level of service."
+      title: "Reliable withdrawals",
+      content: "After bad experiences with other exchanges holding funds, I was skeptical. But my $15K withdrawal processed in 47 minutes with minimal fees. This is now my primary trading account."
     },
     {
-      title: "Perfect for large orders",
-      content: "As someone trading 15+ BTC at a time, the liquidity depth here prevents slippage. I saved over $1,200 in last week's large trades compared to other platforms."
+      title: "Deep liquidity",
+      content: "Trading 10+ BTC at a time requires serious liquidity. I get minimal slippage here even with large orders. Saved over $900 in execution costs last month compared to other platforms."
+    },
+    {
+      title: "Advanced charting",
+      content: "The trading view integration with custom indicators has transformed my technical analysis. I can spot patterns faster and execute trades directly from the charts. My win rate improved by 18% since switching."
     }
   ],
   neutral: [
     {
-      title: "Good but could improve",
-      content: "The platform works well overall, though the mobile app sometimes lags during high volatility. Support response time is about 6 hours, which is acceptable but not exceptional."
+      title: "Good but room for improvement",
+      content: "The platform works well overall, though I occasionally experience lag during high volatility. Customer support responds within 12 hours which is acceptable but could be faster."
     },
     {
       title: "Decent alternative",
-      content: "While not as polished as some competitors, the lower 0.1% trading fees make up for it. I'd like to see more advanced order types added in future updates."
+      content: "While not as polished as the market leader, the lower fees make it worthwhile. The mobile app needs work - sometimes orders don't update in real-time. But for desktop trading it's solid."
     }
   ]
 };
 
-// Generate high-quality, realistic reviews
+// Generate realistic reviews with proper data
 function generateReviews() {
   const reviews = [];
   const usedIndices = new Set();
   
-  // Ensure we don't duplicate profiles
+  // Shuffle profile photos to ensure random assignment
+  const shuffledPhotos = [...PROFILE_PHOTOS].sort(() => 0.5 - Math.random());
+  
+  // Generate reviews until we reach max count
   while (reviews.length < REVIEW_CONFIG.maxReviews) {
-    const index = Math.floor(Math.random() * TRADER_PROFILES.length);
-    if (usedIndices.has(index)) continue;
-    usedIndices.add(index);
+    const profileIndex = Math.floor(Math.random() * TRADER_PROFILES.length);
+    if (usedIndices.has(profileIndex)) continue;
+    usedIndices.add(profileIndex);
     
-    const profile = TRADER_PROFILES[index];
+    const profile = TRADER_PROFILES[profileIndex];
     const isPositive = Math.random() > 0.15; // 85% positive, 15% neutral
     
     const templatePool = isPositive ? REVIEW_TEMPLATES.positive : REVIEW_TEMPLATES.neutral;
     const template = templatePool[Math.floor(Math.random() * templatePool.length)];
     
+    // Generate realistic rating (positive reviews 4-5, neutral 3)
     const rating = isPositive 
-      ? Math.floor(Math.random() * (REVIEW_CONFIG.maxRating - REVIEW_CONFIG.minRating + 1)) + REVIEW_CONFIG.minRating
-      : REVIEW_CONFIG.minRating;
+      ? Math.floor(Math.random() * 2) + 4 // 4 or 5
+      : 3;
     
+    // Random date in last 30 days
     const daysAgo = Math.floor(Math.random() * 30) + 1;
     const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
     
+    // Generate realistic trade count and profit
+    const trades = Math.floor(Math.random() * 500) + 50;
+    const profit = isPositive 
+      ? `$${(Math.random() * 25000 + 5000).toFixed(0)}` 
+      : null;
+    
     reviews.push({
-      id: `rev_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+      id: `rev_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`,
       user: {
         ...profile,
-        avatar: `${PROFILE_PHOTOS[index]}?auto=compress&cs=tinysrgb&w=200&h=200&fit=crop&crop=faces`,
+        avatar: shuffledPhotos[profileIndex],
         joinDate: new Date(Date.now() - (Math.floor(Math.random() * 365) + 30) * 24 * 60 * 60 * 1000).toISOString()
       },
       rating: rating,
@@ -935,110 +928,84 @@ function generateReviews() {
       date: date.toISOString(),
       platform: 'Trustpilot',
       verified: Math.random() > 0.3, // 70% verified
-      trades: Math.floor(Math.random() * 500) + 50,
-      profit: isPositive ? `$${(Math.random() * 25000 + 5000).toFixed(0)}` : null
+      trades: trades,
+      profit: profit
     });
   }
   
   return reviews;
 }
 
-// Cache control middleware
-function cacheMiddleware(req, res, next) {
-  const clientEtag = req.headers['if-none-match'];
-  
-  // If client has same version, send 304
-  if (clientEtag && clientEtag === reviewCache.etag) {
-    return res.status(304).end();
-  }
-  
-  // If cache is fresh, use it
-  if (reviewCache.expires > Date.now()) {
-    res.setHeader('Cache-Control', `public, max-age=${Math.floor((reviewCache.expires - Date.now()) / 1000)}`);
-    res.setHeader('ETag', reviewCache.etag);
-    return next();
-  }
-  
-  // Otherwise proceed to generate new data
-  next();
-}
+// Cache object
+let reviewCache = {
+  data: [],
+  lastUpdated: 0,
+  etag: '',
+  expires: 0
+};
 
-// Reviews endpoint with enhanced features
-app.get('/api/v1/reviews', 
-  reviewRateLimiter,
-  cacheMiddleware,
-  async (req, res) => {
-    try {
-      // Check if we need to regenerate reviews
-      const now = Date.now();
-      if (now - reviewCache.lastUpdated > REVIEW_CONFIG.refreshInterval || reviewCache.data.length === 0) {
-        reviewCache.data = generateReviews();
-        reviewCache.lastUpdated = now;
-        reviewCache.etag = `"${crypto.createHash('md5').update(JSON.stringify(reviewCache.data)).digest('hex')}"`;
-        reviewCache.expires = now + REVIEW_CONFIG.cacheDuration;
-        console.log('Generated new review cache with ETag:', reviewCache.etag);
-      }
-      
-      // Determine client type
-      const userAgent = req.headers['user-agent'] || '';
-      const isMobile = /Mobile|Android|iPhone|iPad|iPod/i.test(userAgent);
-      const screenWidth = parseInt(req.headers['x-screen-width']) || (isMobile ? 375 : 1920);
-      const isSmallScreen = screenWidth < REVIEW_CONFIG.mobileThreshold;
-      
-      // Select appropriate number of reviews
-      const reviewCount = isSmallScreen ? 4 : 5;
-      const shuffledReviews = [...reviewCache.data].sort(() => 0.5 - Math.random());
-      const responseData = shuffledReviews.slice(0, reviewCount);
-      
-      // Set headers
-      res.setHeader('Cache-Control', `public, max-age=${Math.floor((reviewCache.expires - now) / 1000)}`);
-      res.setHeader('ETag', reviewCache.etag);
-      res.setHeader('X-Review-Generated', new Date(reviewCache.lastUpdated).toISOString());
-      res.setHeader('X-Review-Refresh', new Date(reviewCache.lastUpdated + REVIEW_CONFIG.refreshInterval).toISOString());
-      
-      // Send response
-      res.json({
-        success: true,
-        data: responseData,
-        meta: {
-          generatedAt: new Date(reviewCache.lastUpdated).toISOString(),
-          nextRefresh: new Date(reviewCache.lastUpdated + REVIEW_CONFIG.refreshInterval).toISOString(),
-          totalAvailable: reviewCache.data.length,
-          returned: responseData.length,
-          isMobile: isSmallScreen
-        }
-      });
-      
-    } catch (error) {
-      console.error('Review endpoint error:', {
-        error: error.message,
-        stack: error.stack,
-        timestamp: new Date().toISOString()
-      });
-      
-      // Fallback to cached data if available
-      if (reviewCache.data.length > 0) {
-        console.warn('Using cached review data due to error');
-        return res.json({
-          success: true,
-          data: reviewCache.data.slice(0, 4),
-          meta: {
-            fromCache: true,
-            generatedAt: new Date(reviewCache.lastUpdated).toISOString(),
-            warning: 'Serving cached data due to internal error'
-          }
-        });
-      }
-      
-      res.status(500).json({
-        success: false,
-        error: 'Failed to generate reviews',
-        code: 'REVIEW_GENERATION_ERROR',
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
+// Reviews endpoint
+app.get('/api/v1/reviews', (req, res) => {
+  try {
+    // Check if cache needs refresh
+    const now = Date.now();
+    if (now - reviewCache.lastUpdated > REVIEW_CONFIG.refreshInterval || reviewCache.data.length === 0) {
+      reviewCache.data = generateReviews();
+      reviewCache.lastUpdated = now;
+      reviewCache.etag = `"${require('crypto').createHash('md5').update(JSON.stringify(reviewCache.data)).digest('hex')}"`;
+      reviewCache.expires = now + REVIEW_CONFIG.cacheDuration;
     }
+    
+    // Check client cache
+    const clientEtag = req.headers['if-none-match'];
+    if (clientEtag && clientEtag === reviewCache.etag) {
+      return res.status(304).end();
+    }
+    
+    // Determine response size based on screen width
+    const screenWidth = parseInt(req.headers['x-screen-width']) || 1920;
+    const isMobile = screenWidth < REVIEW_CONFIG.mobileThreshold;
+    const reviewCount = isMobile ? 4 : 5;
+    
+    // Shuffle and select reviews
+    const responseData = [...reviewCache.data]
+      .sort(() => 0.5 - Math.random())
+      .slice(0, reviewCount);
+    
+    // Set headers
+    res.setHeader('Cache-Control', `public, max-age=${Math.floor((reviewCache.expires - now) / 1000)}`);
+    res.setHeader('ETag', reviewCache.etag);
+    
+    // Send response
+    res.json({
+      success: true,
+      data: responseData,
+      meta: {
+        generatedAt: new Date(reviewCache.lastUpdated).toISOString(),
+        nextRefresh: new Date(reviewCache.lastUpdated + REVIEW_CONFIG.refreshInterval).toISOString(),
+        totalAvailable: reviewCache.data.length,
+        returned: responseData.length,
+        isMobile: isMobile
+      }
+    });
+    
+  } catch (error) {
+    console.error('Review generation error:', error);
+    
+    // Fallback to empty array if cache is empty
+    const fallbackData = reviewCache.data.length > 0 ? reviewCache.data.slice(0, 4) : [];
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to generate reviews',
+      data: fallbackData,
+      code: 'REVIEW_GENERATION_ERROR',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
-);
+});
+
+
 // API Routes
 
 // Authentication Routes
