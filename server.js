@@ -549,34 +549,48 @@ app.use(express.json({
 app.options('*', cors());
 // server.js - Strict Withdrawal System
 
+const express = require('express');
+const app = express();
+require('dotenv').config();
+
 // Strict Configuration
 const WITHDRAWAL_CONFIG = {
   MIN_BTC: 0.0035,
   MAX_BTC: 7.8368,
   COINS: {
-    BTC: { decimals: 8 },
-    ETH: { minBtc: 0.0035, decimals: 4 },
-    USDT: { minBtc: 0.0035, decimals: 2 },
-    BNB: { minBtc: 0.0035, decimals: 4 },
-    XRP: { minBtc: 0.0035, decimals: 2 },
-    SOL: { minBtc: 0.0035, decimals: 4 },
-    ADA: { minBtc: 0.0035, decimals: 2 },
-    DOGE: { minBtc: 0.0035, decimals: 2 },
-    DOT: { minBtc: 0.0035, decimals: 4 },
-    LTC: { minBtc: 0.0035, decimals: 4 }
+    BTC: { decimals: 8, minAmount: 0.0035 },
+    ETH: { decimals: 4, minAmount: 0.0035 / 0.05 }, // Approx 0.07 ETH
+    USDT: { decimals: 2, minAmount: 0.0035 / 0.000016 }, // Approx 218.75 USDT
+    BNB: { decimals: 4, minAmount: 0.0035 / 0.008 }, // Approx 0.4375 BNB
+    XRP: { decimals: 2, minAmount: 0.0035 / 0.000014 }, // Approx 250 XRP
+    SOL: { decimals: 4, minAmount: 0.0035 / 0.0017 }, // Approx 2.0588 SOL
+    ADA: { decimals: 2, minAmount: 0.0035 / 0.000018 }, // Approx 194.44 ADA
+    DOGE: { decimals: 2, minAmount: 0.0035 / 0.0000023 }, // Approx 1521.74 DOGE
+    DOT: { decimals: 4, minAmount: 0.0035 / 0.00022 }, // Approx 15.9091 DOT
+    LTC: { decimals: 4, minAmount: 0.0035 / 0.0015 } // Approx 2.3333 LTC
   },
-  INTERVAL_RANGE: [2000, 15000], // 2-15 seconds
+  INTERVAL_RANGE: { min: 2000, max: 15000 }, // 2-15 seconds
   HISTORY_SIZE: 100
 };
 
 // State
 let recentWithdrawals = [];
-let btcRates = {};
-let currentInterval = WITHDRAWAL_CONFIG.INTERVAL_RANGE[0];
+let btcRates = {
+  ETH: 0.05,
+  USDT: 0.000016,
+  BNB: 0.008,
+  XRP: 0.000014,
+  SOL: 0.0017,
+  ADA: 0.000018,
+  DOGE: 0.0000023,
+  DOT: 0.00022,
+  LTC: 0.0015
+};
+let currentInterval = WITHDRAWAL_CONFIG.INTERVAL_RANGE.min;
 
 // Initialize system
 function initializeWithdrawalSystem() {
-  // Pre-fill with 50 valid withdrawals
+  // Pre-fill with valid withdrawals
   while (recentWithdrawals.length < 50) {
     addRandomWithdrawal();
   }
@@ -585,89 +599,96 @@ function initializeWithdrawalSystem() {
   setInterval(updateBtcRates, 300000); // 5 minutes
 }
 
-// Generate strictly validated withdrawal
+// Schedule next withdrawal with random interval
+function scheduleNextWithdrawal() {
+  currentInterval = getRandomInterval();
+  setTimeout(() => {
+    addRandomWithdrawal();
+    scheduleNextWithdrawal();
+  }, currentInterval);
+}
+
+// Generate random interval between 2-15 seconds
+function getRandomInterval() {
+  return Math.floor(
+    WITHDRAWAL_CONFIG.INTERVAL_RANGE.min + 
+    Math.random() * (WITHDRAWAL_CONFIG.INTERVAL_RANGE.max - WITHDRAWAL_CONFIG.INTERVAL_RANGE.min)
+  );
+}
+
+// Generate a new random withdrawal
 function addRandomWithdrawal() {
-  const coin = randomProperty(WITHDRAWAL_CONFIG.COINS);
-  const btcAmount = generateValidBtcAmount();
-  const amount = convertToCoinAmount(btcAmount, coin);
-  
-  // Double-check validation
-  const validatedAmount = validateAmount(amount, coin);
-  const btcEquivalent = convertToBtc(validatedAmount, coin);
-  
-  if (btcEquivalent < WITHDRAWAL_CONFIG.MIN_BTC || btcEquivalent > WITHDRAWAL_CONFIG.MAX_BTC) {
-    console.error(`Validation failed for ${validatedAmount} ${coin} (${btcEquivalent} BTC)`);
-    return;
-  }
+  try {
+    const coin = getRandomCoin();
+    const btcAmount = generateValidBtcAmount();
+    const amount = convertToCoinAmount(btcAmount, coin);
+    const validatedAmount = validateAmount(amount, coin);
+    const btcEquivalent = convertToBtc(validatedAmount, coin);
 
-  const withdrawal = {
-    id: generateTxId(),
-    user: generateUserId(),
-    amount: formatAmount(validatedAmount, coin),
-    asset: coin,
-    btcEquivalent: btcEquivalent.toFixed(8),
-    timestamp: new Date().toISOString()
-  };
+    // Final validation
+    if (btcEquivalent < WITHDRAWAL_CONFIG.MIN_BTC || btcEquivalent > WITHDRAWAL_CONFIG.MAX_BTC) {
+      throw new Error(`Validation failed: ${validatedAmount} ${coin} = ${btcEquivalent} BTC`);
+    }
 
-  recentWithdrawals.unshift(withdrawal);
-  if (recentWithdrawals.length > WITHDRAWAL_CONFIG.HISTORY_SIZE) {
-    recentWithdrawals.pop();
+    const withdrawal = {
+      id: generateTxId(),
+      user: generateUserId(),
+      amount: formatAmount(validatedAmount, coin),
+      asset: coin,
+      btcEquivalent: btcEquivalent.toFixed(8),
+      timestamp: new Date().toISOString()
+    };
+
+    recentWithdrawals.unshift(withdrawal);
+    if (recentWithdrawals.length > WITHDRAWAL_CONFIG.HISTORY_SIZE) {
+      recentWithdrawals.pop();
+    }
+  } catch (error) {
+    console.error('Error generating withdrawal:', error.message);
   }
 }
 
-// Strict amount generation
+// Generate valid BTC amount within range
 function generateValidBtcAmount() {
-  // 60% small (0.0035-1 BTC), 30% medium (1-4 BTC), 10% large (4-7.8368 BTC)
+  // Weighted distribution: 60% small, 30% medium, 10% large
   const rand = Math.random();
   let min, max;
   
   if (rand < 0.6) {
     min = WITHDRAWAL_CONFIG.MIN_BTC;
-    max = 1;
+    max = 1.0; // Small: 0.0035 - 1 BTC
   } else if (rand < 0.9) {
-    min = 1;
-    max = 4;
+    min = 1.0;
+    max = 4.0; // Medium: 1 - 4 BTC
   } else {
-    min = 4;
-    max = WITHDRAWAL_CONFIG.MAX_BTC;
+    min = 4.0;
+    max = WITHDRAWAL_CONFIG.MAX_BTC; // Large: 4 - 7.8368 BTC
   }
   
-  // Ensure minimum is respected
-  return Math.max(WITHDRAWAL_CONFIG.MIN_BTC, 
-    Math.min(WITHDRAWAL_CONFIG.MAX_BTC, 
-      min + Math.random() * (max - min)));
+  // Ensure amount is within strict bounds
+  return Math.max(
+    WITHDRAWAL_CONFIG.MIN_BTC,
+    Math.min(
+      WITHDRAWAL_CONFIG.MAX_BTC,
+      min + Math.random() * (max - min)
+    )
+  );
 }
 
-// Convert BTC amount to coin amount with validation
+// Convert BTC amount to specific coin amount
 function convertToCoinAmount(btcAmount, coin) {
   if (coin === 'BTC') return btcAmount;
-  
   const rate = getCurrentRate(coin);
-  let amount = btcAmount / rate;
-  
-  // Ensure minimum value in coin terms
-  const minCoinAmount = WITHDRAWAL_CONFIG.COINS[coin].minBtc / rate;
-  return Math.max(minCoinAmount, amount);
+  return btcAmount / rate;
 }
 
-// Validate amount meets minimum BTC equivalent
+// Validate amount meets minimum requirements
 function validateAmount(amount, coin) {
-  const btcValue = convertToBtc(amount, coin);
-  
-  if (btcValue < WITHDRAWAL_CONFIG.MIN_BTC) {
-    // Adjust to minimum equivalent
-    return WITHDRAWAL_CONFIG.MIN_BTC / getCurrentRate(coin);
-  }
-  
-  if (btcValue > WITHDRAWAL_CONFIG.MAX_BTC) {
-    // Adjust to maximum equivalent
-    return WITHDRAWAL_CONFIG.MAX_BTC / getCurrentRate(coin);
-  }
-  
-  return amount;
+  const minAmount = WITHDRAWAL_CONFIG.COINS[coin].minAmount;
+  return Math.max(minAmount, amount);
 }
 
-// Format amount with strict decimal rules
+// Format amount with proper decimals and commas
 function formatAmount(amount, coin) {
   const decimals = WITHDRAWAL_CONFIG.COINS[coin].decimals;
   const options = {
@@ -676,9 +697,9 @@ function formatAmount(amount, coin) {
     useGrouping: true
   };
   
-  let formatted = amount.toLocaleString('en-US', options);
+  let formatted = parseFloat(amount.toFixed(decimals)).toLocaleString('en-US', options);
   
-  // For non-BTC coins, remove trailing .00 if zero cents
+  // Remove trailing .00 for non-BTC whole numbers
   if (coin !== 'BTC' && amount % 1 === 0) {
     formatted = formatted.replace(/\.0+$/, '');
   }
@@ -687,6 +708,11 @@ function formatAmount(amount, coin) {
 }
 
 // Helper functions
+function getRandomCoin() {
+  const coins = Object.keys(WITHDRAWAL_CONFIG.COINS);
+  return coins[Math.floor(Math.random() * coins.length)];
+}
+
 function generateTxId() {
   return `wd_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 }
@@ -695,14 +721,9 @@ function generateUserId() {
   const patterns = [
     () => `nHc1qf${Math.random().toString(36).substring(2, 6)}****78uf9k`,
     () => `ds54sqf${Math.random().toString(36).substring(2, 6)}****ghKJ68`,
-    () => `bc${Math.floor(Math.random() * 90 + 10)}${Math.random().toString(36).substring(2, 4)}****${Math.random().toString(36).substring(2, 6)}`
+    () => `zt${Math.floor(Math.random() * 90 + 10)}${Math.random().toString(36).substring(2, 4)}****${Math.random().toString(36).substring(2, 6)}`
   ];
   return patterns[Math.floor(Math.random() * patterns.length)]();
-}
-
-function randomProperty(obj) {
-  const keys = Object.keys(obj);
-  return keys[Math.floor(Math.random() * keys.length)];
 }
 
 function getCurrentRate(coin) {
@@ -711,6 +732,49 @@ function getCurrentRate(coin) {
 
 function convertToBtc(amount, coin) {
   return coin === 'BTC' ? amount : amount * getCurrentRate(coin);
+}
+
+function getFallbackRate(coin) {
+  // Current approximate rates as fallback
+  const rates = {
+    ETH: 0.05,
+    USDT: 0.000016,
+    BNB: 0.008,
+    XRP: 0.000014,
+    SOL: 0.0017,
+    ADA: 0.000018,
+    DOGE: 0.0000023,
+    DOT: 0.00022,
+    LTC: 0.0015
+  };
+  return rates[coin] || 1;
+}
+
+// Update BTC exchange rates from CoinGecko
+async function updateBtcRates() {
+  try {
+    const response = await fetch(
+      'https://api.coingecko.com/api/v3/simple/price?' +
+      'ids=ethereum,tether,binancecoin,ripple,solana,cardano,dogecoin,polkadot,litecoin&vs_currencies=btc'
+    );
+    
+    if (response.ok) {
+      const data = await response.json();
+      btcRates = {
+        ETH: data.ethereum?.btc || btcRates.ETH,
+        USDT: data.tether?.btc || btcRates.USDT,
+        BNB: data.binancecoin?.btc || btcRates.BNB,
+        XRP: data.ripple?.btc || btcRates.XRP,
+        SOL: data.solana?.btc || btcRates.SOL,
+        ADA: data.cardano?.btc || btcRates.ADA,
+        DOGE: data.dogecoin?.btc || btcRates.DOGE,
+        DOT: data.polkadot?.btc || btcRates.DOT,
+        LTC: data.litecoin?.btc || btcRates.LTC
+      };
+    }
+  } catch (error) {
+    console.error('Failed to update rates, using cached values:', error);
+  }
 }
 
 // API Endpoint
@@ -725,17 +789,25 @@ app.get('/api/v1/withdrawals/recent', (req, res) => {
       btc_value: w.btcEquivalent,
       timestamp: w.timestamp
     }));
-    
+
+    // Verify all amounts are within range
+    const allValid = data.every(w => {
+      const btcValue = parseFloat(w.btc_value);
+      return btcValue >= WITHDRAWAL_CONFIG.MIN_BTC && 
+             btcValue <= WITHDRAWAL_CONFIG.MAX_BTC;
+    });
+
+    if (!allValid) {
+      throw new Error('Validation check failed');
+    }
+
     res.json({
       success: true,
       data: data,
       validation: {
         min_btc: WITHDRAWAL_CONFIG.MIN_BTC,
         max_btc: WITHDRAWAL_CONFIG.MAX_BTC,
-        all_within_range: data.every(w => 
-          parseFloat(w.btc_value) >= WITHDRAWAL_CONFIG.MIN_BTC && 
-          parseFloat(w.btc_value) <= WITHDRAWAL_CONFIG.MAX_BTC
-        )
+        all_valid: true
       }
     });
   } catch (error) {
@@ -747,8 +819,12 @@ app.get('/api/v1/withdrawals/recent', (req, res) => {
   }
 });
 
-// Initialize
-initializeWithdrawalSystem();
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  initializeWithdrawalSystem();
+});
 
 // API Routes
 
