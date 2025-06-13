@@ -806,18 +806,14 @@ process.on('SIGTERM', () => {
   isRunning = false;
 });
 
-// Configuration constants
+// Reviews Configuration
 const REVIEW_CONFIG = {
-  refreshInterval: 10 * 60 * 1000, // 10 minutes
-  cacheDuration: 5 * 60 * 1000, // 5 minutes
-  maxReviews: 8, // Generate 8 but return 4-5 based on screen size
-  minRating: 3,
-  maxRating: 5,
-  mobileThreshold: 768, // px width for mobile detection
-  rateLimit: {
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100 // limit each IP to 100 requests per windowMs
-  }
+  REFRESH_INTERVAL: 10 * 60 * 1000, // 10 minutes
+  CACHE_DURATION: 5 * 60 * 1000, // 5 minutes
+  MAX_REVIEWS: 50, // Keep 50 reviews in memory
+  RETURN_COUNT: 5, // Return 5 reviews at a time
+  MIN_RATING: 3,
+  MAX_RATING: 5
 };
 
 // Real human profile pictures from Unsplash (free to use)
@@ -848,36 +844,44 @@ const TRADER_PROFILES = [
 const REVIEW_TEMPLATES = {
   positive: [
     {
-      title: "Game-changing platform",
-      content: "The arbitrage opportunities here are unmatched. I've consistently made 0.8-1.5% daily returns using their lightning-fast execution. Withdrew $8,200 profit last week alone!"
+      title: "Life-changing platform",
+      content: "After 6 months of trading on Crypto Trading Market, I was able to quit my 9-5 job. The low withdrawal fees and fast execution make it perfect for arbitrage trading. I'm consistently making 1-2% daily returns."
     },
     {
-      title: "Institutional-grade execution",
-      content: "As a professional trader, I need sub-100ms execution and this platform delivers. My scalping strategy performs 25% better here than on other exchanges due to the superior order matching."
+      title: "Best for arbitrage",
+      content: "I've tried 5 different exchanges and none compare to the arbitrage opportunities here. Last week I made $3,200 in profit thanks to their lightning-fast order execution. Withdrawals take less than an hour!"
     },
     {
-      title: "Reliable withdrawals",
-      content: "After bad experiences with other exchanges holding funds, I was skeptical. But my $15K withdrawal processed in 47 minutes with minimal fees. This is now my primary trading account."
+      title: "From skeptic to believer",
+      content: "I doubted crypto trading until I tried Crypto Trading Market. Their platform is so intuitive and the 0.1% trading fee is unbeatable. Made enough profit in 3 months to pay off my student loans."
     },
     {
-      title: "Deep liquidity",
-      content: "Trading 10+ BTC at a time requires serious liquidity. I get minimal slippage here even with large orders. Saved over $900 in execution costs last month compared to other platforms."
+      title: "Full-time trader now",
+      content: "The advanced charting tools and API access allowed me to automate my strategy. I went from $500 to $15,000 in 8 months. Now I trade full-time thanks to this platform."
     },
     {
-      title: "Advanced charting",
-      content: "The trading view integration with custom indicators has transformed my technical analysis. I can spot patterns faster and execute trades directly from the charts. My win rate improved by 18% since switching."
+      title: "Withdrawals are instant",
+      content: "What impressed me most is how fast withdrawals are processed. Other exchanges take days, but here it's usually under 30 minutes. The 0.05% withdrawal fee is the lowest I've seen."
     }
   ],
   neutral: [
     {
-      title: "Good but room for improvement",
-      content: "The platform works well overall, though I occasionally experience lag during high volatility. Customer support responds within 12 hours which is acceptable but could be faster."
+      title: "Good but could improve",
+      content: "The platform works well overall, though I occasionally see lag during high volatility. Customer support responds within 12 hours which is acceptable but could be faster."
     },
     {
       title: "Decent alternative",
-      content: "While not as polished as the market leader, the lower fees make it worthwhile. The mobile app needs work - sometimes orders don't update in real-time. But for desktop trading it's solid."
+      content: "While not as polished as Binance, the lower fees make it worthwhile. The mobile app needs work - sometimes orders don't update in real-time. But for desktop trading it's solid."
     }
   ]
+};
+
+// Cache object
+let reviewCache = {
+  data: [],
+  lastUpdated: 0,
+  etag: '',
+  expires: 0
 };
 
 // Generate realistic reviews with proper data
@@ -889,7 +893,7 @@ function generateReviews() {
   const shuffledPhotos = [...PROFILE_PHOTOS].sort(() => 0.5 - Math.random());
   
   // Generate reviews until we reach max count
-  while (reviews.length < REVIEW_CONFIG.maxReviews) {
+  while (reviews.length < REVIEW_CONFIG.MAX_REVIEWS) {
     const profileIndex = Math.floor(Math.random() * TRADER_PROFILES.length);
     if (usedIndices.has(profileIndex)) continue;
     usedIndices.add(profileIndex);
@@ -936,24 +940,16 @@ function generateReviews() {
   return reviews;
 }
 
-// Cache object
-let reviewCache = {
-  data: [],
-  lastUpdated: 0,
-  etag: '',
-  expires: 0
-};
-
-// Reviews endpoint
-app.get('/api/v1/reviews', (req, res) => {
+// Reviews endpoint with caching
+app.get('/api/v1/reviews', async (req, res) => {
   try {
     // Check if cache needs refresh
     const now = Date.now();
-    if (now - reviewCache.lastUpdated > REVIEW_CONFIG.refreshInterval || reviewCache.data.length === 0) {
+    if (now - reviewCache.lastUpdated > REVIEW_CONFIG.REFRESH_INTERVAL || reviewCache.data.length === 0) {
       reviewCache.data = generateReviews();
       reviewCache.lastUpdated = now;
-      reviewCache.etag = `"${require('crypto').createHash('md5').update(JSON.stringify(reviewCache.data)).digest('hex')}"`;
-      reviewCache.expires = now + REVIEW_CONFIG.cacheDuration;
+      reviewCache.etag = `"${crypto.createHash('md5').update(JSON.stringify(reviewCache.data)).digest('hex')}"`;
+      reviewCache.expires = now + REVIEW_CONFIG.CACHE_DURATION;
     }
     
     // Check client cache
@@ -964,8 +960,8 @@ app.get('/api/v1/reviews', (req, res) => {
     
     // Determine response size based on screen width
     const screenWidth = parseInt(req.headers['x-screen-width']) || 1920;
-    const isMobile = screenWidth < REVIEW_CONFIG.mobileThreshold;
-    const reviewCount = isMobile ? 4 : 5;
+    const isMobile = screenWidth < 768;
+    const reviewCount = isMobile ? 4 : REVIEW_CONFIG.RETURN_COUNT;
     
     // Shuffle and select reviews
     const responseData = [...reviewCache.data]
@@ -982,7 +978,7 @@ app.get('/api/v1/reviews', (req, res) => {
       data: responseData,
       meta: {
         generatedAt: new Date(reviewCache.lastUpdated).toISOString(),
-        nextRefresh: new Date(reviewCache.lastUpdated + REVIEW_CONFIG.refreshInterval).toISOString(),
+        nextRefresh: new Date(reviewCache.lastUpdated + REVIEW_CONFIG.REFRESH_INTERVAL).toISOString(),
         totalAvailable: reviewCache.data.length,
         returned: responseData.length,
         isMobile: isMobile
