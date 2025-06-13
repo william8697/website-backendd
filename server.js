@@ -806,6 +806,7 @@ process.on('SIGTERM', () => {
   isRunning = false;
 });
 
+
 // Reviews Configuration
 const REVIEW_CONFIG = {
   REFRESH_INTERVAL: 10 * 60 * 1000, // 10 minutes
@@ -1000,7 +1001,6 @@ app.get('/api/v1/reviews', async (req, res) => {
     });
   }
 });
-
 
 // API Routes
 
