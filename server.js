@@ -884,7 +884,7 @@ function generateReviews() {
     const rating = Math.floor(Math.random() * (REVIEW_CONFIG.MAX_RATING - REVIEW_CONFIG.MIN_RATING + 1)) + REVIEW_CONFIG.MIN_RATING;
     
     // Random date in last 90 days
-    const date = new Date(Date.now() - Math.floor(Math.random() * 90 * 24 * 60 * 60 * 1000);
+    const date = new Date(Date.now() - Math.floor(Math.random() * 90 * 24 * 60 * 60 * 1000));
     
     reviews.push({
       id: `rev_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`,
