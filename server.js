@@ -807,7 +807,100 @@ process.on('SIGTERM', () => {
 });
 
 // API Routes
+// Add this to your server.js after the existing routes
+const TRUSTPILOT_REVIEWS = [
+  {
+    id: 'rev_1',
+    user: {
+      name: 'Michael Chen',
+      avatar: 'https://randomuser.me/api/portraits/men/32.jpg'
+    },
+    rating: 5,
+    content: "I've been using this platform for 6 months and the arbitrage opportunities are incredible. Made 15% profit last week alone!",
+    date: '2023-11-15T14:23:10Z',
+    platform: 'Trustpilot'
+  },
+  {
+    id: 'rev_2',
+    user: {
+      name: 'Sarah Johnson',
+      avatar: 'https://randomuser.me/api/portraits/women/44.jpg'
+    },
+    rating: 4,
+    content: "The trading interface is so intuitive. I switched from Binance and haven't looked back. Withdrawals are faster too.",
+    date: '2023-11-10T09:45:22Z',
+    platform: 'Trustpilot'
+  },
+  {
+    id: 'rev_3',
+    user: {
+      name: 'David Wilson',
+      avatar: 'https://randomuser.me/api/portraits/men/67.jpg'
+    },
+    rating: 5,
+    content: "Customer support actually knows crypto! Had an issue with a trade and they resolved it in under an hour. 10/10 would recommend.",
+    date: '2023-11-05T18:12:45Z',
+    platform: 'Trustpilot'
+  },
+  {
+    id: 'rev_4',
+    user: {
+      name: 'Emily Rodriguez',
+      avatar: 'https://randomuser.me/api/portraits/women/28.jpg'
+    },
+    rating: 5,
+    content: "The advanced charting tools helped me spot a market trend early. Made 23% profit on that trade. Platform fees are very reasonable too.",
+    date: '2023-10-29T11:30:15Z',
+    platform: 'Trustpilot'
+  }
+];
 
+// Track shown reviews to prevent duplicates
+let shownReviewIds = [];
+
+// Reviews endpoint
+app.get('/api/v1/reviews', async (req, res) => {
+  try {
+    // Filter out already shown reviews
+    const availableReviews = TRUSTPILOT_REVIEWS.filter(review => 
+      !shownReviewIds.includes(review.id)
+    );
+    
+    // Select 4 random reviews or all available if less than 4
+    const selectedReviews = [];
+    const count = Math.min(4, availableReviews.length);
+    
+    for (let i = 0; i < count; i++) {
+      const randomIndex = Math.floor(Math.random() * availableReviews.length);
+      selectedReviews.push(availableReviews[randomIndex]);
+      shownReviewIds.push(availableReviews[randomIndex].id);
+      availableReviews.splice(randomIndex, 1);
+    }
+    
+    // Reset shown reviews if all have been displayed
+    if (shownReviewIds.length >= TRUSTPILOT_REVIEWS.length) {
+      shownReviewIds = [];
+    }
+    
+    res.json({
+      success: true,
+      data: selectedReviews
+    });
+    
+  } catch (error) {
+    console.error('Reviews error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to load reviews',
+      code: 'REVIEWS_ERROR'
+    });
+  }
+});
+
+// Add a setInterval to rotate reviews every hour
+setInterval(() => {
+  shownReviewIds = [];
+}, 60 * 60 * 1000); // 1 hour
 // Authentication Routes
 app.post('/api/v1/auth/signup', async (req, res) => {
     try {
@@ -3156,71 +3249,6 @@ function getTotalTradersCount() {
   const secondsSinceStart = Math.floor((Date.now() - startTime) / 1000);
   const newTraders = secondsSinceStart * (11 + Math.random() * (7999 - 11));
   return totalTradersBase + Math.floor(newTraders);
-}
-// ======================
-// REVIEWS ENDPOINTS
-// ======================
-
-// Dynamic reviews that change every 10 minutes
-let lastReviewsUpdate = 0;
-let currentReviews = [];
-
-app.get('/api/v1/reviews', async (req, res) => {
-  try {
-    const now = Date.now();
-    
-    // Regenerate reviews every 10 minutes
-    if (now - lastReviewsUpdate > 600000 || currentReviews.length === 0) {
-      currentReviews = generateReviews(3); // Generate 3 new reviews
-      lastReviewsUpdate = now;
-    }
-    
-    res.json({
-      success: true,
-      data: currentReviews
-    });
-  } catch (error) {
-    console.error('Reviews error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to load reviews',
-      code: 'REVIEWS_ERROR'
-    });
-  }
-});
-
-// Generate realistic user reviews
-function generateReviews(count) {
-  const reviews = [];
-  const firstNames = ['John', 'Sarah', 'Michael', 'Emily', 'David', 'Jessica'];
-  const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia'];
-  const comments = [
-    "This platform changed my trading game completely! The execution speed is incredible.",
-    "I was skeptical at first but after trying it, I'm never going back to my old exchange.",
-    "The customer support team actually knows what they're doing. Had an issue resolved in minutes.",
-    "The advanced charting tools alone are worth it. Perfect for my trading strategy.",
-    "Withdrawal processing is faster than any other platform I've used. Highly recommended!"
-  ];
-  
-  for (let i = 0; i < count; i++) {
-    const firstName = firstNames[Math.floor(Math.random() * firstNames.length)];
-    const lastName = lastNames[Math.floor(Math.random() * lastNames.length)];
-    const rating = 4 + Math.floor(Math.random() * 2); // 4-5 stars
-    const date = new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000);
-    
-    reviews.push({
-      id: `rev_${Math.random().toString(36).substring(2, 10)}`,
-      user: {
-        name: `${firstName} ${lastName}`,
-        avatar: `https://i.pravatar.cc/150?u=${firstName.toLowerCase()}${lastName.toLowerCase()}`
-      },
-      rating: rating,
-      content: comments[Math.floor(Math.random() * comments.length)],
-      date: date.toISOString()
-    });
-  }
-  
-  return reviews;
 }
 
 // ======================
