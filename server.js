@@ -194,6 +194,91 @@ const FAQ = mongoose.model('FAQ', FAQSchema);
 const Coin = mongoose.model('Coin', CoinSchema);
 const SystemLog = mongoose.model('SystemLog', SystemLogSchema);
 
+
+// Review Model (add near other schemas)
+const ReviewSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  name: { type: String, required: true },
+  rating: { type: Number, required: true, min: 1, max: 5 },
+  content: { type: String, required: true },
+  avatar: { type: String, required: true },
+  date: { type: Date, default: Date.now },
+  platform: { type: String, default: 'Trustpilot' },
+  shown: { type: Boolean, default: false }
+});
+
+const Review = mongoose.model('Review', ReviewSchema);
+
+// Initialize reviews (run once)
+async function initializeReviews() {
+  const reviewCount = await Review.countDocuments();
+  if (reviewCount === 0) {
+    const reviews = [
+      {
+        userId: 'user1',
+        name: 'Michael Chen',
+        rating: 5,
+        content: "I've been using this platform for 6 months and the arbitrage opportunities are incredible. Made 15% profit last week alone!",
+        avatar: 'https://randomuser.me/api/portraits/men/32.jpg'
+      },
+      {
+        userId: 'user2',
+        name: 'Emily Rodriguez',
+        rating: 5,
+        content: "The advanced charting tools helped me spot a market trend early. Made 23% profit on that trade. Platform fees are very reasonable too.",
+        avatar: 'https://randomuser.me/api/portraits/women/44.jpg'
+      },
+      {
+        userId: 'user3',
+        name: 'David Wilson',
+        rating: 5,
+        content: "Customer support actually knows crypto! Had an issue with a trade and they resolved it in under an hour. 10/10 would recommend.",
+        avatar: 'https://randomuser.me/api/portraits/men/67.jpg'
+      },
+      {
+        userId: 'user4',
+        name: 'Sarah Johnson',
+        rating: 4,
+        content: "The trading interface is so intuitive. I switched from Binance and haven't looked back. Withdrawals are faster too.",
+        avatar: 'https://randomuser.me/api/portraits/women/63.jpg'
+      },
+      // Add more reviews as needed
+    ];
+    await Review.insertMany(reviews);
+  }
+}
+
+// Reviews endpoint
+app.get('/api/v1/reviews', async (req, res) => {
+  try {
+    // Get 4 unseen reviews, mark them as shown, and return
+    const reviews = await Review.aggregate([
+      { $match: { shown: false } },
+      { $sample: { size: 4 } },
+      { $set: { shown: true } },
+      { $merge: { into: 'reviews', whenMatched: 'replace' } }
+    ]);
+
+    if (reviews.length < 4) {
+      // Reset shown status if we're running low
+      await Review.updateMany({}, { $set: { shown: false } });
+      const freshReviews = await Review.aggregate([
+        { $sample: { size: 4 } },
+        { $set: { shown: true } },
+        { $merge: { into: 'reviews', whenMatched: 'replace' } }
+      ]);
+      return res.json(freshReviews);
+    }
+
+    res.json(reviews);
+  } catch (err) {
+    console.error('Error fetching reviews:', err);
+    res.status(500).json({ error: 'Failed to load reviews' });
+  }
+});
+
+// Call initialize on startup
+initializeReviews().catch(console.error);
 // Initialize default admin if not exists
 async function initializeAdmin() {
     const adminExists = await Admin.findOne({ email: 'admin@cryptotradingmarket.com' });
@@ -807,100 +892,7 @@ process.on('SIGTERM', () => {
 });
 
 // API Routes
-// Add this to your server.js after the existing routes
-const TRUSTPILOT_REVIEWS = [
-  {
-    id: 'rev_1',
-    user: {
-      name: 'Michael Chen',
-      avatar: 'https://randomuser.me/api/portraits/men/32.jpg'
-    },
-    rating: 5,
-    content: "I've been using this platform for 6 months and the arbitrage opportunities are incredible. Made 15% profit last week alone!",
-    date: '2023-11-15T14:23:10Z',
-    platform: 'Trustpilot'
-  },
-  {
-    id: 'rev_2',
-    user: {
-      name: 'Sarah Johnson',
-      avatar: 'https://randomuser.me/api/portraits/women/44.jpg'
-    },
-    rating: 4,
-    content: "The trading interface is so intuitive. I switched from Binance and haven't looked back. Withdrawals are faster too.",
-    date: '2023-11-10T09:45:22Z',
-    platform: 'Trustpilot'
-  },
-  {
-    id: 'rev_3',
-    user: {
-      name: 'David Wilson',
-      avatar: 'https://randomuser.me/api/portraits/men/67.jpg'
-    },
-    rating: 5,
-    content: "Customer support actually knows crypto! Had an issue with a trade and they resolved it in under an hour. 10/10 would recommend.",
-    date: '2023-11-05T18:12:45Z',
-    platform: 'Trustpilot'
-  },
-  {
-    id: 'rev_4',
-    user: {
-      name: 'Emily Rodriguez',
-      avatar: 'https://randomuser.me/api/portraits/women/28.jpg'
-    },
-    rating: 5,
-    content: "The advanced charting tools helped me spot a market trend early. Made 23% profit on that trade. Platform fees are very reasonable too.",
-    date: '2023-10-29T11:30:15Z',
-    platform: 'Trustpilot'
-  }
-];
 
-// Track shown reviews to prevent duplicates
-let shownReviewIds = [];
-
-// Reviews endpoint
-app.get('/api/v1/reviews', async (req, res) => {
-  try {
-    // Filter out already shown reviews
-    const availableReviews = TRUSTPILOT_REVIEWS.filter(review => 
-      !shownReviewIds.includes(review.id)
-    );
-    
-    // Select 4 random reviews or all available if less than 4
-    const selectedReviews = [];
-    const count = Math.min(4, availableReviews.length);
-    
-    for (let i = 0; i < count; i++) {
-      const randomIndex = Math.floor(Math.random() * availableReviews.length);
-      selectedReviews.push(availableReviews[randomIndex]);
-      shownReviewIds.push(availableReviews[randomIndex].id);
-      availableReviews.splice(randomIndex, 1);
-    }
-    
-    // Reset shown reviews if all have been displayed
-    if (shownReviewIds.length >= TRUSTPILOT_REVIEWS.length) {
-      shownReviewIds = [];
-    }
-    
-    res.json({
-      success: true,
-      data: selectedReviews
-    });
-    
-  } catch (error) {
-    console.error('Reviews error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to load reviews',
-      code: 'REVIEWS_ERROR'
-    });
-  }
-});
-
-// Add a setInterval to rotate reviews every hour
-setInterval(() => {
-  shownReviewIds = [];
-}, 60 * 60 * 1000); // 1 hour
 // Authentication Routes
 app.post('/api/v1/auth/signup', async (req, res) => {
     try {
