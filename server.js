@@ -633,31 +633,16 @@ app.use(express.json({
 
 app.options('*', cors());
 
-// server.js - Strict Withdrawal System (Frontend-Compatible)
+// server.js - Clean Withdrawal System
 
-// Configuration with trader segmentation
+// Configuration
 const WITHDRAWAL_CONFIG = {
-  MIN_USDT_EQUIV: 350,    // Minimum $350 equivalent for any asset
+  MIN_USDT_EQUIV: 350,    // Minimum $350 equivalent
   MAX_BTC_EQUIV: 7,       // Maximum 7 BTC equivalent
   TRADER_TYPES: {
-    BIG: { 
-      weight: 0.1,        // 10% big traders
-      minBtc: 4,          // 4-7 BTC
-      maxBtc: 7,
-      prefixes: ['vip_', 'whale_', 'prime_'] 
-    },
-    MEDIUM: { 
-      weight: 0.3,        // 30% medium traders
-      minBtc: 1,          // 1-4 BTC
-      maxBtc: 4,
-      prefixes: ['trader_', 'invest_', 'pro_'] 
-    },
-    SMALL: { 
-      weight: 0.6,        // 60% small traders
-      minBtc: 0.0056,     // $350 equivalent minimum (0.0056 BTC)
-      maxBtc: 1,
-      prefixes: ['user_', 'client_', 'new_'] 
-    }
+    BIG: { weight: 0.1, minBtc: 4, maxBtc: 7 },       // 10% big traders
+    MEDIUM: { weight: 0.3, minBtc: 1, maxBtc: 4 },    // 30% medium traders
+    SMALL: { weight: 0.6, minBtc: 0.0056, maxBtc: 1 } // 60% small traders
   },
   COINS: ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA', 'DOGE', 'DOT', 'LTC'],
   INTERVAL: {
@@ -673,7 +658,7 @@ let recentWithdrawals = [];
 let btcRates = {};
 let isRunning = true;
 let currentInterval = WITHDRAWAL_CONFIG.INTERVAL.MIN;
-let usedUserIds = new Set();
+let userIdCounter = 1;
 
 // Initialize system
 function initializeWithdrawalSystem() {
@@ -688,27 +673,9 @@ function initializeWithdrawalSystem() {
   setInterval(updateBtcRates, WITHDRAWAL_CONFIG.RATE_UPDATE_INTERVAL);
 }
 
-// Get random trader type based on weights
-function getRandomTraderType() {
-  const rand = Math.random();
-  if (rand < WITHDRAWAL_CONFIG.TRADER_TYPES.BIG.weight) return 'BIG';
-  if (rand < WITHDRAWAL_CONFIG.TRADER_TYPES.BIG.weight + WITHDRAWAL_CONFIG.TRADER_TYPES.MEDIUM.weight) return 'MEDIUM';
-  return 'SMALL';
-}
-
-// Generate user ID based on trader type
-function generateUserId(traderType) {
-  const prefixes = WITHDRAWAL_CONFIG.TRADER_TYPES[traderType].prefixes;
-  const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
-  const id = `${prefix}${Math.random().toString(36).substr(2, 8)}`;
-  
-  // Ensure uniqueness
-  if (usedUserIds.has(id)) {
-    return generateUserId(traderType);
-  }
-  
-  usedUserIds.add(id);
-  return id;
+// Generate simple user ID
+function generateUserId() {
+  return `USER${userIdCounter++}`;
 }
 
 // Schedule next withdrawal
@@ -726,10 +693,21 @@ function scheduleNextWithdrawal() {
   }, currentInterval);
 }
 
-// Format amount with proper decimals
+// Format amount with commas and proper decimals
 function formatWithdrawalAmount(amount, coin) {
-  const decimalPlaces = coin === 'BTC' ? 8 : (coin === 'USDT' ? 2 : 4);
-  return amount.toFixed(decimalPlaces);
+  const decimalPlaces = coin === 'BTC' ? 4 : (coin === 'USDT' ? 2 : 4);
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: decimalPlaces,
+    maximumFractionDigits: decimalPlaces
+  }).format(amount);
+}
+
+// Get random trader type based on weights
+function getRandomTraderType() {
+  const rand = Math.random();
+  if (rand < WITHDRAWAL_CONFIG.TRADER_TYPES.BIG.weight) return 'BIG';
+  if (rand < WITHDRAWAL_CONFIG.TRADER_TYPES.BIG.weight + WITHDRAWAL_CONFIG.TRADER_TYPES.MEDIUM.weight) return 'MEDIUM';
+  return 'SMALL';
 }
 
 // Generate BTC amount based on trader type
@@ -741,7 +719,7 @@ function generateBtcAmount(traderType) {
 // Add new withdrawal with strict validation
 function addRandomWithdrawal() {
   const traderType = getRandomTraderType();
-  const userId = generateUserId(traderType);
+  const userId = generateUserId();
   const coin = WITHDRAWAL_CONFIG.COINS[Math.floor(Math.random() * WITHDRAWAL_CONFIG.COINS.length)];
   
   // Generate BTC equivalent based on trader type
@@ -770,12 +748,12 @@ function addRandomWithdrawal() {
   }
   
   const withdrawal = {
-    id: `wd_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    id: `WD${Date.now().toString().slice(-6)}`,
     user: userId,
     amount: formatWithdrawalAmount(amount, coin),
     asset: coin,
     timestamp: new Date().toISOString(),
-    nextInterval: currentInterval
+    next_in: currentInterval
   };
   
   recentWithdrawals.unshift(withdrawal);
@@ -786,11 +764,11 @@ function addRandomWithdrawal() {
   }
 }
 
-// Fallback rates ensuring $350 minimum
+// Fallback rates
 function getFallbackRate(coin) {
   const rates = {
     ETH: 0.051,     // 1 ETH ≈ 0.051 BTC
-    USDT: 0.000016, // 1 USDT ≈ 0.000016 BTC (350 USDT = 0.0056 BTC)
+    USDT: 0.000016, // 1 USDT ≈ 0.000016 BTC
     BNB: 0.0082,
     XRP: 0.000014,
     SOL: 0.0017,
@@ -829,7 +807,7 @@ async function updateBtcRates() {
   }
 }
 
-// Withdrawals endpoint (frontend-compatible format)
+// Withdrawals endpoint
 app.get('/api/v1/withdrawals/recent', (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 5, 20);
@@ -839,7 +817,7 @@ app.get('/api/v1/withdrawals/recent', (req, res) => {
       amount: w.amount,
       asset: w.asset,
       timestamp: w.timestamp,
-      next_in: `${w.nextInterval / 1000}s`
+      next_in: `${w.next_in / 1000}s`
     }));
     
     res.json({
@@ -847,9 +825,8 @@ app.get('/api/v1/withdrawals/recent', (req, res) => {
       data: withdrawals,
       system: {
         next_withdrawal_in: `${currentInterval / 1000}s`,
-        min_btc: WITHDRAWAL_CONFIG.TRADER_TYPES.SMALL.minBtc,
-        max_btc: WITHDRAWAL_CONFIG.MAX_BTC_EQUIV,
-        min_usdt: WITHDRAWAL_CONFIG.MIN_USDT_EQUIV
+        min_usdt_equivalent: WITHDRAWAL_CONFIG.MIN_USDT_EQUIV,
+        max_btc_equivalent: WITHDRAWAL_CONFIG.MAX_BTC_EQUIV
       }
     });
   } catch (error) {
