@@ -992,56 +992,67 @@ app.get('/api/v1/reviews', (req, res) => {
 });
 
 
-// Global statistics tracker
+// Global statistics tracker with precise decimal handling
 const GLOBAL_STATS = {
   startTime: Date.now(),
-  totalTraders: 8000000, // 8M base
-  dailyVolume: 0,
-  totalAssets: 100 // Fixed at 100
+  totalTraders: 8_568_568, // Initial value
+  dailyVolume: 5_556_541.36, // Initial value
+  totalAssets: 100, // Fixed
+  lastTraderUpdate: Date.now(),
+  lastVolumeUpdate: Date.now()
 };
 
-// Function to generate random increment within range
-function getRandomIncrement(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+// Random interval generator (1-20 seconds in milliseconds)
+function getRandomInterval() {
+  const intervals = [1000, 3000, 6000, 7000, 11000, 15000, 20000];
+  return intervals[Math.floor(Math.random() * intervals.length)];
 }
 
-// Initialize statistics updater
-function initStatsUpdater() {
-  // Update traders every second (11-7999 new traders/sec)
-  setInterval(() => {
-    GLOBAL_STATS.totalTraders += getRandomIncrement(11, 7999);
-  }, 1000);
+// Precise random increment generator
+function getRandomIncrement(min, max, decimals = 0) {
+  const precision = Math.pow(10, decimals);
+  return (Math.floor(Math.random() * (max * precision - min * precision + 1)) + min * precision) / precision;
+}
 
-  // Update volume every second ($511-$45,281/sec)
-  setInterval(() => {
-    GLOBAL_STATS.dailyVolume += getRandomIncrement(511, 45281);
-  }, 1000);
+// Initialize independent updaters
+function initStatsUpdater() {
+  // Traders updater with random intervals (11-7999 increment)
+  const updateTraders = () => {
+    GLOBAL_STATS.totalTraders += getRandomIncrement(11, 7999);
+    GLOBAL_STATS.lastTraderUpdate = Date.now();
+    setTimeout(updateTraders, getRandomInterval());
+  };
+  updateTraders();
+
+  // Volume updater with independent random intervals ($511-$45,281 increment)
+  const updateVolume = () => {
+    GLOBAL_STATS.dailyVolume += getRandomIncrement(511, 45281, 2);
+    GLOBAL_STATS.lastVolumeUpdate = Date.now();
+    setTimeout(updateVolume, getRandomInterval());
+  };
+  updateVolume();
 
   // Reset daily volume every 24 hours
   setInterval(() => {
-    GLOBAL_STATS.dailyVolume = 0;
+    GLOBAL_STATS.dailyVolume = getRandomIncrement(1_000_000, 5_000_000, 2);
   }, 24 * 60 * 60 * 1000);
 }
 
-// Start the stats updater when server starts
+// Start the stats updater
 initStatsUpdater();
 
-// Add this endpoint to your existing routes
+// Stats endpoint
 app.get('/api/v1/stats/live', (req, res) => {
   try {
-    // Calculate uptime in seconds
-    const uptimeSeconds = Math.floor((Date.now() - GLOBAL_STATS.startTime) / 1000);
-    
     res.json({
       success: true,
       data: {
         totalTraders: GLOBAL_STATS.totalTraders,
         dailyVolume: GLOBAL_STATS.dailyVolume,
         totalAssets: GLOBAL_STATS.totalAssets,
-        uptime: uptimeSeconds,
-        metrics: {
-          tradersPerSec: `${11}-${7999}`,
-          volumePerSec: `$${511}-$${45281}`
+        lastUpdates: {
+          traders: GLOBAL_STATS.lastTraderUpdate,
+          volume: GLOBAL_STATS.lastVolumeUpdate
         }
       }
     });
@@ -1054,6 +1065,8 @@ app.get('/api/v1/stats/live', (req, res) => {
     });
   }
 });
+
+
 // API Routes
 
 // Authentication Routes
