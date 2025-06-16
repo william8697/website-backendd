@@ -992,58 +992,66 @@ app.get('/api/v1/reviews', (req, res) => {
 });
 
 
-// Add to your constants section
-const STATS_CONFIG = {
-  BASE_TRADERS: 8000000,
-  TRADER_RATE: { min: 11, max: 7999 },
-  BASE_VOLUME: 500000000, // $500M base volume
-  VOLUME_RATE: { min: 511, max: 45281 },
-  TOTAL_ASSETS: 127
-};
-
-// Persistent counters (would use database in production)
-let liveStats = {
-  startTime: new Date(),
-  totalTraders: STATS_CONFIG.BASE_TRADERS,
-  totalVolume: STATS_CONFIG.BASE_VOLUME
-};
-
-// Initialize and update counters
-function initStatsSystem() {
-  // Update traders every random interval (1-20 seconds)
-  const updateTraders = () => {
-    const newTraders = Math.floor(Math.random() * 
-      (STATS_CONFIG.TRADER_RATE.max - STATS_CONFIG.TRADER_RATE.min + 1)) + STATS_CONFIG.TRADER_RATE.min;
-    liveStats.totalTraders += newTraders;
+// Persistent stats service
+class LiveStatsService {
+  constructor() {
+    this.stats = {
+      startTime: new Date(),
+      totalTraders: 8568568,  // Starting point
+      totalVolume: 5556541.36 * 1000, // Starting volume in $
+      lastTraderUpdate: new Date(),
+      lastVolumeUpdate: new Date()
+    };
     
-    const nextUpdate = (Math.random() * 19000 + 1000); // 1-20 seconds
-    setTimeout(updateTraders, nextUpdate);
-  };
+    this.initUpdates();
+  }
 
-  // Update volume every random interval (1-20 seconds)
-  const updateVolume = () => {
-    const newVolume = Math.floor(Math.random() * 
-      (STATS_CONFIG.VOLUME_RATE.max - STATS_CONFIG.VOLUME_RATE.min + 1)) + STATS_CONFIG.VOLUME_RATE.min;
-    liveStats.totalVolume += newVolume;
-    
-    const nextUpdate = (Math.random() * 19000 + 1000); // 1-20 seconds
-    setTimeout(updateVolume, nextUpdate);
-  };
+  initUpdates() {
+    // Update traders at random intervals (1-20s)
+    const updateTraders = () => {
+      const newTraders = Math.floor(Math.random() * (7999 - 11 + 1)) + 11;
+      this.stats.totalTraders += newTraders;
+      this.stats.lastTraderUpdate = new Date();
+      
+      setTimeout(updateTraders, Math.random() * 19000 + 1000);
+    };
 
-  updateTraders();
-  updateVolume();
+    // Update volume at different random intervals (1-20s)
+    const updateVolume = () => {
+      const newVolume = (Math.random() * (45281 - 511) + 511) * 1000;
+      this.stats.totalVolume += newVolume;
+      this.stats.lastVolumeUpdate = new Date();
+      
+      setTimeout(updateVolume, Math.random() * 19000 + 1000);
+    };
+
+    updateTraders();
+    updateVolume();
+  }
+
+  getStats() {
+    return {
+      totalTraders: this.stats.totalTraders,
+      totalVolume: this.stats.totalVolume,
+      lastUpdated: new Date()
+    };
+  }
 }
+
+// Initialize service
+const statsService = new LiveStatsService();
 
 // Stats endpoint
 app.get('/api/v1/stats/live', (req, res) => {
   try {
+    const stats = statsService.getStats();
     res.json({
       success: true,
       data: {
-        totalTraders: liveStats.totalTraders,
-        totalVolume: liveStats.totalVolume,
-        totalAssets: STATS_CONFIG.TOTAL_ASSETS,
-        uptime: Math.floor((new Date() - liveStats.startTime) / 1000)
+        totalTraders: stats.totalTraders,
+        totalVolume: stats.totalVolume,
+        totalAssets: 127, // Fixed number of assets
+        lastUpdated: stats.lastUpdated
       }
     });
   } catch (err) {
@@ -1056,8 +1064,6 @@ app.get('/api/v1/stats/live', (req, res) => {
   }
 });
 
-// Initialize when server starts
-initStatsSystem();
 
 // API Routes
 
