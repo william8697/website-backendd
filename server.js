@@ -992,74 +992,79 @@ app.get('/api/v1/reviews', (req, res) => {
 });
 
 
-// Persistent stats service
-class LiveStatsService {
-  constructor() {
-    this.stats = {
-      startTime: new Date(),
-      totalTraders: 8568568,  // Starting point
-      totalVolume: 5556541.36 * 1000, // Starting volume in $
-      lastTraderUpdate: new Date(),
-      lastVolumeUpdate: new Date()
-    };
-    
-    this.initUpdates();
-  }
+// Persistent Market Stats System
+const MARKET_STATS_CONFIG = {
+  BASE_TRADERS: 8654545, // 8,654,545 base traders
+  TRADERS_RANGE: { min: 11, max: 7999 },
+  BASE_VOLUME: 2754896125.4, // $2,754,896,125.4
+  VOLUME_RANGE: { min: 511, max: 45281 },
+  TOTAL_ASSETS: 100,
+  INTERVALS: [1000, 3000, 6000, 7000, 11000, 20000]
+};
 
-  initUpdates() {
-    // Update traders at random intervals (1-20s)
-    const updateTraders = () => {
-      const newTraders = Math.floor(Math.random() * (7999 - 11 + 1)) + 11;
-      this.stats.totalTraders += newTraders;
-      this.stats.lastTraderUpdate = new Date();
-      
-      setTimeout(updateTraders, Math.random() * 19000 + 1000);
-    };
+// Persistent in-memory store (would use Redis in production)
+let marketStats = {
+  traders: MARKET_STATS_CONFIG.BASE_TRADERS,
+  volume: MARKET_STATS_CONFIG.BASE_VOLUME,
+  lastUpdated: Date.now(),
+  tradersInterval: getRandomInterval(),
+  volumeInterval: getRandomInterval()
+};
 
-    // Update volume at different random intervals (1-20s)
-    const updateVolume = () => {
-      const newVolume = (Math.random() * (45281 - 511) + 511) * 1000;
-      this.stats.totalVolume += newVolume;
-      this.stats.lastVolumeUpdate = new Date();
-      
-      setTimeout(updateVolume, Math.random() * 19000 + 1000);
-    };
-
-    updateTraders();
-    updateVolume();
-  }
-
-  getStats() {
-    return {
-      totalTraders: this.stats.totalTraders,
-      totalVolume: this.stats.totalVolume,
-      lastUpdated: new Date()
-    };
-  }
+function getRandomInterval() {
+  return MARKET_STATS_CONFIG.INTERVALS[
+    Math.floor(Math.random() * MARKET_STATS_CONFIG.INTERVALS.length)
+  ];
 }
 
-// Initialize service
-const statsService = new LiveStatsService();
+// Start the stats engine
+function initMarketStats() {
+  setInterval(() => {
+    const now = Date.now();
+    
+    // Update traders
+    marketStats.traders += Math.floor(
+      Math.random() * (MARKET_STATS_CONFIG.TRADERS_RANGE.max - MARKET_STATS_CONFIG.TRADERS_RANGE.min + 1) + 
+      MARKET_STATS_CONFIG.TRADERS_RANGE.min
+    );
+    
+    // Update volume
+    marketStats.volume += 
+      (Math.random() * (MARKET_STATS_CONFIG.VOLUME_RANGE.max - MARKET_STATS_CONFIG.VOLUME_RANGE.min)) + 
+      MARKET_STATS_CONFIG.VOLUME_RANGE.min;
+    
+    marketStats.lastUpdated = now;
+    marketStats.tradersInterval = getRandomInterval();
+    marketStats.volumeInterval = getRandomInterval();
+    
+  }, 1000); // Check for updates every second
+}
 
-// Stats endpoint
-app.get('/api/v1/stats/live', (req, res) => {
+// Initialize on server start
+initMarketStats();
+
+// API Endpoint
+app.get('/api/v1/market-stats', (req, res) => {
   try {
-    const stats = statsService.getStats();
     res.json({
       success: true,
       data: {
-        totalTraders: stats.totalTraders,
-        totalVolume: stats.totalVolume,
-        totalAssets: 127, // Fixed number of assets
-        lastUpdated: stats.lastUpdated
+        totalTraders: marketStats.traders,
+        dailyVolume: marketStats.volume,
+        totalAssets: MARKET_STATS_CONFIG.TOTAL_ASSETS,
+        lastUpdated: marketStats.lastUpdated,
+        nextUpdate: {
+          traders: marketStats.tradersInterval,
+          volume: marketStats.volumeInterval
+        }
       }
     });
-  } catch (err) {
-    console.error('Stats endpoint error:', err);
+  } catch (error) {
+    console.error('Market stats error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to load live stats',
-      code: 'STATS_ERROR'
+      error: 'Failed to load market stats',
+      code: 'MARKET_STATS_ERROR'
     });
   }
 });
