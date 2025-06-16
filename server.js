@@ -802,6 +802,156 @@ process.on('SIGTERM', () => {
   isRunning = false;
 });
 
+
+// Reviews Endpoint
+const REVIEW_CONFIG = {
+  MIN_RATING: 4,
+  MAX_RATING: 5,
+  REVIEW_COUNT: 3,
+  ROTATION_INTERVAL: 10 * 60 * 1000, // 10 minutes
+  MAX_REVIEW_AGE_DAYS: 7,
+  PLATFORMS: ['Trustpilot', 'Google', 'SiteJabber', 'CryptoCompare'],
+  AVATAR_SOURCES: [
+    'https://randomuser.me/api/portraits/men',
+    'https://randomuser.me/api/portraits/women'
+  ]
+};
+
+let currentReviews = [];
+let lastGenerated = 0;
+
+// Generate realistic human reviews
+function generateReviews() {
+  const now = Date.now();
+  if (now - lastGenerated < REVIEW_CONFIG.ROTATION_INTERVAL && currentReviews.length > 0) {
+    return currentReviews;
+  }
+
+  const reviews = [];
+  const usedNames = new Set();
+
+  for (let i = 0; i < REVIEW_CONFIG.COUNT; i++) {
+    const gender = Math.random() > 0.5 ? 'men' : 'women';
+    const id = Math.floor(Math.random() * 100);
+    const name = generateRandomName();
+    
+    // Ensure unique names
+    if (usedNames.has(name)) {
+      i--;
+      continue;
+    }
+    usedNames.add(name);
+
+    const rating = REVIEW_CONFIG.MIN_RATING + 
+                  Math.random() * (REVIEW_CONFIG.MAX_RATING - REVIEW_CONFIG.MIN_RATING);
+    const roundedRating = Math.round(rating * 10) / 10;
+
+    const reviewDate = new Date(now - Math.random() * REVIEW_CONFIG.MAX_REVIEW_AGE_DAYS * 24 * 60 * 60 * 1000);
+    
+    reviews.push({
+      id: crypto.randomUUID(),
+      name: name,
+      avatar: `${REVIEW_CONFIG.AVATAR_SOURCES[gender === 'men' ? 0 : 1]}/${id}.jpg`,
+      rating: roundedRating,
+      platform: REVIEW_CONFIG.PLATFORMS[Math.floor(Math.random() * REVIEW_CONFIG.PLATFORMS.length)],
+      date: reviewDate.toISOString(),
+      content: generateReviewContent(roundedRating),
+      verified: Math.random() > 0.3 // 70% chance of being verified
+    });
+  }
+
+  currentReviews = reviews;
+  lastGenerated = now;
+  return reviews;
+}
+
+// Generate realistic human names
+function generateRandomName() {
+  const firstNames = ['James', 'John', 'Robert', 'Michael', 'William', 'David', 'Richard', 'Joseph', 
+                     'Thomas', 'Charles', 'Mary', 'Patricia', 'Jennifer', 'Linda', 'Elizabeth', 
+                     'Barbara', 'Susan', 'Jessica', 'Sarah', 'Karen'];
+  const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Miller', 'Davis', 'Garcia', 
+                    'Rodriguez', 'Wilson', 'Martinez', 'Anderson', 'Taylor', 'Thomas', 'Hernandez'];
+  
+  return `${firstNames[Math.floor(Math.random() * firstNames.length)]} ${lastNames[Math.floor(Math.random() * lastNames.length)]}`;
+}
+
+// Generate realistic review content based on rating
+function generateReviewContent(rating) {
+  const positivePhrases = [
+    "This platform has completely changed how I trade crypto. The interface is intuitive and the execution speeds are lightning fast.",
+    "I've tried several exchanges but none compare to the reliability and features offered here. Withdrawals are processed quickly too.",
+    "Excellent customer service! Had an issue with a deposit and it was resolved within hours. Highly recommend for serious traders.",
+    "The advanced charting tools and low fees make this my go-to platform. Made my first profitable trades thanks to their resources.",
+    "Security is top-notch with 2FA and withdrawal confirmations. Feel much safer trading here than on other platforms."
+  ];
+
+  const neutralPhrases = [
+    "Good platform overall, but could use some improvements in the mobile app experience.",
+    "Decent exchange with competitive fees. Had a minor issue but support was helpful in resolving it.",
+    "Works well for my trading needs, though I wish there were more educational resources for beginners."
+  ];
+
+  const phrases = rating >= 4.5 ? positivePhrases : 
+                 rating >= 4 ? [...positivePhrases, ...neutralPhrases] : 
+                 neutralPhrases;
+
+  // Add personal touches
+  const personalizations = [
+    `I've been using it for ${Math.floor(Math.random() * 12) + 1} months now.`,
+    `As someone who trades ${Math.floor(Math.random() * 10) + 5} times per week,`,
+    `Compared to the ${Math.floor(Math.random() * 5) + 2} other platforms I've tried,`,
+    `After depositing over $${(Math.random() * 10000 + 1000).toFixed(0)},`
+  ];
+
+  // Combine phrases naturally
+  let review = personalizations[Math.floor(Math.random() * personalizations.length)] + ' ';
+  review += phrases[Math.floor(Math.random() * phrases.length)] + ' ';
+  
+  // Add closing remark based on rating
+  if (rating >= 4.5) {
+    review += "Will definitely continue using this platform for all my crypto needs!";
+  } else if (rating >= 4) {
+    review += "Overall a solid choice for crypto trading.";
+  } else {
+    review += "Hopefully they'll address these minor issues in future updates.";
+  }
+
+  return review;
+}
+
+// Reviews endpoint
+app.get('/api/v1/reviews', (req, res) => {
+  try {
+    const reviews = generateReviews();
+    
+    res.json({
+      success: true,
+      data: reviews.map(review => ({
+        id: review.id,
+        name: review.name,
+        avatar: review.avatar,
+        rating: review.rating,
+        platform: review.platform,
+        date: review.date,
+        content: review.content,
+        verified: review.verified
+      })),
+      meta: {
+        generatedAt: new Date(lastGenerated).toISOString(),
+        nextRotation: new Date(lastGenerated + REVIEW_CONFIG.ROTATION_INTERVAL).toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('Reviews endpoint error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to generate reviews',
+      code: 'REVIEWS_ERROR'
+    });
+  }
+});
+
 // API Routes
 
 // Authentication Routes
