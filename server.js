@@ -633,16 +633,16 @@ app.use(express.json({
 
 app.options('*', cors());
 
-// server.js - Clean Withdrawal System
+// server.js - Professional Withdrawal System
 
 // Configuration
 const WITHDRAWAL_CONFIG = {
-  MIN_USDT_EQUIV: 350,    // Minimum $350 equivalent
-  MAX_BTC_EQUIV: 7,       // Maximum 7 BTC equivalent
+  MIN_USDT_EQUIV: 350,    // $350 minimum equivalent
+  MAX_BTC_EQUIV: 7,       // 7 BTC maximum equivalent
   TRADER_TYPES: {
-    BIG: { weight: 0.1, minBtc: 4, maxBtc: 7 },       // 10% big traders
-    MEDIUM: { weight: 0.3, minBtc: 1, maxBtc: 4 },    // 30% medium traders
-    SMALL: { weight: 0.6, minBtc: 0.0056, maxBtc: 1 } // 60% small traders
+    BIG: { weight: 0.1, minBtc: 4, maxBtc: 7 },
+    MEDIUM: { weight: 0.3, minBtc: 1, maxBtc: 4 },
+    SMALL: { weight: 0.6, minBtc: 0.0056, maxBtc: 1 }
   },
   COINS: ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'ADA', 'DOGE', 'DOT', 'LTC'],
   INTERVAL: {
@@ -650,7 +650,15 @@ const WITHDRAWAL_CONFIG = {
     MAX: 15000    // 15 seconds
   },
   HISTORY_SIZE: 100,
-  RATE_UPDATE_INTERVAL: 300000 // 5 minutes
+  RATE_UPDATE_INTERVAL: 300000, // 5 minutes
+  ID_PATTERNS: [
+    // Mixed alphanumeric patterns with **** masks
+    (n) => `${randomChar(2)}${n.toString(36).slice(2,4)}****${randomChar(2)}${Math.floor(Math.random()*100)}`,
+    (n) => `${Math.floor(Math.random()*10)}${randomChar(3)}****${n.toString(36).slice(3,6)}${randomChar(1)}`,
+    (n) => `${randomChar(1)}${n.toString(36).slice(1,3)}${Math.floor(Math.random()*1000)}****${randomChar(2)}`,
+    (n) => `${n.toString(36).slice(1,4)}${randomChar(2)}****${Math.floor(Math.random()*100)}${randomChar(1)}`,
+    (n) => `${randomChar(3)}${Math.floor(Math.random()*100)}****${n.toString(36).slice(2,5)}`
+  ]
 };
 
 // System State
@@ -658,7 +666,40 @@ let recentWithdrawals = [];
 let btcRates = {};
 let isRunning = true;
 let currentInterval = WITHDRAWAL_CONFIG.INTERVAL.MIN;
-let userIdCounter = 1;
+let usedIds = new Set();
+
+// Helper to generate random characters
+function randomChar(length) {
+  const chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+// Generate complex user ID
+function generateComplexId() {
+  let id;
+  let attempts = 0;
+  const maxAttempts = 100;
+  
+  do {
+    const pattern = WITHDRAWAL_CONFIG.ID_PATTERNS[
+      Math.floor(Math.random() * WITHDRAWAL_CONFIG.ID_PATTERNS.length)
+    ];
+    id = pattern(Date.now() + attempts);
+    attempts++;
+    
+    if (attempts > maxAttempts) {
+      id = `id${Date.now().toString(36)}${Math.random().toString(36).slice(2,6)}`;
+      break;
+    }
+  } while (usedIds.has(id));
+  
+  usedIds.add(id);
+  return id;
+}
 
 // Initialize system
 function initializeWithdrawalSystem() {
@@ -671,11 +712,6 @@ function initializeWithdrawalSystem() {
   scheduleNextWithdrawal();
   updateBtcRates();
   setInterval(updateBtcRates, WITHDRAWAL_CONFIG.RATE_UPDATE_INTERVAL);
-}
-
-// Generate simple user ID
-function generateUserId() {
-  return `USER${userIdCounter++}`;
 }
 
 // Schedule next withdrawal
@@ -693,20 +729,24 @@ function scheduleNextWithdrawal() {
   }, currentInterval);
 }
 
-// Format amount with commas and proper decimals
+// Format amount with proper thousands separators and decimals
 function formatWithdrawalAmount(amount, coin) {
   const decimalPlaces = coin === 'BTC' ? 4 : (coin === 'USDT' ? 2 : 4);
-  return new Intl.NumberFormat('en-US', {
+  const formatted = amount.toLocaleString('en-US', {
     minimumFractionDigits: decimalPlaces,
     maximumFractionDigits: decimalPlaces
-  }).format(amount);
+  });
+  
+  // Ensure we don't get .0000 for whole numbers
+  return formatted.replace(/(\.\d*?)0+$/, (m, g1) => g1).replace(/\.$/, '');
 }
 
-// Get random trader type based on weights
+// Get random trader type
 function getRandomTraderType() {
   const rand = Math.random();
   if (rand < WITHDRAWAL_CONFIG.TRADER_TYPES.BIG.weight) return 'BIG';
-  if (rand < WITHDRAWAL_CONFIG.TRADER_TYPES.BIG.weight + WITHDRAWAL_CONFIG.TRADER_TYPES.MEDIUM.weight) return 'MEDIUM';
+  if (rand < WITHDRAWAL_CONFIG.TRADER_TYPES.BIG.weight + 
+             WITHDRAWAL_CONFIG.TRADER_TYPES.MEDIUM.weight) return 'MEDIUM';
   return 'SMALL';
 }
 
@@ -719,10 +759,10 @@ function generateBtcAmount(traderType) {
 // Add new withdrawal with strict validation
 function addRandomWithdrawal() {
   const traderType = getRandomTraderType();
-  const userId = generateUserId();
+  const userId = generateComplexId();
   const coin = WITHDRAWAL_CONFIG.COINS[Math.floor(Math.random() * WITHDRAWAL_CONFIG.COINS.length)];
   
-  // Generate BTC equivalent based on trader type
+  // Generate BTC equivalent
   let btcAmount = generateBtcAmount(traderType);
   
   // Calculate coin amount
@@ -748,7 +788,7 @@ function addRandomWithdrawal() {
   }
   
   const withdrawal = {
-    id: `WD${Date.now().toString().slice(-6)}`,
+    id: `WD${Date.now().toString(36).slice(-6).toUpperCase()}`,
     user: userId,
     amount: formatWithdrawalAmount(amount, coin),
     asset: coin,
@@ -813,8 +853,8 @@ app.get('/api/v1/withdrawals/recent', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 5, 20);
     const withdrawals = recentWithdrawals.slice(0, limit).map(w => ({
       id: w.id,
-      user: w.user,
-      amount: w.amount,
+      user: w.user,  // Complex ID like "1d5tP1****23Tj55f"
+      amount: w.amount,  // Formatted like "1,970.2351 USDT"
       asset: w.asset,
       timestamp: w.timestamp,
       next_in: `${w.next_in / 1000}s`
