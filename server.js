@@ -803,7 +803,7 @@ process.on('SIGTERM', () => {
 });
 
 
-// Reviews Endpoint
+// Reviews Endpoint - Backend
 const REVIEW_CONFIG = {
   MIN_RATING: 4,
   MAX_RATING: 5,
@@ -819,51 +819,6 @@ const REVIEW_CONFIG = {
 
 let currentReviews = [];
 let lastGenerated = 0;
-
-// Generate realistic human reviews
-function generateReviews() {
-  const now = Date.now();
-  if (now - lastGenerated < REVIEW_CONFIG.ROTATION_INTERVAL && currentReviews.length > 0) {
-    return currentReviews;
-  }
-
-  const reviews = [];
-  const usedNames = new Set();
-
-  for (let i = 0; i < REVIEW_CONFIG.COUNT; i++) {
-    const gender = Math.random() > 0.5 ? 'men' : 'women';
-    const id = Math.floor(Math.random() * 100);
-    const name = generateRandomName();
-    
-    // Ensure unique names
-    if (usedNames.has(name)) {
-      i--;
-      continue;
-    }
-    usedNames.add(name);
-
-    const rating = REVIEW_CONFIG.MIN_RATING + 
-                  Math.random() * (REVIEW_CONFIG.MAX_RATING - REVIEW_CONFIG.MIN_RATING);
-    const roundedRating = Math.round(rating * 10) / 10;
-
-    const reviewDate = new Date(now - Math.random() * REVIEW_CONFIG.MAX_REVIEW_AGE_DAYS * 24 * 60 * 60 * 1000);
-    
-    reviews.push({
-      id: crypto.randomUUID(),
-      name: name,
-      avatar: `${REVIEW_CONFIG.AVATAR_SOURCES[gender === 'men' ? 0 : 1]}/${id}.jpg`,
-      rating: roundedRating,
-      platform: REVIEW_CONFIG.PLATFORMS[Math.floor(Math.random() * REVIEW_CONFIG.PLATFORMS.length)],
-      date: reviewDate.toISOString(),
-      content: generateReviewContent(roundedRating),
-      verified: Math.random() > 0.3 // 70% chance of being verified
-    });
-  }
-
-  currentReviews = reviews;
-  lastGenerated = now;
-  return reviews;
-}
 
 // Generate realistic human names
 function generateRandomName() {
@@ -920,12 +875,86 @@ function generateReviewContent(rating) {
   return review;
 }
 
-// Reviews endpoint
+// Generate realistic human reviews with validation
+function generateReviews() {
+  const now = Date.now();
+  if (now - lastGenerated < REVIEW_CONFIG.ROTATION_INTERVAL && currentReviews.length > 0) {
+    return currentReviews;
+  }
+
+  const reviews = [];
+  const usedNames = new Set();
+
+  for (let i = 0; i < REVIEW_CONFIG.REVIEW_COUNT; i++) {
+    const gender = Math.random() > 0.5 ? 'men' : 'women';
+    const id = Math.floor(Math.random() * 100);
+    const name = generateRandomName();
+    
+    // Ensure unique names
+    if (usedNames.has(name)) {
+      i--;
+      continue;
+    }
+    usedNames.add(name);
+
+    const rating = REVIEW_CONFIG.MIN_RATING + 
+                  Math.random() * (REVIEW_CONFIG.MAX_RATING - REVIEW_CONFIG.MIN_RATING);
+    const roundedRating = Math.round(rating * 10) / 10;
+
+    const reviewDate = new Date(now - Math.random() * REVIEW_CONFIG.MAX_REVIEW_AGE_DAYS * 24 * 60 * 60 * 1000);
+    
+    // Validate all fields before adding to reviews
+    const review = {
+      id: crypto.randomUUID(),
+      name: name,
+      avatar: `${REVIEW_CONFIG.AVATAR_SOURCES[gender === 'men' ? 0 : 1]}/${id}.jpg`,
+      rating: roundedRating,
+      platform: REVIEW_CONFIG.PLATFORMS[Math.floor(Math.random() * REVIEW_CONFIG.PLATFORMS.length)],
+      date: reviewDate.toISOString(),
+      content: generateReviewContent(roundedRating),
+      verified: Math.random() > 0.3 // 70% chance of being verified
+    };
+
+    // Validate the review object
+    if (
+      typeof review.id === 'string' &&
+      typeof review.name === 'string' &&
+      typeof review.avatar === 'string' &&
+      typeof review.rating === 'number' &&
+      review.rating >= REVIEW_CONFIG.MIN_RATING &&
+      review.rating <= REVIEW_CONFIG.MAX_RATING &&
+      typeof review.platform === 'string' &&
+      REVIEW_CONFIG.PLATFORMS.includes(review.platform) &&
+      typeof review.date === 'string' &&
+      !isNaN(new Date(review.date).getTime()) &&
+      typeof review.content === 'string' &&
+      review.content.length > 0 &&
+      typeof review.verified === 'boolean'
+    ) {
+      reviews.push(review);
+    } else {
+      console.error('Invalid review generated:', review);
+      i--; // Retry this iteration
+    }
+  }
+
+  currentReviews = reviews;
+  lastGenerated = now;
+  return reviews;
+}
+
+// Reviews endpoint with exact path matching
 app.get('/api/v1/reviews', (req, res) => {
   try {
+    // Add CORS headers to ensure frontend can access
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET');
+    res.header('Access-Control-Allow-Headers', 'Content-Type');
+
     const reviews = generateReviews();
     
-    res.json({
+    // Validate the response structure matches frontend expectations
+    const responseData = {
       success: true,
       data: reviews.map(review => ({
         id: review.id,
@@ -939,19 +968,28 @@ app.get('/api/v1/reviews', (req, res) => {
       })),
       meta: {
         generatedAt: new Date(lastGenerated).toISOString(),
-        nextRotation: new Date(lastGenerated + REVIEW_CONFIG.ROTATION_INTERVAL).toISOString()
+        nextRotation: new Date(lastGenerated + REVIEW_CONFIG.ROTATION_INTERVAL).toISOString(),
+        count: reviews.length,
+        averageRating: parseFloat((reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1))
       }
-    });
+    };
+
+    // Additional validation of the response
+    if (!Array.isArray(responseData.data) || responseData.data.length !== REVIEW_CONFIG.REVIEW_COUNT) {
+      throw new Error('Invalid review data generated');
+    }
+
+    res.status(200).json(responseData);
   } catch (error) {
     console.error('Reviews endpoint error:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to generate reviews',
-      code: 'REVIEWS_ERROR'
+      code: 'REVIEWS_ERROR',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
-
 // API Routes
 
 // Authentication Routes
