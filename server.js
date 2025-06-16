@@ -992,54 +992,47 @@ app.get('/api/v1/reviews', (req, res) => {
 });
 
 
-// Global statistics tracker with precise decimal handling
-const GLOBAL_STATS = {
-  startTime: Date.now(),
-  totalTraders: 8_568_568, // Initial value
-  dailyVolume: 5_556_541.36, // Initial value
-  totalAssets: 100, // Fixed
-  lastTraderUpdate: Date.now(),
-  lastVolumeUpdate: Date.now()
+// Add to your constants section
+const STATS_CONFIG = {
+  BASE_TRADERS: 8000000,
+  TRADER_RATE: { min: 11, max: 7999 },
+  BASE_VOLUME: 500000000, // $500M base volume
+  VOLUME_RATE: { min: 511, max: 45281 },
+  TOTAL_ASSETS: 127
 };
 
-// Random interval generator (1-20 seconds in milliseconds)
-function getRandomInterval() {
-  const intervals = [1000, 3000, 6000, 7000, 11000, 15000, 20000];
-  return intervals[Math.floor(Math.random() * intervals.length)];
-}
+// Persistent counters (would use database in production)
+let liveStats = {
+  startTime: new Date(),
+  totalTraders: STATS_CONFIG.BASE_TRADERS,
+  totalVolume: STATS_CONFIG.BASE_VOLUME
+};
 
-// Precise random increment generator
-function getRandomIncrement(min, max, decimals = 0) {
-  const precision = Math.pow(10, decimals);
-  return (Math.floor(Math.random() * (max * precision - min * precision + 1)) + min * precision) / precision;
-}
-
-// Initialize independent updaters
-function initStatsUpdater() {
-  // Traders updater with random intervals (11-7999 increment)
+// Initialize and update counters
+function initStatsSystem() {
+  // Update traders every random interval (1-20 seconds)
   const updateTraders = () => {
-    GLOBAL_STATS.totalTraders += getRandomIncrement(11, 7999);
-    GLOBAL_STATS.lastTraderUpdate = Date.now();
-    setTimeout(updateTraders, getRandomInterval());
+    const newTraders = Math.floor(Math.random() * 
+      (STATS_CONFIG.TRADER_RATE.max - STATS_CONFIG.TRADER_RATE.min + 1)) + STATS_CONFIG.TRADER_RATE.min;
+    liveStats.totalTraders += newTraders;
+    
+    const nextUpdate = (Math.random() * 19000 + 1000); // 1-20 seconds
+    setTimeout(updateTraders, nextUpdate);
   };
-  updateTraders();
 
-  // Volume updater with independent random intervals ($511-$45,281 increment)
+  // Update volume every random interval (1-20 seconds)
   const updateVolume = () => {
-    GLOBAL_STATS.dailyVolume += getRandomIncrement(511, 45281, 2);
-    GLOBAL_STATS.lastVolumeUpdate = Date.now();
-    setTimeout(updateVolume, getRandomInterval());
+    const newVolume = Math.floor(Math.random() * 
+      (STATS_CONFIG.VOLUME_RATE.max - STATS_CONFIG.VOLUME_RATE.min + 1)) + STATS_CONFIG.VOLUME_RATE.min;
+    liveStats.totalVolume += newVolume;
+    
+    const nextUpdate = (Math.random() * 19000 + 1000); // 1-20 seconds
+    setTimeout(updateVolume, nextUpdate);
   };
+
+  updateTraders();
   updateVolume();
-
-  // Reset daily volume every 24 hours
-  setInterval(() => {
-    GLOBAL_STATS.dailyVolume = getRandomIncrement(1_000_000, 5_000_000, 2);
-  }, 24 * 60 * 60 * 1000);
 }
-
-// Start the stats updater
-initStatsUpdater();
 
 // Stats endpoint
 app.get('/api/v1/stats/live', (req, res) => {
@@ -1047,13 +1040,10 @@ app.get('/api/v1/stats/live', (req, res) => {
     res.json({
       success: true,
       data: {
-        totalTraders: GLOBAL_STATS.totalTraders,
-        dailyVolume: GLOBAL_STATS.dailyVolume,
-        totalAssets: GLOBAL_STATS.totalAssets,
-        lastUpdates: {
-          traders: GLOBAL_STATS.lastTraderUpdate,
-          volume: GLOBAL_STATS.lastVolumeUpdate
-        }
+        totalTraders: liveStats.totalTraders,
+        totalVolume: liveStats.totalVolume,
+        totalAssets: STATS_CONFIG.TOTAL_ASSETS,
+        uptime: Math.floor((new Date() - liveStats.startTime) / 1000)
       }
     });
   } catch (err) {
@@ -1066,6 +1056,8 @@ app.get('/api/v1/stats/live', (req, res) => {
   }
 });
 
+// Initialize when server starts
+initStatsSystem();
 
 // API Routes
 
