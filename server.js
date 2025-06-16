@@ -990,6 +990,94 @@ app.get('/api/v1/reviews', (req, res) => {
     });
   }
 });
+
+
+// System Stats Configuration
+const SYSTEM_STATS_CONFIG = {
+  START_TIME: new Date(),
+  BASE_TRADERS: 8000000,
+  TRADER_GROWTH_RANGE: { min: 11, max: 7999 },
+  VOLUME_GROWTH_RANGE: { min: 511, max: 45281 },
+  TOTAL_ASSETS: 100,
+  // Store the last calculated values
+  lastStats: {
+    traders: 8000000,
+    volume: 0,
+    lastUpdate: new Date()
+  }
+};
+
+// Calculate new random increments
+function getRandomIncrement(min, max, seconds) {
+  const increments = [];
+  for (let i = 0; i < seconds; i++) {
+    increments.push(Math.floor(min + Math.random() * (max - min)));
+  }
+  return increments.reduce((sum, val) => sum + val, 0);
+}
+
+// Calculate current stats with independent random increments
+function calculateLiveStats() {
+  const now = new Date();
+  const secondsElapsed = Math.floor((now - SYSTEM_STATS_CONFIG.lastStats.lastUpdate) / 1000);
+  
+  if (secondsElapsed > 0) {
+    // Calculate new traders with independent random increments per second
+    const newTraders = getRandomIncrement(
+      SYSTEM_STATS_CONFIG.TRADER_GROWTH_RANGE.min,
+      SYSTEM_STATS_CONFIG.TRADER_GROWTH_RANGE.max,
+      secondsElapsed
+    );
+    
+    // Calculate new volume with independent random increments per second
+    const newVolume = getRandomIncrement(
+      SYSTEM_STATS_CONFIG.VOLUME_GROWTH_RANGE.min,
+      SYSTEM_STATS_CONFIG.VOLUME_GROWTH_RANGE.max,
+      secondsElapsed
+    );
+    
+    // Update last stats
+    SYSTEM_STATS_CONFIG.lastStats = {
+      traders: SYSTEM_STATS_CONFIG.lastStats.traders + newTraders,
+      volume: SYSTEM_STATS_CONFIG.lastStats.volume + newVolume,
+      lastUpdate: now
+    };
+  }
+  
+  return {
+    totalTraders: SYSTEM_STATS_CONFIG.lastStats.traders,
+    dailyVolume: SYSTEM_STATS_CONFIG.lastStats.volume,
+    totalAssets: SYSTEM_STATS_CONFIG.TOTAL_ASSETS,
+    lastUpdated: now.toISOString(),
+    metrics: {
+      currentTraderRate: SYSTEM_STATS_CONFIG.TRADER_GROWTH_RANGE.min + 
+                         Math.random() * (SYSTEM_STATS_CONFIG.TRADER_GROWTH_RANGE.max - 
+                         SYSTEM_STATS_CONFIG.TRADER_GROWTH_RANGE.min),
+      currentVolumeRate: SYSTEM_STATS_CONFIG.VOLUME_GROWTH_RANGE.min + 
+                         Math.random() * (SYSTEM_STATS_CONFIG.VOLUME_GROWTH_RANGE.max - 
+                         SYSTEM_STATS_CONFIG.VOLUME_GROWTH_RANGE.min)
+    }
+  };
+}
+
+// Stats endpoint
+app.get('/api/v1/stats/live', (req, res) => {
+  try {
+    const stats = calculateLiveStats();
+    
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    console.error('Stats endpoint error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to calculate live stats',
+      code: 'STATS_ERROR'
+    });
+  }
+});
 // API Routes
 
 // Authentication Routes
