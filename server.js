@@ -992,88 +992,64 @@ app.get('/api/v1/reviews', (req, res) => {
 });
 
 
-// System Stats Configuration
-const SYSTEM_STATS_CONFIG = {
-  START_TIME: new Date(),
-  BASE_TRADERS: 8000000,
-  TRADER_GROWTH_RANGE: { min: 11, max: 7999 },
-  VOLUME_GROWTH_RANGE: { min: 511, max: 45281 },
-  TOTAL_ASSETS: 100,
-  // Store the last calculated values
-  lastStats: {
-    traders: 8000000,
-    volume: 0,
-    lastUpdate: new Date()
-  }
+// Global statistics tracker
+const GLOBAL_STATS = {
+  startTime: Date.now(),
+  totalTraders: 8000000, // 8M base
+  dailyVolume: 0,
+  totalAssets: 100 // Fixed at 100
 };
 
-// Calculate new random increments
-function getRandomIncrement(min, max, seconds) {
-  const increments = [];
-  for (let i = 0; i < seconds; i++) {
-    increments.push(Math.floor(min + Math.random() * (max - min)));
-  }
-  return increments.reduce((sum, val) => sum + val, 0);
+// Function to generate random increment within range
+function getRandomIncrement(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-// Calculate current stats with independent random increments
-function calculateLiveStats() {
-  const now = new Date();
-  const secondsElapsed = Math.floor((now - SYSTEM_STATS_CONFIG.lastStats.lastUpdate) / 1000);
-  
-  if (secondsElapsed > 0) {
-    // Calculate new traders with independent random increments per second
-    const newTraders = getRandomIncrement(
-      SYSTEM_STATS_CONFIG.TRADER_GROWTH_RANGE.min,
-      SYSTEM_STATS_CONFIG.TRADER_GROWTH_RANGE.max,
-      secondsElapsed
-    );
-    
-    // Calculate new volume with independent random increments per second
-    const newVolume = getRandomIncrement(
-      SYSTEM_STATS_CONFIG.VOLUME_GROWTH_RANGE.min,
-      SYSTEM_STATS_CONFIG.VOLUME_GROWTH_RANGE.max,
-      secondsElapsed
-    );
-    
-    // Update last stats
-    SYSTEM_STATS_CONFIG.lastStats = {
-      traders: SYSTEM_STATS_CONFIG.lastStats.traders + newTraders,
-      volume: SYSTEM_STATS_CONFIG.lastStats.volume + newVolume,
-      lastUpdate: now
-    };
-  }
-  
-  return {
-    totalTraders: SYSTEM_STATS_CONFIG.lastStats.traders,
-    dailyVolume: SYSTEM_STATS_CONFIG.lastStats.volume,
-    totalAssets: SYSTEM_STATS_CONFIG.TOTAL_ASSETS,
-    lastUpdated: now.toISOString(),
-    metrics: {
-      currentTraderRate: SYSTEM_STATS_CONFIG.TRADER_GROWTH_RANGE.min + 
-                         Math.random() * (SYSTEM_STATS_CONFIG.TRADER_GROWTH_RANGE.max - 
-                         SYSTEM_STATS_CONFIG.TRADER_GROWTH_RANGE.min),
-      currentVolumeRate: SYSTEM_STATS_CONFIG.VOLUME_GROWTH_RANGE.min + 
-                         Math.random() * (SYSTEM_STATS_CONFIG.VOLUME_GROWTH_RANGE.max - 
-                         SYSTEM_STATS_CONFIG.VOLUME_GROWTH_RANGE.min)
-    }
-  };
+// Initialize statistics updater
+function initStatsUpdater() {
+  // Update traders every second (11-7999 new traders/sec)
+  setInterval(() => {
+    GLOBAL_STATS.totalTraders += getRandomIncrement(11, 7999);
+  }, 1000);
+
+  // Update volume every second ($511-$45,281/sec)
+  setInterval(() => {
+    GLOBAL_STATS.dailyVolume += getRandomIncrement(511, 45281);
+  }, 1000);
+
+  // Reset daily volume every 24 hours
+  setInterval(() => {
+    GLOBAL_STATS.dailyVolume = 0;
+  }, 24 * 60 * 60 * 1000);
 }
 
-// Stats endpoint
+// Start the stats updater when server starts
+initStatsUpdater();
+
+// Add this endpoint to your existing routes
 app.get('/api/v1/stats/live', (req, res) => {
   try {
-    const stats = calculateLiveStats();
+    // Calculate uptime in seconds
+    const uptimeSeconds = Math.floor((Date.now() - GLOBAL_STATS.startTime) / 1000);
     
     res.json({
       success: true,
-      data: stats
+      data: {
+        totalTraders: GLOBAL_STATS.totalTraders,
+        dailyVolume: GLOBAL_STATS.dailyVolume,
+        totalAssets: GLOBAL_STATS.totalAssets,
+        uptime: uptimeSeconds,
+        metrics: {
+          tradersPerSec: `${11}-${7999}`,
+          volumePerSec: `$${511}-$${45281}`
+        }
+      }
     });
-  } catch (error) {
-    console.error('Stats endpoint error:', error);
+  } catch (err) {
+    console.error('Stats endpoint error:', err);
     res.status(500).json({
       success: false,
-      error: 'Failed to calculate live stats',
+      error: 'Failed to load live stats',
       code: 'STATS_ERROR'
     });
   }
