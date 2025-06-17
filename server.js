@@ -805,48 +805,131 @@ process.on('SIGTERM', () => {
 
 // Reviews Endpoint - Backend
 
-// Generate realistic review content based on rating - ONLY THIS FUNCTION CHANGES
+// Reviews // Reviews Endpoint - Backend
+const REVIEW_CONFIG = {
+  MIN_RATING: 4,
+  MAX_RATING: 5,
+  REVIEW_COUNT: 5, // Changed from 3 to 5
+  ROTATION_INTERVAL: 10 * 60 * 1000, // 10 minutes
+  MAX_REVIEW_AGE_DAYS: 7,
+  PLATFORMS: ['Trustpilot', 'Google', 'SiteJabber', 'CryptoCompare'],
+  AVATAR_SOURCES: [
+    'https://randomuser.me/api/portraits/men',
+    'https://randomuser.me/api/portraits/women'
+  ]
+};
+
+let currentReviews = [];
+let lastGenerated = 0;
+
+// Generate realistic human names
+function generateRandomName() {
+  const firstNames = ['James', 'John', 'Robert', 'Michael', 'William', 'David', 'Richard', 'Joseph', 
+                     'Thomas', 'Charles', 'Mary', 'Patricia', 'Jennifer', 'Linda', 'Elizabeth', 
+                     'Barbara', 'Susan', 'Jessica', 'Sarah', 'Karen'];
+  const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Miller', 'Davis', 'Garcia', 
+                    'Rodriguez', 'Wilson', 'Martinez', 'Anderson', 'Taylor', 'Thomas', 'Hernandez'];
+  
+  return `${firstNames[Math.floor(Math.random() * firstNames.length)]} ${lastNames[Math.floor(Math.random() * lastNames.length)]}`;
+}
+
+// Generate realistic review content based on rating
 function generateReviewContent(rating) {
-  // User personas with different trading styles
-  const traderTypes = [
+  const reviewTemplates = [
     {
-      type: "Day Trader",
-      style: "scalping the markets all day",
-      painPoints: ["execution speed", "chart latency", "API reliability"],
-      praises: ["instant fills", "deep liquidity", "tight spreads"]
+      intro: [
+        `I've been trading crypto for ${Math.floor(Math.random() * 5) + 1} years and`,
+        `After getting burned on ${['Binance', 'Coinbase', 'Kraken', 'FTX'][Math.floor(Math.random() * 4)]},`,
+        `As someone who trades ${Math.floor(Math.random() * 20) + 5} times per week,`,
+        `After losing ${Math.floor(Math.random() * 3000) + 500} on another platform,`,
+        `Being in crypto since ${2015 + Math.floor(Math.random() * 8)},`
+      ],
+      positive: [
+        "this platform feels like a breath of fresh air. The UI doesn't make me want to pull my hair out like most exchanges.",
+        "I finally found a place that doesn't treat users like criminals when withdrawing. Verification was surprisingly painless!",
+        "the liquidity here is insane - filled my 5 BTC market order with barely any slippage. Color me impressed!",
+        "their security actually makes sense - not just theater like SMS 2FA on other exchanges. The authenticator app integration is flawless.",
+        "the fee structure is transparent and fair. No hidden charges or gotchas like I've experienced elsewhere."
+      ],
+      neutral: [
+        "though I wish they'd improve their mobile app. The current one feels a bit clunky compared to the web version.",
+        "but their customer support could be faster. Took 12 hours to get a response about my deposit question.",
+        "although I'd love to see more altcoins listed. The selection is good but not exhaustive.",
+        "but their educational resources could be better. Had to learn most things through trial and error.",
+        "though the advanced charting could use more indicators. Basic TA tools are there but power traders might want more."
+      ],
+      closing: [
+        "Still, hands down my favorite place to trade right now!",
+        "Despite small flaws, I'm sticking with this platform!",
+        "Would recommend to any serious trader!",
+        "Already told all my crypto friends about this gem!",
+        "10/10 will keep using as my main exchange!"
+      ]
     },
     {
-      type: "HODLer", 
-      style: "buying and holding long-term",
-      painPoints: ["withdrawal limits", "staking rates", "cold storage"],
-      praises: ["security", "earn programs", "insurance"]
-    },
-    {
-      type: "Newbie",
-      style: "just learning crypto",
-      painPoints: ["complex UI", "lack of guides", "verification"],
-      praises: ["simple design", "helpful support", "educational content"]
+      intro: [
+        `After ${Math.floor(Math.random() * 10) + 3} failed attempts with other exchanges,`,
+        `As a ${['day trader', 'swing trader', 'HODLer', 'newbie'][Math.floor(Math.random() * 4)]},`,
+        `Having tried nearly every platform out there,`,
+        `After the ${['Mt. Gox', 'QuadrigaCX', 'Celsius', 'Voyager'][Math.floor(Math.random() * 4)]} disaster,`,
+        `With ${Math.floor(Math.random() * 10) + 1} years in traditional markets,`
+      ],
+      positive: [
+        "the stability of this platform is remarkable. No unexpected downtime during volatile periods.",
+        "the speed of execution is mind-blowing. My limit orders get filled almost instantly!",
+        "their cold storage policy gives me peace of mind. Knowing 95% of funds are offline helps me sleep at night.",
+        "the API documentation is actually usable! Built my trading bot in a weekend thanks to clear examples.",
+        "withdrawal fees are reasonable compared to the highway robbery I've experienced elsewhere."
+      ],
+      neutral: [
+        "wish they had better tax reporting tools. Had to use third-party software for my crypto taxes.",
+        "though their KYC process could be smoother. Had to submit documents twice due to a system glitch.",
+        "but their margin trading limits are conservative. Professional traders might find them restrictive.",
+        "although their mobile notifications are sometimes delayed. Missed a few price alerts because of this.",
+        "wish they offered staking for more coins. Only a handful of options available currently."
+      ],
+      closing: [
+        "Minor complaints aside, this is my go-to exchange now!",
+        "These small issues don't outweigh the fantastic experience overall!",
+        "Already moved 80% of my trading volume here!",
+        "Can't imagine going back to my old exchange after this!",
+        "Worth every satoshi in fees for this level of service!"
+      ]
     }
   ];
 
-  const trader = traderTypes[Math.floor(Math.random() * traderTypes.length)];
-  const monthsUsed = Math.floor(Math.random() * 12) + 1;
-  const amount = `$${(Math.random() * 50000 + 1000).toFixed(0)}`;
-  const comparison = ['Binance', 'Coinbase', 'Kraken'][Math.floor(Math.random() * 3)];
+  const template = reviewTemplates[Math.floor(Math.random() * reviewTemplates.length)];
+  const isPositive = rating >= 4.5 || Math.random() > 0.3;
 
-  // Rating-specific content
-  if (rating >= 4.5) {
-    return `As ${trader.type.toLowerCase()} ${trader.style}, I've been using this for ${monthsUsed} months. ` +
-           `The ${trader.praises[Math.floor(Math.random() * trader.praises.length)]} is game-changing - ` +
-           `way better than ${comparison}. Made ${amount} profit last month!`;
+  let review = `${template.intro[Math.floor(Math.random() * template.intro.length)]} `;
+  review += isPositive 
+    ? template.positive[Math.floor(Math.random() * template.positive.length)]
+    : template.neutral[Math.floor(Math.random() * template.neutral.length)];
+  
+  // Add personal touch
+  if (Math.random() > 0.5) {
+    review += ` ${['Finally', 'Honestly', 'Seriously', 'Truthfully'][Math.floor(Math.random() * 4)]}, `;
+    review += isPositive
+      ? template.closing[Math.floor(Math.random() * template.closing.length)]
+      : "I hope they keep improving because the potential is huge!";
   } else {
-    return `Used ${comparison} before switching ${monthsUsed} months ago. ` +
-           `The ${trader.painPoints[Math.floor(Math.random() * trader.painPoints.length)]} ` +
-           `could improve, but it's decent overall.`;
+    review += ` ${template.closing[Math.floor(Math.random() * template.closing.length)]}`;
   }
-}
 
-// EVERYTHING BELOW THIS LINE REMAINS 100% UNCHANGED FROM YOUR ORIGINAL CODE //
+  // Add occasional typo/imperfection to make it more human
+  if (Math.random() > 0.8) {
+    const typos = [
+      { from: 'their', to: 'there' },
+      { from: 'you', to: 'u' },
+      { from: 'exchange', to: 'exchnage' },
+      { from: 'platform', to: 'platfrom' }
+    ];
+    const typo = typos[Math.floor(Math.random() * typos.length)];
+    review = review.replace(typo.from, typo.to);
+  }
+
+  return review;
+}
 
 // Generate realistic human reviews with validation
 function generateReviews() {
@@ -916,7 +999,7 @@ function generateReviews() {
   return reviews;
 }
 
-// Reviews endpoint with exact path matching - COMPLETELY UNCHANGED
+// Reviews endpoint with exact path matching
 app.get('/api/v1/reviews', (req, res) => {
   try {
     // Add CORS headers to ensure frontend can access
@@ -963,7 +1046,6 @@ app.get('/api/v1/reviews', (req, res) => {
     });
   }
 });
-
 // Persistent Market Stats System
 const MARKET_STATS_CONFIG = {
   BASE_TRADERS: 8654545, // 8,654,545 base traders
