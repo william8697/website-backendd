@@ -806,12 +806,6 @@ process.on('SIGTERM', () => {
 
 
 // ======================
-// CRYPTO NEWS ENDPOINTS
-// ======================
-
-const NEWS_API_KEY = '2ae97f0c0a8045b48ca8dabcfa592533';
-const CRYPTOCOMPARE_KEY = '5d87784487440f9f5fde0fae0f8e36c5b59033162e7f72a3044b58b8ca7b9702';
-
 // News cache with TTL (1 hour)
 let newsCache = {
   data: [],
