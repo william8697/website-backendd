@@ -16,7 +16,8 @@ const UAParser = require('ua-parser-js');
 const crypto = require('crypto');
 const { Parser } = require('@json2csv/plainjs');  
 const { v4: uuidv4 } = require('uuid');
-
+const NEWS_API_KEY = '2ae97f0c0a8045b48ca8dabcfa592533';
+const CRYPTOCOMPARE_KEY = '5d87784487440f9f5fde0fae0f8e36c5b59033162e7f72a3044b58b8ca7b9702';
 const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = '17581758Na.%';
@@ -802,250 +803,133 @@ process.on('SIGTERM', () => {
   isRunning = false;
 });
 
-
-// Reviews Endpoint - Backend
-
-// Reviews // Reviews Endpoint - Backend
-const REVIEW_CONFIG = {
-  MIN_RATING: 4,
-  MAX_RATING: 5,
-  REVIEW_COUNT: 5, // Changed from 3 to 5
-  ROTATION_INTERVAL: 10 * 60 * 1000, // 10 minutes
-  MAX_REVIEW_AGE_DAYS: 7,
-  PLATFORMS: ['Trustpilot', 'Google', 'SiteJabber', 'CryptoCompare'],
-  AVATAR_SOURCES: [
-    'https://randomuser.me/api/portraits/men',
-    'https://randomuser.me/api/portraits/women'
-  ]
+// Add to your environment variables or config
+// News Cache System
+let newsCache = {
+  timestamp: 0,
+  data: [],
+  sources: []
 };
+const CACHE_DURATION = 3600000; // 1 hour
 
-let currentReviews = [];
-let lastGenerated = 0;
-
-// Generate realistic human names
-function generateRandomName() {
-  const firstNames = ['James', 'John', 'Robert', 'Michael', 'William', 'David', 'Richard', 'Joseph', 
-                     'Thomas', 'Charles', 'Mary', 'Patricia', 'Jennifer', 'Linda', 'Elizabeth', 
-                     'Barbara', 'Susan', 'Jessica', 'Sarah', 'Karen'];
-  const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Miller', 'Davis', 'Garcia', 
-                    'Rodriguez', 'Wilson', 'Martinez', 'Anderson', 'Taylor', 'Thomas', 'Hernandez'];
-  
-  return `${firstNames[Math.floor(Math.random() * firstNames.length)]} ${lastNames[Math.floor(Math.random() * lastNames.length)]}`;
-}
-
-// Generate realistic review content based on rating
-function generateReviewContent(rating) {
-  const reviewTemplates = [
-    {
-      intro: [
-        `I've been trading crypto for ${Math.floor(Math.random() * 5) + 1} years and`,
-        `After getting burned on ${['Binance', 'Coinbase', 'Kraken', 'FTX'][Math.floor(Math.random() * 4)]},`,
-        `As someone who trades ${Math.floor(Math.random() * 20) + 5} times per week,`,
-        `After losing ${Math.floor(Math.random() * 3000) + 500} on another platform,`,
-        `Being in crypto since ${2015 + Math.floor(Math.random() * 8)},`
-      ],
-      positive: [
-        "this platform feels like a breath of fresh air. The UI doesn't make me want to pull my hair out like most exchanges.",
-        "I finally found a place that doesn't treat users like criminals when withdrawing. Verification was surprisingly painless!",
-        "the liquidity here is insane - filled my 5 BTC market order with barely any slippage. Color me impressed!",
-        "their security actually makes sense - not just theater like SMS 2FA on other exchanges. The authenticator app integration is flawless.",
-        "the fee structure is transparent and fair. No hidden charges or gotchas like I've experienced elsewhere."
-      ],
-      neutral: [
-        "though I wish they'd improve their mobile app. The current one feels a bit clunky compared to the web version.",
-        "but their customer support could be faster. Took 12 hours to get a response about my deposit question.",
-        "although I'd love to see more altcoins listed. The selection is good but not exhaustive.",
-        "but their educational resources could be better. Had to learn most things through trial and error.",
-        "though the advanced charting could use more indicators. Basic TA tools are there but power traders might want more."
-      ],
-      closing: [
-        "Still, hands down my favorite place to trade right now!",
-        "Despite small flaws, I'm sticking with this platform!",
-        "Would recommend to any serious trader!",
-        "Already told all my crypto friends about this gem!",
-        "10/10 will keep using as my main exchange!"
-      ]
-    },
-    {
-      intro: [
-        `After ${Math.floor(Math.random() * 10) + 3} failed attempts with other exchanges,`,
-        `As a ${['day trader', 'swing trader', 'HODLer', 'newbie'][Math.floor(Math.random() * 4)]},`,
-        `Having tried nearly every platform out there,`,
-        `After the ${['Mt. Gox', 'QuadrigaCX', 'Celsius', 'Voyager'][Math.floor(Math.random() * 4)]} disaster,`,
-        `With ${Math.floor(Math.random() * 10) + 1} years in traditional markets,`
-      ],
-      positive: [
-        "the stability of this platform is remarkable. No unexpected downtime during volatile periods.",
-        "the speed of execution is mind-blowing. My limit orders get filled almost instantly!",
-        "their cold storage policy gives me peace of mind. Knowing 95% of funds are offline helps me sleep at night.",
-        "the API documentation is actually usable! Built my trading bot in a weekend thanks to clear examples.",
-        "withdrawal fees are reasonable compared to the highway robbery I've experienced elsewhere."
-      ],
-      neutral: [
-        "wish they had better tax reporting tools. Had to use third-party software for my crypto taxes.",
-        "though their KYC process could be smoother. Had to submit documents twice due to a system glitch.",
-        "but their margin trading limits are conservative. Professional traders might find them restrictive.",
-        "although their mobile notifications are sometimes delayed. Missed a few price alerts because of this.",
-        "wish they offered staking for more coins. Only a handful of options available currently."
-      ],
-      closing: [
-        "Minor complaints aside, this is my go-to exchange now!",
-        "These small issues don't outweigh the fantastic experience overall!",
-        "Already moved 80% of my trading volume here!",
-        "Can't imagine going back to my old exchange after this!",
-        "Worth every satoshi in fees for this level of service!"
-      ]
-    }
-  ];
-
-  const template = reviewTemplates[Math.floor(Math.random() * reviewTemplates.length)];
-  const isPositive = rating >= 4.5 || Math.random() > 0.3;
-
-  let review = `${template.intro[Math.floor(Math.random() * template.intro.length)]} `;
-  review += isPositive 
-    ? template.positive[Math.floor(Math.random() * template.positive.length)]
-    : template.neutral[Math.floor(Math.random() * template.neutral.length)];
-  
-  // Add personal touch
-  if (Math.random() > 0.5) {
-    review += ` ${['Finally', 'Honestly', 'Seriously', 'Truthfully'][Math.floor(Math.random() * 4)]}, `;
-    review += isPositive
-      ? template.closing[Math.floor(Math.random() * template.closing.length)]
-      : "I hope they keep improving because the potential is huge!";
-  } else {
-    review += ` ${template.closing[Math.floor(Math.random() * template.closing.length)]}`;
-  }
-
-  // Add occasional typo/imperfection to make it more human
-  if (Math.random() > 0.8) {
-    const typos = [
-      { from: 'their', to: 'there' },
-      { from: 'you', to: 'u' },
-      { from: 'exchange', to: 'exchnage' },
-      { from: 'platform', to: 'platfrom' }
-    ];
-    const typo = typos[Math.floor(Math.random() * typos.length)];
-    review = review.replace(typo.from, typo.to);
-  }
-
-  return review;
-}
-
-// Generate realistic human reviews with validation
-function generateReviews() {
-  const now = Date.now();
-  if (now - lastGenerated < REVIEW_CONFIG.ROTATION_INTERVAL && currentReviews.length > 0) {
-    return currentReviews;
-  }
-
-  const reviews = [];
-  const usedNames = new Set();
-
-  for (let i = 0; i < REVIEW_CONFIG.REVIEW_COUNT; i++) {
-    const gender = Math.random() > 0.5 ? 'men' : 'women';
-    const id = Math.floor(Math.random() * 100);
-    const name = generateRandomName();
-    
-    // Ensure unique names
-    if (usedNames.has(name)) {
-      i--;
-      continue;
-    }
-    usedNames.add(name);
-
-    const rating = REVIEW_CONFIG.MIN_RATING + 
-                  Math.random() * (REVIEW_CONFIG.MAX_RATING - REVIEW_CONFIG.MIN_RATING);
-    const roundedRating = Math.round(rating * 10) / 10;
-
-    const reviewDate = new Date(now - Math.random() * REVIEW_CONFIG.MAX_REVIEW_AGE_DAYS * 24 * 60 * 60 * 1000);
-    
-    // Validate all fields before adding to reviews
-    const review = {
-      id: crypto.randomUUID(),
-      name: name,
-      avatar: `${REVIEW_CONFIG.AVATAR_SOURCES[gender === 'men' ? 0 : 1]}/${id}.jpg`,
-      rating: roundedRating,
-      platform: REVIEW_CONFIG.PLATFORMS[Math.floor(Math.random() * REVIEW_CONFIG.PLATFORMS.length)],
-      date: reviewDate.toISOString(),
-      content: generateReviewContent(roundedRating),
-      verified: Math.random() > 0.3 // 70% chance of being verified
-    };
-
-    // Validate the review object
-    if (
-      typeof review.id === 'string' &&
-      typeof review.name === 'string' &&
-      typeof review.avatar === 'string' &&
-      typeof review.rating === 'number' &&
-      review.rating >= REVIEW_CONFIG.MIN_RATING &&
-      review.rating <= REVIEW_CONFIG.MAX_RATING &&
-      typeof review.platform === 'string' &&
-      REVIEW_CONFIG.PLATFORMS.includes(review.platform) &&
-      typeof review.date === 'string' &&
-      !isNaN(new Date(review.date).getTime()) &&
-      typeof review.content === 'string' &&
-      review.content.length > 0 &&
-      typeof review.verified === 'boolean'
-    ) {
-      reviews.push(review);
-    } else {
-      console.error('Invalid review generated:', review);
-      i--; // Retry this iteration
-    }
-  }
-
-  currentReviews = reviews;
-  lastGenerated = now;
-  return reviews;
-}
-
-// Reviews endpoint with exact path matching
-app.get('/api/v1/reviews', (req, res) => {
+// News Endpoint
+app.get('/api/v1/news', async (req, res) => {
   try {
-    // Add CORS headers to ensure frontend can access
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET');
-    res.header('Access-Control-Allow-Headers', 'Content-Type');
-
-    const reviews = generateReviews();
+    const now = Date.now();
+    const { limit = 10, category = 'general' } = req.query;
     
-    // Validate the response structure matches frontend expectations
-    const responseData = {
-      success: true,
-      data: reviews.map(review => ({
-        id: review.id,
-        name: review.name,
-        avatar: review.avatar,
-        rating: review.rating,
-        platform: review.platform,
-        date: review.date,
-        content: review.content,
-        verified: review.verified
-      })),
-      meta: {
-        generatedAt: new Date(lastGenerated).toISOString(),
-        nextRotation: new Date(lastGenerated + REVIEW_CONFIG.ROTATION_INTERVAL).toISOString(),
-        count: reviews.length,
-        averageRating: parseFloat((reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1))
-      }
-    };
-
-    // Additional validation of the response
-    if (!Array.isArray(responseData.data) || responseData.data.length !== REVIEW_CONFIG.REVIEW_COUNT) {
-      throw new Error('Invalid review data generated');
+    // Return cached data if still fresh
+    if (now - newsCache.timestamp < CACHE_DURATION && newsCache.data.length > 0) {
+      return res.json({
+        success: true,
+        data: {
+          articles: newsCache.data.slice(0, limit),
+          sources: newsCache.sources,
+          lastUpdated: new Date(newsCache.timestamp).toISOString()
+        }
+      });
     }
 
-    res.status(200).json(responseData);
-  } catch (error) {
-    console.error('Reviews endpoint error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to generate reviews',
-      code: 'REVIEWS_ERROR',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    // Fetch from multiple sources
+    const [generalNews, cryptoNews] = await Promise.all([
+      fetchNewsAPI(category),
+      fetchCryptoCompareNews()
+    ]);
+
+    // Combine and process news
+    const combinedNews = [...generalNews, ...cryptoNews]
+      .filter(article => article.title && article.url)
+      .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+
+    // Update cache
+    newsCache = {
+      timestamp: now,
+      data: combinedNews,
+      sources: ['NewsAPI', 'CryptoCompare']
+    };
+
+    res.json({
+      success: true,
+      data: {
+        articles: combinedNews.slice(0, limit),
+        sources: newsCache.sources,
+        lastUpdated: new Date(now).toISOString()
+      }
     });
+
+  } catch (error) {
+    console.error('News error:', error);
+    // Return cached data even if error
+    if (newsCache.data.length > 0) {
+      res.json({
+        success: true,
+        data: {
+          articles: newsCache.data.slice(0, 10),
+          sources: newsCache.sources,
+          lastUpdated: new Date(newsCache.timestamp).toISOString(),
+          fromCache: true
+        }
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: 'Failed to load news',
+        code: 'NEWS_ERROR'
+      });
+    }
   }
 });
+
+// Helper function to fetch from NewsAPI
+async function fetchNewsAPI(category = 'business') {
+  try {
+    const response = await fetch(`https://newsapi.org/v2/top-headlines?category=${category}&q=crypto&apiKey=${NEWS_API_KEY}`);
+    const data = await response.json();
+    
+    if (data.status === 'ok') {
+      return data.articles.map(article => ({
+        source: 'NewsAPI',
+        title: article.title,
+        description: article.description,
+        url: article.url,
+        imageUrl: article.urlToImage,
+        publishedAt: article.publishedAt,
+        author: article.source?.name || 'Unknown',
+        content: article.content
+      }));
+    }
+    return [];
+  } catch (error) {
+    console.error('NewsAPI error:', error);
+    return [];
+  }
+}
+
+// Helper function to fetch from CryptoCompare
+async function fetchCryptoCompareNews() {
+  try {
+    const response = await fetch(`https://min-api.cryptocompare.com/data/v2/news/?lang=EN&api_key=${CRYPTOCOMPARE_KEY}`);
+    const data = await response.json();
+    
+    if (data.Response === 'Success') {
+      return data.Data.map(item => ({
+        source: 'CryptoCompare',
+        title: item.title,
+        description: item.body,
+        url: item.url,
+        imageUrl: item.imageurl,
+        publishedAt: new Date(item.published_on * 1000).toISOString(),
+        author: item.source_info?.name || 'Unknown',
+        content: item.body.substring(0, 200) + '...'
+      }));
+    }
+    return [];
+  } catch (error) {
+    console.error('CryptoCompare error:', error);
+    return [];
+  }
+}
+
 // Persistent Market Stats System
 const MARKET_STATS_CONFIG = {
   BASE_TRADERS: 8654545, // 8,654,545 base traders
