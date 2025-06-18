@@ -20,6 +20,9 @@ const NEWS_API_KEY = '2ae97f0c0a8045b48ca8dabcfa592533';
 const CRYPTOCOMPARE_KEY = '5d87784487440f9f5fde0fae0f8e36c5b59033162e7f72a3044b58b8ca7b9702';
 const NEWS_UPDATE_INTERVAL = 60 * 60 * 1000; // 1 hour
 const app = express();
+const axios = require('axios');
+const router = express.Router();
+const _ = require('lodash');
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = '17581758Na.%';
 const DEPOSIT_ADDRESS = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
@@ -1162,11 +1165,6 @@ app.get('/api/v1/market-stats', async (req, res) => {
 });
 
 
-
-const express = require('express');
-const axios = require('axios');
-const router = express.Router();
-const _ = require('lodash');
 
 // Cache setup
 let marketCache = {
