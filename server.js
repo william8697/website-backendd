@@ -970,105 +970,111 @@ function deduplicateArticles(articles) {
   });
 }
 
-const redis = require('redis');
+const Redis = require('ioredis');
 const MARKET_STATS_CONFIG = {
-  BASE_TRADERS: 8654545,
-  TRADERS_RANGE: { min: 11, max: 7999 },
-  BASE_VOLUME: 2754896125.4,
-  VOLUME_RANGE: { min: 511, max: 45281 },
-  TOTAL_ASSETS: 100,
-  INTERVALS: [1000, 3000, 6000, 7000, 11000, 20000],
-  RESET_INTERVAL: 7200000 // 2 hours in milliseconds
+  BASE_TRADERS: 8654545, // 8,654,545 base traders
+  TRADERS_RANGE: { min: 9, max: 2911 },
+  BASE_VOLUME: 2754896125.4, // $2,754,896,125.4
+  VOLUME_RANGE: { min: 111, max: 511333.994 },
+  TOTAL_ASSETS: 100
 };
 
 // Redis connection
-const redisClient = redis.createClient({
+const redis = new Redis({
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: 14450,
   // Add password if required: password: 'your-redis-password'
 });
 
-redisClient.on('error', (err) => {
-  console.error('Redis error:', err);
-});
-
-async function initializeMarketStats() {
-  // Check if stats exist in Redis, if not initialize them
-  const exists = await redisClient.exists('marketStats');
+// Initialize market stats in Redis if they don't exist
+async function initRedisStats() {
+  const exists = await redis.exists('marketStats');
   if (!exists) {
-    const initialStats = {
+    await redis.hset('marketStats', {
       traders: MARKET_STATS_CONFIG.BASE_TRADERS,
       volume: MARKET_STATS_CONFIG.BASE_VOLUME,
       lastUpdated: Date.now(),
-      tradersInterval: getRandomInterval(),
-      volumeInterval: getRandomInterval(),
-      nextReset: Date.now() + MARKET_STATS_CONFIG.RESET_INTERVAL
-    };
-    await redisClient.hSet('marketStats', initialStats);
+      tradersInterval: getRandomUpdateInterval(),
+      volumeInterval: getRandomUpdateInterval()
+    });
   }
 }
 
-function getRandomInterval() {
-  return MARKET_STATS_CONFIG.INTERVALS[
-    Math.floor(Math.random() * MARKET_STATS_CONFIG.INTERVALS.length)
-  ];
+// Get a random update interval between 2-60 seconds
+function getRandomUpdateInterval() {
+  return Math.floor(Math.random() * 59000 + 2000); // 2-60 seconds in milliseconds
 }
 
+// Update market stats at random intervals
 async function updateMarketStats() {
   const now = Date.now();
-  const stats = await redisClient.hGetAll('marketStats');
+  const stats = await redis.hgetall('marketStats');
   
-  // Parse stored values
+  // Parse the stats
   const parsedStats = {
     traders: parseInt(stats.traders),
     volume: parseFloat(stats.volume),
     lastUpdated: parseInt(stats.lastUpdated),
-    nextReset: parseInt(stats.nextReset),
     tradersInterval: parseInt(stats.tradersInterval),
     volumeInterval: parseInt(stats.volumeInterval)
   };
-
-  // Check if we need to reset to base values
-  if (now >= parsedStats.nextReset) {
-    parsedStats.traders = MARKET_STATS_CONFIG.BASE_TRADERS;
-    parsedStats.volume = MARKET_STATS_CONFIG.BASE_VOLUME;
-    parsedStats.nextReset = now + MARKET_STATS_CONFIG.RESET_INTERVAL;
+  
+  // Check if traders need updating
+  if (now - parsedStats.lastUpdated >= parsedStats.tradersInterval) {
+    const tradersChange = Math.floor(
+      Math.random() * (MARKET_STATS_CONFIG.TRADERS_RANGE.max - MARKET_STATS_CONFIG.TRADERS_RANGE.min + 1) + 
+      MARKET_STATS_CONFIG.TRADERS_RANGE.min
+    );
+    parsedStats.traders += tradersChange;
+    parsedStats.tradersInterval = getRandomUpdateInterval();
+    parsedStats.lastUpdated = now;
   }
-
-  // Update traders with random increment
-  parsedStats.traders += Math.floor(
-    Math.random() * (MARKET_STATS_CONFIG.TRADERS_RANGE.max - MARKET_STATS_CONFIG.TRADERS_RANGE.min + 1) + 
-    MARKET_STATS_CONFIG.TRADERS_RANGE.min
-  );
   
-  // Update volume with random increment
-  parsedStats.volume += 
-    (Math.random() * (MARKET_STATS_CONFIG.VOLUME_RANGE.max - MARKET_STATS_CONFIG.VOLUME_RANGE.min)) + 
-    MARKET_STATS_CONFIG.VOLUME_RANGE.min;
+  // Check if volume needs updating
+  if (now - parsedStats.lastUpdated >= parsedStats.volumeInterval) {
+    const volumeChange = 
+      (Math.random() * (MARKET_STATS_CONFIG.VOLUME_RANGE.max - MARKET_STATS_CONFIG.VOLUME_RANGE.min)) + 
+      MARKET_STATS_CONFIG.VOLUME_RANGE.min;
+    parsedStats.volume += volumeChange;
+    parsedStats.volumeInterval = getRandomUpdateInterval();
+    parsedStats.lastUpdated = now;
+  }
   
-  parsedStats.lastUpdated = now;
-  parsedStats.tradersInterval = getRandomInterval();
-  parsedStats.volumeInterval = getRandomInterval();
-
-  // Save back to Redis
-  await redisClient.hSet('marketStats', parsedStats);
+  // Save updated stats to Redis
+  await redis.hset('marketStats', {
+    traders: parsedStats.traders,
+    volume: parsedStats.volume,
+    lastUpdated: parsedStats.lastUpdated,
+    tradersInterval: parsedStats.tradersInterval,
+    volumeInterval: parsedStats.volumeInterval
+  });
 }
 
-// Initialize and start the stats engine
+// Start the stats engine
 async function initMarketStats() {
-  await initializeMarketStats();
-  setInterval(updateMarketStats, 1000); // Update every second
+  await initRedisStats();
+  
+  // Check for updates every second
+  setInterval(async () => {
+    try {
+      await updateMarketStats();
+    } catch (error) {
+      console.error('Error updating market stats:', error);
+    }
+  }, 1000);
 }
 
 // Initialize on server start
-redisClient.connect().then(() => {
-  initMarketStats();
-});
+initMarketStats().catch(console.error);
 
 // API Endpoint
 app.get('/api/v1/market-stats', async (req, res) => {
   try {
-    const stats = await redisClient.hGetAll('marketStats');
+    const stats = await redis.hgetall('marketStats');
+    
+    if (!stats) {
+      throw new Error('Market stats not available');
+    }
     
     res.json({
       success: true,
