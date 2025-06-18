@@ -1,4 +1,4 @@
-   require('dotenv').config();
+require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
@@ -972,111 +972,166 @@ function deduplicateArticles(articles) {
 
 const Redis = require('ioredis');
 const MARKET_STATS_CONFIG = {
-  BASE_TRADERS: 8654545, // 8,654,545 base traders
+  BASE_TRADERS: 8654545,
   TRADERS_RANGE: { min: 9, max: 2911 },
-  BASE_VOLUME: 2754896125.4, // $2,754,896,125.4
+  BASE_VOLUME: 2754896125.4,
   VOLUME_RANGE: { min: 111, max: 511333.994 },
   TOTAL_ASSETS: 100
 };
 
-// Redis connection
-const redis = new Redis({
+// Configure Redis with authentication and proper error handling
+const redisConfig = {
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: 14450,
-  // Add password if required: password: 'your-redis-password'
-});
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR', // Your provided password
+  retryStrategy: (times) => {
+    const delay = Math.min(times * 100, 5000);
+    return delay;
+  },
+  reconnectOnError: (err) => {
+    console.error('Redis connection error:', err.message);
+    return true; // Always attempt to reconnect
+  }
+};
 
-// Initialize market stats in Redis if they don't exist
+const redis = new Redis(redisConfig);
+
+// Fallback in-memory store
+let fallbackStats = {
+  traders: MARKET_STATS_CONFIG.BASE_TRADERS,
+  volume: MARKET_STATS_CONFIG.BASE_VOLUME,
+  lastUpdated: Date.now(),
+  tradersInterval: getRandomUpdateInterval(),
+  volumeInterval: getRandomUpdateInterval(),
+  usingFallback: false
+};
+
+// Improved random interval generator (2-60 seconds)
+function getRandomUpdateInterval() {
+  return Math.floor(Math.random() * 58000 + 2000);
+}
+
+// Initialize Redis connection and stats
 async function initRedisStats() {
-  const exists = await redis.exists('marketStats');
-  if (!exists) {
-    await redis.hset('marketStats', {
-      traders: MARKET_STATS_CONFIG.BASE_TRADERS,
-      volume: MARKET_STATS_CONFIG.BASE_VOLUME,
-      lastUpdated: Date.now(),
-      tradersInterval: getRandomUpdateInterval(),
-      volumeInterval: getRandomUpdateInterval()
-    });
+  try {
+    // Test connection
+    await redis.ping();
+    console.log('Redis connection established');
+
+    // Initialize stats if they don't exist
+    const exists = await redis.exists('marketStats');
+    if (!exists) {
+      await redis.hset('marketStats', {
+        traders: MARKET_STATS_CONFIG.BASE_TRADERS,
+        volume: MARKET_STATS_CONFIG.BASE_VOLUME,
+        lastUpdated: Date.now(),
+        tradersInterval: getRandomUpdateInterval(),
+        volumeInterval: getRandomUpdateInterval()
+      });
+      console.log('Initial market stats set in Redis');
+    }
+  } catch (error) {
+    console.error('Redis initialization failed:', error.message);
+    fallbackStats.usingFallback = true;
   }
 }
 
-// Get a random update interval between 2-60 seconds
-function getRandomUpdateInterval() {
-  return Math.floor(Math.random() * 59000 + 2000); // 2-60 seconds in milliseconds
-}
-
-// Update market stats at random intervals
+// Core update function
 async function updateMarketStats() {
   const now = Date.now();
-  const stats = await redis.hgetall('marketStats');
-  
-  // Parse the stats
+  let stats;
+
+  try {
+    stats = await redis.hgetall('marketStats');
+  } catch (error) {
+    console.error('Redis read error:', error.message);
+    stats = fallbackStats;
+  }
+
   const parsedStats = {
-    traders: parseInt(stats.traders),
-    volume: parseFloat(stats.volume),
-    lastUpdated: parseInt(stats.lastUpdated),
-    tradersInterval: parseInt(stats.tradersInterval),
-    volumeInterval: parseInt(stats.volumeInterval)
+    traders: parseInt(stats.traders || fallbackStats.traders),
+    volume: parseFloat(stats.volume || fallbackStats.volume),
+    lastUpdated: parseInt(stats.lastUpdated || fallbackStats.lastUpdated),
+    tradersInterval: parseInt(stats.tradersInterval || fallbackStats.tradersInterval),
+    volumeInterval: parseInt(stats.volumeInterval || fallbackStats.volumeInterval)
   };
-  
-  // Check if traders need updating
+
+  // Process updates
+  const updates = {};
+  let needsUpdate = false;
+
+  // Traders update
   if (now - parsedStats.lastUpdated >= parsedStats.tradersInterval) {
-    const tradersChange = Math.floor(
+    updates.traders = parsedStats.traders + Math.floor(
       Math.random() * (MARKET_STATS_CONFIG.TRADERS_RANGE.max - MARKET_STATS_CONFIG.TRADERS_RANGE.min + 1) + 
       MARKET_STATS_CONFIG.TRADERS_RANGE.min
     );
-    parsedStats.traders += tradersChange;
-    parsedStats.tradersInterval = getRandomUpdateInterval();
-    parsedStats.lastUpdated = now;
+    updates.tradersInterval = getRandomUpdateInterval();
+    needsUpdate = true;
   }
-  
-  // Check if volume needs updating
+
+  // Volume update
   if (now - parsedStats.lastUpdated >= parsedStats.volumeInterval) {
-    const volumeChange = 
+    updates.volume = parsedStats.volume + 
       (Math.random() * (MARKET_STATS_CONFIG.VOLUME_RANGE.max - MARKET_STATS_CONFIG.VOLUME_RANGE.min)) + 
       MARKET_STATS_CONFIG.VOLUME_RANGE.min;
-    parsedStats.volume += volumeChange;
-    parsedStats.volumeInterval = getRandomUpdateInterval();
-    parsedStats.lastUpdated = now;
+    updates.volumeInterval = getRandomUpdateInterval();
+    needsUpdate = true;
   }
-  
-  // Save updated stats to Redis
-  await redis.hset('marketStats', {
-    traders: parsedStats.traders,
-    volume: parsedStats.volume,
-    lastUpdated: parsedStats.lastUpdated,
-    tradersInterval: parsedStats.tradersInterval,
-    volumeInterval: parsedStats.volumeInterval
-  });
+
+  if (needsUpdate) {
+    updates.lastUpdated = now;
+    
+    try {
+      await redis.hset('marketStats', updates);
+      Object.assign(fallbackStats, updates);
+      fallbackStats.usingFallback = false;
+    } catch (error) {
+      console.error('Redis write error:', error.message);
+      Object.assign(fallbackStats, updates);
+      fallbackStats.usingFallback = true;
+    }
+  }
 }
 
-// Start the stats engine
+// Initialize and start updates
 async function initMarketStats() {
   await initRedisStats();
   
-  // Check for updates every second
   setInterval(async () => {
     try {
       await updateMarketStats();
     } catch (error) {
-      console.error('Error updating market stats:', error);
+      console.error('Update cycle error:', error.message);
     }
-  }, 1000);
+  }, 1000); // Check every second
+
+  console.log('Market stats engine started');
 }
 
-// Initialize on server start
-initMarketStats().catch(console.error);
+initMarketStats().catch(err => {
+  console.error('Failed to initialize market stats:', err);
+  process.exit(1);
+});
 
 // API Endpoint
 app.get('/api/v1/market-stats', async (req, res) => {
   try {
-    const stats = await redis.hgetall('marketStats');
-    
-    if (!stats) {
-      throw new Error('Market stats not available');
+    let stats;
+    let source = 'redis';
+
+    try {
+      stats = await redis.hgetall('marketStats');
+      if (!stats || Object.keys(stats).length === 0) {
+        throw new Error('Empty Redis response');
+      }
+    } catch (error) {
+      console.error('Using fallback stats:', error.message);
+      stats = fallbackStats;
+      source = 'fallback';
     }
-    
-    res.json({
+
+    const response = {
       success: true,
       data: {
         totalTraders: parseInt(stats.traders),
@@ -1086,15 +1141,22 @@ app.get('/api/v1/market-stats', async (req, res) => {
         nextUpdate: {
           traders: parseInt(stats.tradersInterval),
           volume: parseInt(stats.volumeInterval)
+        },
+        _meta: {
+          source,
+          updatedAt: new Date().toISOString()
         }
       }
-    });
+    };
+
+    res.json(response);
   } catch (error) {
-    console.error('Market stats error:', error);
+    console.error('Endpoint error:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to load market stats',
-      code: 'MARKET_STATS_ERROR'
+      code: 'MARKET_STATS_ERROR',
+      details: error.message
     });
   }
 });
