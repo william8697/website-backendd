@@ -18,6 +18,7 @@ const { Parser } = require('@json2csv/plainjs');
 const { v4: uuidv4 } = require('uuid');
 const NEWS_API_KEY = '2ae97f0c0a8045b48ca8dabcfa592533';
 const CRYPTOCOMPARE_KEY = '5d87784487440f9f5fde0fae0f8e36c5b59033162e7f72a3044b58b8ca7b9702';
+const NEWS_UPDATE_INTERVAL = 60 * 60 * 1000; // 1 hour
 const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = '17581758Na.%';
@@ -803,144 +804,198 @@ process.on('SIGTERM', () => {
   isRunning = false;
 });
 
-// News API Configuration
-const NEWS_CONFIG = {
-  API_KEYS: {
-    NEWSAPI: '2ae97f0c0a8045b48ca8dabcfa592533',
-    CRYPTOCOMPARE: '5d87784487440f9f5fde0fae0f8e36c5b59033162e7f72a3044b58b8ca7b9702'
-  },
-  CACHE_TTL: 60 * 60 * 1000, // 1 hour cache
-  SOURCES: ['coindesk', 'cointelegraph', 'decrypt', 'the-blockchain'],
-  CATEGORIES: ['general', 'technology', 'business', 'markets']
-};
-
-// News Cache
+// News cache
 let newsCache = {
   timestamp: 0,
   data: []
 };
 
-// News Fetching Function
-async function fetchCryptoNews() {
-  try {
-    const now = Date.now();
-    
-    // Return cached data if still valid
-    if (newsCache.timestamp + NEWS_CONFIG.CACHE_TTL > now) {
-      return newsCache.data;
-    }
-
-    console.log('Fetching fresh crypto news...');
-    
-    // Fetch from multiple sources
-    const [newsApiData, cryptoCompareData] = await Promise.all([
-      fetchNewsFromNewsAPI(),
-      fetchNewsFromCryptoCompare()
-    ]);
-
-    // Combine and process news
-    const combinedNews = [...newsApiData, ...cryptoCompareData]
-      .filter(news => news.title && news.url)
-      .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt))
-      .slice(0, 30); // Limit to 30 most recent articles
-
-    // Update cache
-    newsCache = {
-      timestamp: now,
-      data: combinedNews
-    };
-
-    return combinedNews;
-  } catch (error) {
-    console.error('Error fetching news:', error);
-    return newsCache.data.length > 0 ? newsCache.data : []; // Fallback to cache
-  }
-}
-
-async function fetchNewsFromNewsAPI() {
-  try {
-    const url = `https://newsapi.org/v2/everything?q=cryptocurrency+OR+blockchain&sources=${NEWS_CONFIG.SOURCES.join(',')}&apiKey=${NEWS_CONFIG.API_KEYS.NEWSAPI}`;
-    const response = await fetch(url);
-    
-    if (!response.ok) {
-      throw new Error(`NewsAPI error: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    return data.articles.map(article => ({
-      source: 'NewsAPI',
-      sourceName: article.source.name,
-      author: article.author || 'Unknown',
-      title: article.title,
-      description: article.description,
-      url: article.url,
-      imageUrl: article.urlToImage || '/images/news-placeholder.png',
-      publishedAt: article.publishedAt,
-      category: NEWS_CONFIG.CATEGORIES[Math.floor(Math.random() * NEWS_CONFIG.CATEGORIES.length)]
-    }));
-  } catch (error) {
-    console.error('Error fetching from NewsAPI:', error);
-    return [];
-  }
-}
-
-async function fetchNewsFromCryptoCompare() {
-  try {
-    const url = `https://min-api.cryptocompare.com/data/v2/news/?categories=${NEWS_CONFIG.CATEGORIES.join(',')}&excludeCategories=Sponsored`;
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `Apikey ${NEWS_CONFIG.API_KEYS.CRYPTOCOMPARE}`
-      }
-    });
-    
-    if (!response.ok) {
-      throw new Error(`CryptoCompare error: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    return data.Data.map(item => ({
-      source: 'CryptoCompare',
-      sourceName: item.source_info.name,
-      author: item.source_info.name,
-      title: item.title,
-      description: item.body.substring(0, 200) + '...',
-      url: item.url,
-      imageUrl: item.imageurl || '/images/news-placeholder.png',
-      publishedAt: new Date(item.published_on * 1000).toISOString(),
-      category: item.categories.split('|')[0] || 'general'
-    }));
-  } catch (error) {
-    console.error('Error fetching from CryptoCompare:', error);
-    return [];
-  }
-}
-
-// News API Endpoint
+// News Endpoint
 app.get('/api/v1/news', async (req, res) => {
   try {
-    const news = await fetchCryptoNews();
+    const { category = 'all', limit = 12 } = req.query;
+    
+    // Check if cache is stale
+    const now = Date.now();
+    if (now - newsCache.timestamp > NEWS_UPDATE_INTERVAL) {
+      await updateNewsCache();
+    }
+    
+    // Filter by category if needed
+    let filteredNews = newsCache.data;
+    if (category !== 'all') {
+      filteredNews = newsCache.data.filter(item => 
+        item.categories.includes(category)
+      );
+    }
+    
+    // Apply limit
+    const limitedNews = filteredNews.slice(0, parseInt(limit));
+    
     res.json({
       success: true,
-      data: news,
-      lastUpdated: new Date(newsCache.timestamp).toISOString()
+      data: limitedNews,
+      meta: {
+        total: filteredNews.length,
+        updatedAt: newsCache.timestamp
+      }
     });
   } catch (error) {
     console.error('News endpoint error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to load news',
+      error: 'Failed to fetch news',
       code: 'NEWS_FETCH_ERROR'
     });
   }
 });
 
-// Initialize news fetching on server start
-fetchCryptoNews().then(() => {
-  console.log('Initial news fetch completed');
+// Single News Item Endpoint
+app.get('/api/v1/news/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Check if cache is stale
+    const now = Date.now();
+    if (now - newsCache.timestamp > NEWS_UPDATE_INTERVAL) {
+      await updateNewsCache();
+    }
+    
+    // Find the news item
+    const newsItem = newsCache.data.find(item => item.id === id);
+    
+    if (!newsItem) {
+      return res.status(404).json({
+        success: false,
+        error: 'News item not found',
+        code: 'NEWS_NOT_FOUND'
+      });
+    }
+    
+    // For demo, we'll return the cached item
+    // In production, you might fetch full content here
+    res.json({
+      success: true,
+      data: newsItem
+    });
+  } catch (error) {
+    console.error('News detail error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch news details',
+      code: 'NEWS_DETAIL_ERROR'
+    });
+  }
 });
 
-// Schedule hourly news updates
-setInterval(fetchCryptoNews, NEWS_CONFIG.CACHE_TTL);
+// Helper function to update news cache
+async function updateNewsCache() {
+  try {
+    console.log('Updating news cache...');
+    
+    // Fetch from multiple sources
+    const [newsApiData, cryptoCompareData] = await Promise.all([
+      fetchNewsApi(),
+      fetchCryptoCompare()
+    ]);
+    
+    // Combine and process data
+    const processedNews = [
+      ...processNewsApiData(newsApiData),
+      ...processCryptoCompareData(cryptoCompareData)
+    ];
+    
+    // Sort by date
+    processedNews.sort((a, b) => new Date(b.date) - new Date(a.date));
+    
+    // Update cache
+    newsCache = {
+      timestamp: Date.now(),
+      data: processedNews
+    };
+    
+    console.log('News cache updated successfully');
+  } catch (error) {
+    console.error('Failed to update news cache:', error);
+    // Keep old cache if update fails
+  }
+}
+
+// Fetch from NewsAPI
+async function fetchNewsApi() {
+  try {
+    const response = await fetch(`https://newsapi.org/v2/everything?q=cryptocurrency&apiKey=${NEWS_API_KEY}&pageSize=20`);
+    if (!response.ok) throw new Error(`NewsAPI error: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error('NewsAPI fetch error:', error);
+    return { articles: [] };
+  }
+}
+
+// Fetch from CryptoCompare
+async function fetchCryptoCompare() {
+  try {
+    const response = await fetch(`https://min-api.cryptocompare.com/data/v2/news/?lang=EN&api_key=${CRYPTOCOMPARE_KEY}`);
+    if (!response.ok) throw new Error(`CryptoCompare error: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error('CryptoCompare fetch error:', error);
+    return { Data: [] };
+  }
+}
+
+// Process NewsAPI data
+function processNewsApiData(data) {
+  if (!data.articles) return [];
+  
+  return data.articles.map(article => ({
+    id: `newsapi-${article.publishedAt}-${article.title.substring(0, 20).replace(/\s+/g, '-')}`,
+    title: article.title,
+    description: article.description,
+    content: article.content,
+    source: article.source.name,
+    url: article.url,
+    imageUrl: article.urlToImage || 'https://via.placeholder.com/600x400?text=Crypto+News',
+    date: article.publishedAt,
+    categories: analyzeCategories(article.title, article.description)
+  }));
+}
+
+// Process CryptoCompare data
+function processCryptoCompareData(data) {
+  if (!data.Data) return [];
+  
+  return data.Data.map(item => ({
+    id: `cc-${item.id}`,
+    title: item.title,
+    description: item.body.substring(0, 200) + '...',
+    content: item.body,
+    source: item.source,
+    url: item.url,
+    imageUrl: item.imageurl || 'https://via.placeholder.com/600x400?text=Crypto+News',
+    date: item.published_on * 1000, // Convert timestamp to ms
+    categories: analyzeCategories(item.title, item.body)
+  }));
+}
+
+// Analyze categories from content
+function analyzeCategories(title, content) {
+  const text = `${title} ${content}`.toLowerCase();
+  const categories = ['all'];
+  
+  if (text.includes('bitcoin') || text.includes('btc')) categories.push('bitcoin');
+  if (text.includes('ethereum') || text.includes('eth')) categories.push('ethereum');
+  if (text.includes('regulation') || text.includes('legal') || text.includes('sec')) categories.push('regulation');
+  if (text.includes('defi') || text.includes('decentralized finance')) categories.push('defi');
+  
+  return [...new Set(categories)]; // Remove duplicates
+}
+
+// Initialize news cache on startup
+updateNewsCache();
+// Update news cache periodically
+setInterval(updateNewsCache, NEWS_UPDATE_INTERVAL);
 
 // Persistent Market Stats System
 const MARKET_STATS_CONFIG = {
