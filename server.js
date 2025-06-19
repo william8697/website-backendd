@@ -982,24 +982,22 @@ const MARKET_STATS_CONFIG = {
   TOTAL_ASSETS: 100
 };
 
-// Configure Redis with authentication and proper error handling
 const redisConfig = {
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR', // Your provided password
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR',
   retryStrategy: (times) => {
     const delay = Math.min(times * 100, 5000);
     return delay;
   },
   reconnectOnError: (err) => {
     console.error('Redis connection error:', err.message);
-    return true; // Always attempt to reconnect
+    return true;
   }
 };
 
 const redis = new Redis(redisConfig);
 
-// Fallback in-memory store
 let fallbackStats = {
   traders: MARKET_STATS_CONFIG.BASE_TRADERS,
   volume: MARKET_STATS_CONFIG.BASE_VOLUME,
@@ -1009,19 +1007,15 @@ let fallbackStats = {
   usingFallback: false
 };
 
-// Improved random interval generator (2-60 seconds)
 function getRandomUpdateInterval() {
   return Math.floor(Math.random() * 58000 + 2000);
 }
 
-// Initialize Redis connection and stats
 async function initRedisStats() {
   try {
-    // Test connection
     await redis.ping();
     console.log('Redis connection established');
 
-    // Initialize stats if they don't exist
     const exists = await redis.exists('marketStats');
     if (!exists) {
       await redis.hset('marketStats', {
@@ -1039,7 +1033,6 @@ async function initRedisStats() {
   }
 }
 
-// Core update function
 async function updateMarketStats() {
   const now = Date.now();
   let stats;
@@ -1059,26 +1052,28 @@ async function updateMarketStats() {
     volumeInterval: parseInt(stats.volumeInterval || fallbackStats.volumeInterval)
   };
 
-  // Process updates
   const updates = {};
   let needsUpdate = false;
 
-  // Traders update
+  // Calculate changes for frontend
+  const tradersChange = Math.floor(
+    Math.random() * (MARKET_STATS_CONFIG.TRADERS_RANGE.max - MARKET_STATS_CONFIG.TRADERS_RANGE.min + 1) + 
+    MARKET_STATS_CONFIG.TRADERS_RANGE.min
+  );
+  const volumeChange = (Math.random() * (MARKET_STATS_CONFIG.VOLUME_RANGE.max - MARKET_STATS_CONFIG.VOLUME_RANGE.min)) + 
+    MARKET_STATS_CONFIG.VOLUME_RANGE.min;
+
   if (now - parsedStats.lastUpdated >= parsedStats.tradersInterval) {
-    updates.traders = parsedStats.traders + Math.floor(
-      Math.random() * (MARKET_STATS_CONFIG.TRADERS_RANGE.max - MARKET_STATS_CONFIG.TRADERS_RANGE.min + 1) + 
-      MARKET_STATS_CONFIG.TRADERS_RANGE.min
-    );
+    updates.traders = parsedStats.traders + tradersChange;
     updates.tradersInterval = getRandomUpdateInterval();
+    updates.tradersChange = tradersChange;
     needsUpdate = true;
   }
 
-  // Volume update
   if (now - parsedStats.lastUpdated >= parsedStats.volumeInterval) {
-    updates.volume = parsedStats.volume + 
-      (Math.random() * (MARKET_STATS_CONFIG.VOLUME_RANGE.max - MARKET_STATS_CONFIG.VOLUME_RANGE.min)) + 
-      MARKET_STATS_CONFIG.VOLUME_RANGE.min;
+    updates.volume = parsedStats.volume + volumeChange;
     updates.volumeInterval = getRandomUpdateInterval();
+    updates.volumeChange = volumeChange;
     needsUpdate = true;
   }
 
@@ -1097,7 +1092,6 @@ async function updateMarketStats() {
   }
 }
 
-// Initialize and start updates
 async function initMarketStats() {
   await initRedisStats();
   
@@ -1107,7 +1101,7 @@ async function initMarketStats() {
     } catch (error) {
       console.error('Update cycle error:', error.message);
     }
-  }, 1000); // Check every second
+  }, 1000);
 
   console.log('Market stats engine started');
 }
@@ -1117,7 +1111,7 @@ initMarketStats().catch(err => {
   process.exit(1);
 });
 
-// API Endpoint
+// Enhanced API Endpoint to match frontend expectations
 app.get('/api/v1/market-stats', async (req, res) => {
   try {
     let stats;
@@ -1134,23 +1128,36 @@ app.get('/api/v1/market-stats', async (req, res) => {
       source = 'fallback';
     }
 
+    // Format numbers exactly as frontend expects
     const response = {
       success: true,
       data: {
         totalTraders: parseInt(stats.traders),
         dailyVolume: parseFloat(stats.volume),
         totalAssets: MARKET_STATS_CONFIG.TOTAL_ASSETS,
+        // Include change values for frontend animation
+        tradersChange: stats.tradersChange || 
+          Math.floor(Math.random() * (MARKET_STATS_CONFIG.TRADERS_RANGE.max - MARKET_STATS_CONFIG.TRADERS_RANGE.min + 1) + 
+          MARKET_STATS_CONFIG.TRADERS_RANGE.min,
+        volumeChange: stats.volumeChange || 
+          (Math.random() * (MARKET_STATS_CONFIG.VOLUME_RANGE.max - MARKET_STATS_CONFIG.VOLUME_RANGE.min)) + 
+          MARKET_STATS_CONFIG.VOLUME_RANGE.min,
         lastUpdated: parseInt(stats.lastUpdated),
-        nextUpdate: {
-          traders: parseInt(stats.tradersInterval),
-          volume: parseInt(stats.volumeInterval)
-        },
         _meta: {
           source,
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date().toISOString(),
+          // Additional metadata for debugging
+          ranges: {
+            traders: MARKET_STATS_CONFIG.TRADERS_RANGE,
+            volume: MARKET_STATS_CONFIG.VOLUME_RANGE
+          }
         }
       }
     };
+
+    // Ensure numbers are formatted with proper decimal places
+    response.data.dailyVolume = parseFloat(response.data.dailyVolume.toFixed(2));
+    response.data.volumeChange = parseFloat(response.data.volumeChange.toFixed(2));
 
     res.json(response);
   } catch (error) {
@@ -1159,11 +1166,18 @@ app.get('/api/v1/market-stats', async (req, res) => {
       success: false,
       error: 'Failed to load market stats',
       code: 'MARKET_STATS_ERROR',
-      details: error.message
+      details: error.message,
+      // Provide fallback data that matches frontend expectations
+      fallbackData: {
+        totalTraders: MARKET_STATS_CONFIG.BASE_TRADERS,
+        dailyVolume: MARKET_STATS_CONFIG.BASE_VOLUME,
+        totalAssets: MARKET_STATS_CONFIG.TOTAL_ASSETS,
+        tradersChange: MARKET_STATS_CONFIG.TRADERS_RANGE.min,
+        volumeChange: MARKET_STATS_CONFIG.VOLUME_RANGE.min
+      }
     });
   }
 });
-
 
 
 // Market Data Endpoints
