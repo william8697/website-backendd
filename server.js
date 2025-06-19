@@ -1166,7 +1166,13 @@ app.get('/api/v1/market-stats', async (req, res) => {
 
 
 
-// Add these endpoints to your existing server.js file
+const express = require('express');
+const axios = require('axios');
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(express.json());
 
 // Cache configuration
 const CACHE_TTL = 300000; // 5 minutes
@@ -1178,6 +1184,19 @@ const manipulatePrice = (price) => {
   const fluctuation = (Math.random() * 16.62804) - 6.9755;
   return price * (1 + (fluctuation / 100));
 };
+
+// Helper function to get current BTC price
+async function getBTCPrice() {
+  try {
+    const response = await axios.get(
+      'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd'
+    );
+    return response.data.bitcoin.usd;
+  } catch (error) {
+    console.error('Error fetching BTC price:', error);
+    return 50000; // Fallback value
+  }
+}
 
 // Fetch and process market data
 const fetchMarketData = async () => {
@@ -1244,38 +1263,28 @@ app.get('/api/v1/markets/gainers', async (req, res) => {
 // Trending endpoint (different from gainers)
 app.get('/api/v1/markets/trending', async (req, res) => {
   try {
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/search/trending'
-    );
+    const [trendingResponse, btcPrice] = await Promise.all([
+      axios.get('https://api.coingecko.com/api/v3/search/trending'),
+      getBTCPrice()
+    ]);
 
-    const trending = response.data.coins.map(coin => ({
-      id: coin.item.id,
-      symbol: coin.item.symbol,
-      name: coin.item.name,
-      image: coin.item.large,
-      currentPrice: manipulatePrice(coin.item.price_btc * await getBTCPrice()),
-      score: coin.item.score,
-      marketCapRank: coin.item.market_cap_rank
-    })).slice(0, 5);
+    const trending = trendingResponse.data.coins
+      .map(coin => ({
+        id: coin.item.id,
+        symbol: coin.item.symbol,
+        name: coin.item.name,
+        image: coin.item.large,
+        currentPrice: manipulatePrice(coin.item.price_btc * btcPrice),
+        score: coin.item.score,
+        marketCapRank: coin.item.market_cap_rank
+      }))
+      .slice(0, 5);
 
     res.json({ success: true, trending });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
-// Helper function to get current BTC price
-async function getBTCPrice() {
-  try {
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd'
-    );
-    return response.data.bitcoin.usd;
-  } catch (error) {
-    console.error('Error fetching BTC price:', error);
-    return 50000; // Fallback value
-  }
-}
 
 // Initialize cache on server start
 fetchMarketData().catch(console.error);
@@ -1284,6 +1293,8 @@ fetchMarketData().catch(console.error);
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+
 // Other API Routes
 
 // Authentication Routes
