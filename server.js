@@ -1172,17 +1172,20 @@ app.get('/api/v1/market-stats', async (req, res) => {
     });
   }
 });
+//Done
 
 
-// Market Data Endpoints
-app.get('/api/v1/markets', async (req, res) => {
+// Enhanced Market Data Endpoints
+
+// Market Overview (shows 5 assets by default)
+app.get('/api/v1/market/overview', async (req, res) => {
   try {
     // Fetch data from CoinGecko API
     const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
       params: {
         vs_currency: 'usd',
         order: 'market_cap_desc',
-        per_page: 127,
+        per_page: 100,
         page: 1,
         sparkline: true,
         price_change_percentage: '1h,24h,7d'
@@ -1200,43 +1203,48 @@ app.get('/api/v1/markets', async (req, res) => {
         name: coin.name,
         image: coin.image,
         currentPrice: manipulatedPrice,
-        originalPrice: coin.current_price,
         marketCap: coin.market_cap,
         volume: coin.total_volume,
-        high24h: coin.high_24h,
-        low24h: coin.low_24h,
-        change24h: coin.price_change_percentage_24h,
+        priceChangePercentage1h: coin.price_change_percentage_1h_in_currency,
+        priceChangePercentage24h: coin.price_change_percentage_24h_in_currency,
+        priceChangePercentage7d: coin.price_change_percentage_7d_in_currency,
         sparkline: coin.sparkline_in_7d?.price || []
       };
     });
 
+    // Return first 5 for overview, but keep all data for "view all"
     res.json({
       success: true,
-      marketData: manipulatedData
+      data: {
+        overview: manipulatedData.slice(0, 5),
+        allAssets: manipulatedData
+      }
     });
   } catch (error) {
-    console.error('Error fetching market data:', error);
+    console.error('Market overview error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch market data'
+      error: 'Failed to fetch market overview',
+      code: 'MARKET_OVERVIEW_ERROR'
     });
   }
 });
 
 // Top Gainers Endpoint
-app.get('/api/v1/markets/gainers', async (req, res) => {
+app.get('/api/v1/market/top-gainers', async (req, res) => {
   try {
     const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
       params: {
         vs_currency: 'usd',
         order: 'price_change_percentage_24h_desc',
-        per_page: 20,
-        page: 1
+        per_page: 100,
+        page: 1,
+        sparkline: true
       }
     });
 
     // Take top 5 and manipulate prices
-    const topGainers = response.data.slice(0, 5).map(coin => {
+    const topGainers = response.data.slice(0, 100).map(coin => {
       const fluctuation = (Math.random() * (9.65254 + 6.9755)) - 6.9755;
       const manipulatedPrice = coin.current_price * (1 + fluctuation / 100);
       
@@ -1246,30 +1254,35 @@ app.get('/api/v1/markets/gainers', async (req, res) => {
         name: coin.name,
         image: coin.image,
         currentPrice: manipulatedPrice,
-        change24h: coin.price_change_percentage_24h
+        priceChangePercentage24h: coin.price_change_percentage_24h,
+        sparkline: coin.sparkline_in_7d?.price || []
       };
     });
 
     res.json({
       success: true,
-      gainers: topGainers
+      data: {
+        topGainers: topGainers.slice(0, 5),
+        allGainers: topGainers
+      }
     });
   } catch (error) {
-    console.error('Error fetching gainers:', error);
+    console.error('Top gainers error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch top gainers'
+      error: 'Failed to fetch top gainers',
+      code: 'TOP_GAINERS_ERROR'
     });
   }
 });
 
 // Trending Coins Endpoint
-app.get('/api/v1/markets/trending', async (req, res) => {
+app.get('/api/v1/market/trending', async (req, res) => {
   try {
     const response = await axios.get('https://api.coingecko.com/api/v3/search/trending');
     
     // Take top 5 trending and manipulate prices
-    const trendingCoins = response.data.coins.slice(0, 5).map(coin => {
+    const trendingCoins = response.data.coins.slice(0, 100).map(coin => {
       const fluctuation = (Math.random() * (9.65254 + 6.9755)) - 6.9755;
       const manipulatedPrice = coin.item.data.price * (1 + fluctuation / 100);
       
@@ -1279,62 +1292,29 @@ app.get('/api/v1/markets/trending', async (req, res) => {
         name: coin.item.name,
         image: coin.item.large,
         currentPrice: manipulatedPrice,
-        change24h: coin.item.data.price_change_percentage_24h.usd
+        priceChangePercentage24h: coin.item.data.price_change_percentage_24h.usd,
+        sparkline: coin.item.data.sparkline || []
       };
     });
 
     res.json({
       success: true,
-      trending: trendingCoins
-    });
-  } catch (error) {
-    console.error('Error fetching trending coins:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch trending coins'
-    });
-  }
-});
-
-// All Markets Endpoint (for "View All" functionality)
-app.get('/api/v1/markets/all', async (req, res) => {
-  try {
-    const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
-      params: {
-        vs_currency: 'usd',
-        order: 'market_cap_desc',
-        per_page: 250,
-        page: 1
+      data: {
+        trending: trendingCoins.slice(0, 5),
+        allTrending: trendingCoins
       }
     });
-
-    // Manipulate all prices
-    const allCoins = response.data.map(coin => {
-      const fluctuation = (Math.random() * (9.65254 + 6.9755)) - 6.9755;
-      const manipulatedPrice = coin.current_price * (1 + fluctuation / 100);
-      
-      return {
-        id: coin.id,
-        symbol: coin.symbol,
-        name: coin.name,
-        image: coin.image,
-        currentPrice: manipulatedPrice,
-        change24h: coin.price_change_percentage_24h
-      };
-    });
-
-    res.json({
-      success: true,
-      coins: allCoins
-    });
   } catch (error) {
-    console.error('Error fetching all coins:', error);
+    console.error('Trending coins error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch all coins'
+      error: 'Failed to fetch trending coins',
+      code: 'TRENDING_COINS_ERROR'
     });
   }
 });
+
+
 
 // Other API Routes
 
