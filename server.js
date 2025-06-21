@@ -1174,13 +1174,10 @@ app.get('/api/v1/market-stats', async (req, res) => {
 });
 //Done
 
-
-// Enhanced Market Data Endpoints
-
-// Market Overview (shows 5 assets by default)
-app.get('/api/v1/market/overview', async (req, res) => {
+// Market Overview Endpoint (5 assets + view all)
+app.get('/api/v1/markets/overview', async (req, res) => {
   try {
-    // Fetch data from CoinGecko API
+    // Fetch market data with manipulated prices (-6.9755% to 9.65254% range)
     const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
       params: {
         vs_currency: 'usd',
@@ -1192,46 +1189,55 @@ app.get('/api/v1/market/overview', async (req, res) => {
       }
     });
 
-    // Manipulate prices with random fluctuations (-6.9755% to 9.65254%)
+    // Manipulate prices and format data
     const manipulatedData = response.data.map(coin => {
       const fluctuation = (Math.random() * (9.65254 + 6.9755)) - 6.9755;
       const manipulatedPrice = coin.current_price * (1 + fluctuation / 100);
       
       return {
         id: coin.id,
-        symbol: coin.symbol,
+        symbol: coin.symbol.toUpperCase(),
         name: coin.name,
         image: coin.image,
-        currentPrice: manipulatedPrice,
-        marketCap: coin.market_cap,
-        volume: coin.total_volume,
-        priceChangePercentage1h: coin.price_change_percentage_1h_in_currency,
-        priceChangePercentage24h: coin.price_change_percentage_24h_in_currency,
-        priceChangePercentage7d: coin.price_change_percentage_7d_in_currency,
+        current_price: parseFloat(manipulatedPrice.toFixed(4)),
+        price_change_percentage_1h: coin.price_change_percentage_1h_in_currency 
+          ? parseFloat((coin.price_change_percentage_1h_in_currency + (Math.random() * 2 - 1)).toFixed(2))
+          : 0,
+        price_change_percentage_24h: coin.price_change_percentage_24h_in_currency 
+          ? parseFloat((coin.price_change_percentage_24h_in_currency + (Math.random() * 2 - 1)).toFixed(2)
+          : 0,
+        price_change_percentage_7d: coin.price_change_percentage_7d_in_currency 
+          ? parseFloat((coin.price_change_percentage_7d_in_currency + (Math.random() * 2 - 1)).toFixed(2)
+          : 0,
+        market_cap: coin.market_cap,
+        total_volume: coin.total_volume,
+        circulating_supply: coin.circulating_supply,
         sparkline: coin.sparkline_in_7d?.price || []
       };
     });
 
-    // Return first 5 for overview, but keep all data for "view all"
+    // Get top 5 by market cap for overview
+    const overview = manipulatedData.slice(0, 5);
+    
     res.json({
       success: true,
       data: {
-        overview: manipulatedData.slice(0, 5),
-        allAssets: manipulatedData
+        overview,
+        allAssets: manipulatedData // For "view all" functionality
       }
     });
   } catch (error) {
     console.error('Market overview error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch market overview',
+      error: 'Failed to load market overview',
       code: 'MARKET_OVERVIEW_ERROR'
     });
   }
 });
 
 // Top Gainers Endpoint
-app.get('/api/v1/market/top-gainers', async (req, res) => {
+app.get('/api/v1/markets/gainers', async (req, res) => {
   try {
     const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
       params: {
@@ -1243,78 +1249,90 @@ app.get('/api/v1/market/top-gainers', async (req, res) => {
       }
     });
 
-    // Take top 5 and manipulate prices
-    const topGainers = response.data.slice(0, 100).map(coin => {
+    // Manipulate prices and format data
+    const manipulatedData = response.data.map(coin => {
       const fluctuation = (Math.random() * (9.65254 + 6.9755)) - 6.9755;
       const manipulatedPrice = coin.current_price * (1 + fluctuation / 100);
       
       return {
         id: coin.id,
-        symbol: coin.symbol,
+        symbol: coin.symbol.toUpperCase(),
         name: coin.name,
         image: coin.image,
-        currentPrice: manipulatedPrice,
-        priceChangePercentage24h: coin.price_change_percentage_24h,
+        current_price: parseFloat(manipulatedPrice.toFixed(4)),
+        price_change_percentage_24h: coin.price_change_percentage_24h_in_currency 
+          ? parseFloat((coin.price_change_percentage_24h_in_currency + (Math.random() * 2 - 1)).toFixed(2)
+          : 0,
+        market_cap: coin.market_cap,
+        total_volume: coin.total_volume,
         sparkline: coin.sparkline_in_7d?.price || []
       };
     });
 
+    // Get top 5 gainers
+    const topGainers = manipulatedData.slice(0, 5);
+    
     res.json({
       success: true,
       data: {
-        topGainers: topGainers.slice(0, 5),
-        allGainers: topGainers
+        topGainers,
+        allGainers: manipulatedData // For "view all" functionality
       }
     });
   } catch (error) {
     console.error('Top gainers error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch top gainers',
+      error: 'Failed to load top gainers',
       code: 'TOP_GAINERS_ERROR'
     });
   }
 });
 
 // Trending Coins Endpoint
-app.get('/api/v1/market/trending', async (req, res) => {
+app.get('/api/v1/markets/trending', async (req, res) => {
   try {
     const response = await axios.get('https://api.coingecko.com/api/v3/search/trending');
     
-    // Take top 5 trending and manipulate prices
-    const trendingCoins = response.data.coins.slice(0, 100).map(coin => {
+    // Process trending coins with manipulated prices
+    const trendingCoins = response.data.coins.map((coin, index) => {
       const fluctuation = (Math.random() * (9.65254 + 6.9755)) - 6.9755;
       const manipulatedPrice = coin.item.data.price * (1 + fluctuation / 100);
       
       return {
         id: coin.item.id,
-        symbol: coin.item.symbol,
+        symbol: coin.item.symbol.toUpperCase(),
         name: coin.item.name,
         image: coin.item.large,
-        currentPrice: manipulatedPrice,
-        priceChangePercentage24h: coin.item.data.price_change_percentage_24h.usd,
-        sparkline: coin.item.data.sparkline || []
+        current_price: parseFloat(manipulatedPrice.toFixed(4)),
+        price_change_percentage_24h: coin.item.data.price_change_percentage_24h.usd 
+          ? parseFloat((coin.item.data.price_change_percentage_24h.usd + (Math.random() * 2 - 1)).toFixed(2))
+          : 0,
+        market_cap: coin.item.data.market_cap || 0,
+        total_volume: coin.item.data.total_volume || 0,
+        sparkline: coin.item.data.sparkline?.price || []
       };
     });
 
+    // Get top 5 trending
+    const trending = trendingCoins.slice(0, 5);
+    
     res.json({
       success: true,
       data: {
-        trending: trendingCoins.slice(0, 5),
-        allTrending: trendingCoins
+        trending,
+        allTrending: trendingCoins // For "view all" functionality
       }
     });
   } catch (error) {
     console.error('Trending coins error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch trending coins',
+      error: 'Failed to load trending coins',
       code: 'TRENDING_COINS_ERROR'
     });
   }
 });
-
-
 
 // Other API Routes
 
