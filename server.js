@@ -1174,174 +1174,85 @@ app.get('/api/v1/market-stats', async (req, res) => {
 });
 //Done
 
+// Constants
+const CACHE_TTL = 300; // 5 minutes
+const COINGECKO_API = 'https://api.coingecko.com/api/v3';
+const CRYPTOCOMPARE_API = 'https://min-api.cryptocompare.com/data/v2';
 
-// ==============================================
-// Market Data Endpoints (Production Implementation)
-// ==============================================
-
-// Redis configuration
-({
-  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-  port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
-});
-
-// Configuration constants
-const MARKET_CONFIG = {
-  PRICE_MANIPULATION_RANGE: { min: -11.5787, max: 16.2356 }, // % range
-  CACHE_TTL: 60000, // 1 minute cache
-  TOP_GAINERS_COUNT: 5,
-  TRENDING_COUNT: 5,
-  DEFAULT_LIMIT: 10,
-  MAX_LIMIT: 100,
-  SPARKLINE_DAYS: 7,
-  COINGECKO_API_URL: 'https://api.coingecko.com/api/v3',
-  CRYPTOCOMPARE_API_URL: 'https://min-api.cryptocompare.com/data',
-  CRYPTOCOMPARE_API_KEY: '5d87784487440f9f5fde0fae0f8e36c5b59033162e7f72a3044b58b8ca7b9702'
+// Helper function to manipulate prices with consistent fluctuations
+const manipulatePrice = (price) => {
+  const fluctuation = (Math.random() * (9.65254 + 6.9755)) - 6.9755;
+  return price * (1 + fluctuation / 100);
 };
 
-// Helper function to manipulate prices consistently
-function manipulatePrice(originalPrice) {
-  const range = MARKET_CONFIG.PRICE_MANIPULATION_RANGE.max - MARKET_CONFIG.PRICE_MANIPULATION_RANGE.min;
-  const fluctuation = (Math.random() * range) + MARKET_CONFIG.PRICE_MANIPULATION_RANGE.min;
-  return originalPrice * (1 + (fluctuation / 100));
-}
-
-// Helper function to generate consistent price changes
-function generatePriceChanges() {
-  return {
-    '1h': (Math.random() * 5) - 2.5, // -2.5% to +2.5%
-    '24h': (Math.random() * 15) - 5, // -5% to +10%
-    '7d': (Math.random() * 30) - 10  // -10% to +20%
-  };
-}
-
 // Helper function to format sparkline data
-function formatSparkline(data, currentPrice) {
-  if (!data || data.length === 0) {
-    // Generate random sparkline if no data available
-    const sparkline = [];
-    for (let i = 0; i < 24; i++) {
-      sparkline.push(currentPrice * (0.95 + (Math.random() * 0.1)); // 5% variation
-    }
-    return sparkline;
-  }
-  return data;
-}
+const formatSparkline = (prices) => {
+  if (!prices || !Array.isArray(prices)) return [];
+  return prices.map((price, index) => ({
+    time: new Date(Date.now() - (7 * 24 * 60 * 60 * 1000) + (index * 2 * 60 * 60 * 1000)).getTime(),
+    value: manipulatePrice(price)
+  }));
+};
 
-// Fetch market data from CoinGecko with fallback to CryptoCompare
-async function fetchMarketData() {
+// Market Overview Endpoint
+app.get('/api/v1/market/overview', async (req, res) => {
   try {
-    // Try CoinGecko first
-    const [coinsResponse, trendingResponse] = await Promise.all([
-      axios.get(`${MARKET_CONFIG.COINGECKO_API_URL}/coins/markets`, {
+    const cacheKey = 'market:overview';
+    const cachedData = await redis.get(cacheKey);
+
+    if (cachedData) {
+      return res.json(JSON.parse(cachedData));
+    }
+
+    const [coinsResponse, globalResponse] = await Promise.all([
+      axios.get(`${COINGECKO_API}/coins/markets`, {
         params: {
           vs_currency: 'usd',
           order: 'market_cap_desc',
-          per_page: MARKET_CONFIG.MAX_LIMIT,
+          per_page: 10,
           page: 1,
           sparkline: true,
           price_change_percentage: '1h,24h,7d'
         }
       }),
-      axios.get(`${MARKET_CONFIG.COINGECKO_API_URL}/search/trending`)
+      axios.get(`${COINGECKO_API}/global`)
     ]);
 
-    return {
-      coins: coinsResponse.data,
-      trending: trendingResponse.data.coins
-    };
-  } catch (error) {
-    console.error('CoinGecko API failed, falling back to CryptoCompare:', error);
-    
-    // Fallback to CryptoCompare
-    const [coinsResponse, trendingResponse] = await Promise.all([
-      axios.get(`${MARKET_CONFIG.CRYPTOCOMPARE_API_URL}/top/mktcapfull`, {
-        params: {
-          limit: MARKET_CONFIG.MAX_LIMIT,
-          tsym: 'USD',
-          api_key: MARKET_CONFIG.CRYPTOCOMPARE_API_KEY
-        }
-      }),
-      axios.get(`${MARKET_CONFIG.CRYPTOCOMPARE_API_URL}/top/totalvolfull`, {
-        params: {
-          limit: MARKET_CONFIG.TRENDING_COUNT,
-          tsym: 'USD',
-          api_key: MARKET_CONFIG.CRYPTOCOMPARE_API_KEY
-        }
-      })
-    ]);
-
-    return {
-      coins: coinsResponse.data.Data.map(item => ({
-        id: item.CoinInfo.Id,
-        symbol: item.CoinInfo.Name,
-        name: item.CoinInfo.FullName,
-        image: `https://www.cryptocompare.com${item.CoinInfo.ImageUrl}`,
-        current_price: item.RAW?.USD?.PRICE || 0,
-        price_change_percentage_24h: item.RAW?.USD?.CHANGEPCT24HOUR || 0,
-        sparkline_in_7d: null // CryptoCompare doesn't provide sparkline
-      })),
-      trending: trendingResponse.data.Data.map(item => ({
-        item: {
-          id: item.CoinInfo.Id,
-          symbol: item.CoinInfo.Name,
-          name: item.CoinInfo.FullName,
-          large: `https://www.cryptocompare.com${item.CoinInfo.ImageUrl}`,
-          data: {
-            price_change_percentage_24h: item.RAW?.USD?.CHANGEPCT24HOUR || 0
-          }
-        }
-      }))
-    };
-  }
-}
-
-// Market Overview Endpoint
-app.get('/api/v1/markets/overview', async (req, res) => {
-  try {
-    const { limit = MARKET_CONFIG.DEFAULT_LIMIT } = req.query;
-    const cacheKey = `market_overview_${limit}`;
-    
-    // Try to get from Redis cache first
-    const cachedData = await redis.get(cacheKey);
-    if (cachedData) {
-      return res.json(JSON.parse(cachedData));
-    }
-
-    const { coins } = await fetchMarketData();
-    const validLimit = Math.min(parseInt(limit), MARKET_CONFIG.MAX_LIMIT);
-
-    const marketData = coins.slice(0, validLimit).map(coin => {
-      const originalPrice = coin.current_price;
-      const manipulatedPrice = manipulatePrice(originalPrice);
-      const changes = generatePriceChanges();
-      const sparkline = formatSparkline(coin.sparkline_in_7d?.price, manipulatedPrice);
-
+    const marketData = coinsResponse.data.map(coin => {
+      const manipulatedPrice = manipulatePrice(coin.current_price);
       return {
         id: coin.id,
         symbol: coin.symbol.toUpperCase(),
         name: coin.name,
         logo: coin.image,
         currentPrice: manipulatedPrice,
-        priceChanges: changes,
-        marketCap: coin.market_cap ? manipulatePrice(coin.market_cap) : null,
-        volume24h: coin.total_volume ? manipulatePrice(coin.total_volume) : null,
-        sparkline,
-        lastUpdated: new Date().toISOString()
+        priceChange: {
+          '1h': coin.price_change_percentage_1h_in_currency || 0,
+          '24h': coin.price_change_percentage_24h_in_currency || 0,
+          '7d': coin.price_change_percentage_7d_in_currency || 0
+        },
+        marketCap: coin.market_cap,
+        volume24h: coin.total_volume,
+        circulatingSupply: coin.circulating_supply,
+        sparkline: formatSparkline(coin.sparkline_in_7d?.price)
       };
     });
 
-    // Cache the response
-    await redis.setex(cacheKey, MARKET_CONFIG.CACHE_TTL / 1000, JSON.stringify({
+    const response = {
       success: true,
-      data: marketData
-    }));
+      data: {
+        coins: marketData,
+        stats: {
+          totalMarketCap: globalResponse.data.data.total_market_cap.usd,
+          totalVolume: globalResponse.data.data.total_volume.usd,
+          activeCryptocurrencies: globalResponse.data.data.active_cryptocurrencies,
+          marketCapChange24h: globalResponse.data.data.market_cap_change_percentage_24h_usd
+        }
+      }
+    };
 
-    res.json({
-      success: true,
-      data: marketData
-    });
+    await redis.set(cacheKey, JSON.stringify(response), 'EX', CACHE_TTL);
+    res.json(response);
   } catch (error) {
     console.error('Market overview error:', error);
     res.status(500).json({
@@ -1353,52 +1264,50 @@ app.get('/api/v1/markets/overview', async (req, res) => {
 });
 
 // Top Gainers Endpoint
-app.get('/api/v1/markets/top-gainers', async (req, res) => {
+app.get('/api/v1/market/top-gainers', async (req, res) => {
   try {
-    const cacheKey = 'market_top_gainers';
-    
-    // Try to get from Redis cache first
+    const cacheKey = 'market:top-gainers';
     const cachedData = await redis.get(cacheKey);
+
     if (cachedData) {
       return res.json(JSON.parse(cachedData));
     }
 
-    const { coins } = await fetchMarketData();
-
-    // Sort by 24h change descending and take top 5
-    const topGainers = [...coins]
-      .sort((a, b) => (b.price_change_percentage_24h || 0) - (a.price_change_percentage_24h || 0))
-      .slice(0, MARKET_CONFIG.TOP_GAINERS_COUNT)
-      .map(coin => {
-        const originalPrice = coin.current_price;
-        const manipulatedPrice = manipulatePrice(originalPrice);
-        const changes = generatePriceChanges();
-        const sparkline = formatSparkline(coin.sparkline_in_7d?.price, manipulatedPrice);
-
-        return {
-          id: coin.id,
-          symbol: coin.symbol.toUpperCase(),
-          name: coin.name,
-          logo: coin.image,
-          currentPrice: manipulatedPrice,
-          priceChanges: changes,
-          marketCap: coin.market_cap ? manipulatePrice(coin.market_cap) : null,
-          volume24h: coin.total_volume ? manipulatePrice(coin.total_volume) : null,
-          sparkline,
-          lastUpdated: new Date().toISOString()
-        };
-      });
-
-    // Cache the response
-    await redis.setex(cacheKey, MARKET_CONFIG.CACHE_TTL / 1000, JSON.stringify({
-      success: true,
-      data: topGainers
-    }));
-
-    res.json({
-      success: true,
-      data: topGainers
+    const response = await axios.get(`${CRYPTOCOMPARE_API}/top/totalvolfull`, {
+      params: {
+        limit: 10,
+        tsym: 'USD',
+        api_key: '5d87784487440f9f5fde0fae0f8e36c5b59033162e7f72a3044b58b8ca7b9702'
+      }
     });
+
+    const gainers = response.data.Data.map(coin => {
+      const info = coin.CoinInfo;
+      const raw = coin.RAW?.USD || {};
+      const display = coin.DISPLAY?.USD || {};
+
+      return {
+        id: info.Id,
+        symbol: info.Name,
+        name: info.FullName,
+        logo: `https://www.cryptocompare.com${info.ImageUrl}`,
+        currentPrice: manipulatePrice(raw.PRICE),
+        priceChange24h: raw.CHANGEPCT24HOUR,
+        volume24h: raw.VOLUME24HOURTO,
+        marketCap: raw.MKTCAP,
+        sparkline: [] // CryptoCompare doesn't provide sparkline data
+      };
+    }).filter(coin => coin.priceChange24h > 0)
+      .sort((a, b) => b.priceChange24h - a.priceChange24h)
+      .slice(0, 5);
+
+    const responseData = {
+      success: true,
+      data: gainers
+    };
+
+    await redis.set(cacheKey, JSON.stringify(responseData), 'EX', CACHE_TTL);
+    res.json(responseData);
   } catch (error) {
     console.error('Top gainers error:', error);
     res.status(500).json({
@@ -1410,48 +1319,38 @@ app.get('/api/v1/markets/top-gainers', async (req, res) => {
 });
 
 // Trending Coins Endpoint
-app.get('/api/v1/markets/trending', async (req, res) => {
+app.get('/api/v1/market/trending', async (req, res) => {
   try {
-    const cacheKey = 'market_trending';
-    
-    // Try to get from Redis cache first
+    const cacheKey = 'market:trending';
     const cachedData = await redis.get(cacheKey);
+
     if (cachedData) {
       return res.json(JSON.parse(cachedData));
     }
 
-    const { trending } = await fetchMarketData();
+    const response = await axios.get(`${COINGECKO_API}/search/trending`);
+    const trending = response.data.coins.map(coin => {
+      const item = coin.item;
+      return {
+        id: item.id,
+        symbol: item.symbol.toUpperCase(),
+        name: item.name,
+        logo: item.large,
+        currentPrice: manipulatePrice(item.data.price),
+        priceChange24h: item.data.price_change_percentage_24h.usd,
+        marketCap: item.data.market_cap,
+        volume24h: item.data.total_volume,
+        sparkline: formatSparkline(item.data.sparkline)
+      };
+    }).slice(0, 5);
 
-    const trendingCoins = trending
-      .slice(0, MARKET_CONFIG.TRENDING_COUNT)
-      .map(coin => {
-        const originalPrice = coin.item.data?.price || 0;
-        const manipulatedPrice = manipulatePrice(originalPrice);
-        const changes = generatePriceChanges();
-        const sparkline = formatSparkline(null, manipulatedPrice);
-
-        return {
-          id: coin.item.id,
-          symbol: coin.item.symbol.toUpperCase(),
-          name: coin.item.name,
-          logo: coin.item.large,
-          currentPrice: manipulatedPrice,
-          priceChanges: changes,
-          sparkline,
-          lastUpdated: new Date().toISOString()
-        };
-      });
-
-    // Cache the response
-    await redis.setex(cacheKey, MARKET_CONFIG.CACHE_TTL / 1000, JSON.stringify({
+    const responseData = {
       success: true,
-      data: trendingCoins
-    }));
+      data: trending
+    };
 
-    res.json({
-      success: true,
-      data: trendingCoins
-    });
+    await redis.set(cacheKey, JSON.stringify(responseData), 'EX', CACHE_TTL);
+    res.json(responseData);
   } catch (error) {
     console.error('Trending coins error:', error);
     res.status(500).json({
@@ -1463,170 +1362,117 @@ app.get('/api/v1/markets/trending', async (req, res) => {
 });
 
 // View All Endpoints
-app.get('/api/v1/markets/all', async (req, res) => {
+app.get('/api/v1/market/all-coins', async (req, res) => {
   try {
-    const { type = 'all', limit = MARKET_CONFIG.MAX_LIMIT } = req.query;
-    const cacheKey = `market_all_${type}_${limit}`;
-    
-    // Try to get from Redis cache first
+    const { page = 1, perPage = 50 } = req.query;
+    const cacheKey = `market:all-coins:${page}:${perPage}`;
     const cachedData = await redis.get(cacheKey);
+
     if (cachedData) {
       return res.json(JSON.parse(cachedData));
     }
 
-    const { coins, trending } = await fetchMarketData();
-    let data = [];
-
-    switch (type) {
-      case 'gainers':
-        data = [...coins]
-          .sort((a, b) => (b.price_change_percentage_24h || 0) - (a.price_change_percentage_24h || 0))
-          .slice(0, Math.min(limit, MARKET_CONFIG.MAX_LIMIT));
-        break;
-      case 'trending':
-        data = trending
-          .slice(0, Math.min(limit, MARKET_CONFIG.MAX_LIMIT))
-          .map(t => t.item);
-        break;
-      default: // 'all'
-        data = coins.slice(0, Math.min(limit, MARKET_CONFIG.MAX_LIMIT));
-    }
-
-    const result = data.map(item => {
-      const isTrending = type === 'trending';
-      const originalPrice = isTrending ? (item.data?.price || 0) : item.current_price;
-      const manipulatedPrice = manipulatePrice(originalPrice);
-      const changes = generatePriceChanges();
-      const sparkline = isTrending 
-        ? formatSparkline(null, manipulatedPrice)
-        : formatSparkline(item.sparkline_in_7d?.price, manipulatedPrice);
-
-      return {
-        id: item.id,
-        symbol: isTrending ? item.symbol.toUpperCase() : item.symbol.toUpperCase(),
-        name: item.name,
-        logo: isTrending ? item.large : item.image,
-        currentPrice: manipulatedPrice,
-        priceChanges: changes,
-        marketCap: item.market_cap ? manipulatePrice(item.market_cap) : null,
-        volume24h: item.total_volume ? manipulatePrice(item.total_volume) : null,
-        sparkline,
-        lastUpdated: new Date().toISOString()
-      };
+    const response = await axios.get(`${COINGECKO_API}/coins/markets`, {
+      params: {
+        vs_currency: 'usd',
+        order: 'market_cap_desc',
+        per_page: perPage,
+        page: page,
+        sparkline: true
+      }
     });
 
-    // Cache the response
-    await redis.setex(cacheKey, MARKET_CONFIG.CACHE_TTL / 1000, JSON.stringify({
-      success: true,
-      data: result
+    const coins = response.data.map(coin => ({
+      id: coin.id,
+      symbol: coin.symbol.toUpperCase(),
+      name: coin.name,
+      logo: coin.image,
+      currentPrice: manipulatePrice(coin.current_price),
+      priceChange24h: coin.price_change_percentage_24h,
+      marketCap: coin.market_cap,
+      volume24h: coin.total_volume,
+      circulatingSupply: coin.circulating_supply,
+      sparkline: formatSparkline(coin.sparkline_in_7d?.price)
     }));
 
-    res.json({
+    const responseData = {
       success: true,
-      data: result
-    });
+      data: coins,
+      pagination: {
+        page: parseInt(page),
+        perPage: parseInt(perPage),
+        total: 1000 // Approximate total from CoinGecko
+      }
+    };
+
+    await redis.set(cacheKey, JSON.stringify(responseData), 'EX', CACHE_TTL);
+    res.json(responseData);
   } catch (error) {
-    console.error('View all markets error:', error);
+    console.error('All coins error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch market data',
-      code: 'MARKET_ALL_ERROR'
+      error: 'Failed to fetch all coins',
+      code: 'ALL_COINS_ERROR'
     });
   }
 });
 
-// Single Asset Detail Endpoint
-app.get('/api/v1/markets/:assetId', async (req, res) => {
+// Asset Detail Endpoint with Modal Data
+app.get('/api/v1/market/asset/:id', async (req, res) => {
   try {
-    const { assetId } = req.params;
-    const cacheKey = `market_asset_${assetId}`;
-    
-    // Try to get from Redis cache first
+    const { id } = req.params;
+    const cacheKey = `market:asset:${id}`;
     const cachedData = await redis.get(cacheKey);
+
     if (cachedData) {
       return res.json(JSON.parse(cachedData));
     }
 
-    // Fetch detailed data for the asset
-    let assetData;
-    try {
-      const response = await axios.get(`${MARKET_CONFIG.COINGECKO_API_URL}/coins/${assetId}`, {
+    const [coinResponse, marketDataResponse] = await Promise.all([
+      axios.get(`${COINGECKO_API}/coins/${id}`),
+      axios.get(`${COINGECKO_API}/coins/${id}/market_chart`, {
         params: {
-          localization: false,
-          tickers: false,
-          market_data: true,
-          community_data: false,
-          developer_data: false,
-          sparkline: true
+          vs_currency: 'usd',
+          days: '30'
         }
-      });
-      assetData = response.data;
-    } catch (error) {
-      // Fallback to CryptoCompare if CoinGecko fails
-      const response = await axios.get(`${MARKET_CONFIG.CRYPTOCOMPARE_API_URL}/pricemultifull`, {
-        params: {
-          fsyms: assetId.toUpperCase(),
-          tsyms: 'USD',
-          api_key: MARKET_CONFIG.CRYPTOCOMPARE_API_KEY
-        }
-      });
-      const rawData = response.data.RAW[assetId.toUpperCase()]?.USD;
-      assetData = {
-        id: assetId,
-        symbol: assetId.toUpperCase(),
-        name: assetId,
-        image: {
-          small: `https://www.cryptocompare.com/media/37746238/${assetId.toLowerCase()}.png`
+      })
+    ]);
+
+    const coin = coinResponse.data;
+    const marketData = marketDataResponse.data;
+
+    const responseData = {
+      success: true,
+      data: {
+        id: coin.id,
+        symbol: coin.symbol.toUpperCase(),
+        name: coin.name,
+        logo: coin.image.large,
+        currentPrice: manipulatePrice(coin.market_data.current_price.usd),
+        priceChange: {
+          '1h': coin.market_data.price_change_percentage_1h_in_currency.usd,
+          '24h': coin.market_data.price_change_percentage_24h_in_currency.usd,
+          '7d': coin.market_data.price_change_percentage_7d_in_currency.usd,
+          '30d': coin.market_data.price_change_percentage_30d_in_currency.usd
         },
-        market_data: {
-          current_price: { usd: rawData.PRICE },
-          price_change_percentage_24h: rawData.CHANGEPCT24HOUR,
-          market_cap: { usd: rawData.MKTCAP },
-          total_volume: { usd: rawData.TOTALVOLUME24HTO }
+        marketCap: coin.market_data.market_cap.usd,
+        volume24h: coin.market_data.total_volume.usd,
+        circulatingSupply: coin.market_data.circulating_supply,
+        totalSupply: coin.market_data.total_supply,
+        allTimeHigh: coin.market_data.ath.usd,
+        allTimeLow: coin.market_data.atl.usd,
+        description: coin.description.en,
+        links: coin.links,
+        chartData: {
+          prices: marketData.prices.map(p => [p[0], manipulatePrice(p[1])]),
+          market_caps: marketData.market_caps,
+          total_volumes: marketData.total_volumes
         }
-      };
-    }
-
-    const originalPrice = assetData.market_data?.current_price?.usd || 0;
-    const manipulatedPrice = manipulatePrice(originalPrice);
-    const changes = generatePriceChanges();
-    const sparkline = assetData.sparkline_in_7d?.price 
-      ? formatSparkline(assetData.sparkline_in_7d.price, manipulatedPrice)
-      : formatSparkline(null, manipulatedPrice);
-
-    const result = {
-      id: assetData.id,
-      symbol: assetData.symbol.toUpperCase(),
-      name: assetData.name,
-      logo: assetData.image?.small || assetData.image?.large || '',
-      currentPrice: manipulatedPrice,
-      priceChanges: changes,
-      marketCap: assetData.market_data?.market_cap?.usd 
-        ? manipulatePrice(assetData.market_data.market_cap.usd) 
-        : null,
-      volume24h: assetData.market_data?.total_volume?.usd 
-        ? manipulatePrice(assetData.market_data.total_volume.usd) 
-        : null,
-      circulatingSupply: null, // Would need additional API call
-      sparkline,
-      priceHistory: {
-        '24h': sparkline.slice(-24), // Last 24 hours
-        '7d': sparkline,
-        '30d': null // Would need additional API call
-      },
-      lastUpdated: new Date().toISOString()
+      }
     };
 
-    // Cache the response
-    await redis.setex(cacheKey, MARKET_CONFIG.CACHE_TTL / 1000, JSON.stringify({
-      success: true,
-      data: result
-    }));
-
-    res.json({
-      success: true,
-      data: result
-    });
+    await redis.set(cacheKey, JSON.stringify(responseData), 'EX', CACHE_TTL);
+    res.json(responseData);
   } catch (error) {
     console.error('Asset detail error:', error);
     res.status(500).json({
@@ -1636,6 +1482,7 @@ app.get('/api/v1/markets/:assetId', async (req, res) => {
     });
   }
 });
+
 // Other API Routes
 
 // Authentication Routes
