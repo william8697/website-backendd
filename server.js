@@ -1179,10 +1179,6 @@ app.get('/api/v1/market-stats', async (req, res) => {
 // Market Data Endpoints (Production Implementation)
 // ==============================================
 
-const axios = require('axios');
-const Redis = require('ioredis');
-const { v4: uuidv4 } = require('uuid');
-
 // Redis configuration
 const redis = new Redis({
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
