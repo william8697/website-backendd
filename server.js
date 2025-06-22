@@ -1180,7 +1180,7 @@ app.get('/api/v1/market-stats', async (req, res) => {
 // ==============================================
 
 // Redis configuration
-const redis = new Redis({
+({
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: 14450,
   password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
