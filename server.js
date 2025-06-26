@@ -1165,19 +1165,17 @@ module.exports = {
 // Market Data Endpoints
 app.get('/api/v1/market/overview', async (req, res) => {
   try {
-    // Fetch market data from CoinGecko with sparklines
     const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
       params: {
         vs_currency: 'usd',
         order: 'market_cap_desc',
-        per_page: 10,
+        per_page: 15,  // Matches frontend pagination
         page: 1,
         sparkline: true,
         price_change_percentage: '1h,24h,7d'
       }
     });
 
-    // Apply uniform price manipulation (-6.9755% to 9.65254%)
     const manipulatedData = response.data.map(coin => {
       const fluctuation = (Math.random() * (0.0965254 + 0.069755)) - 0.069755;
       const manipulatedPrice = coin.current_price * (1 + fluctuation);
@@ -1195,13 +1193,15 @@ app.get('/api/v1/market/overview', async (req, res) => {
         market_cap: coin.market_cap,
         total_volume: coin.total_volume,
         circulating_supply: coin.circulating_supply,
-        total_supply: coin.total_supply
+        total_supply: coin.total_supply || coin.circulating_supply,
+        high_24h: coin.high_24h,
+        low_24h: coin.low_24h
       };
     });
 
     res.json({
       success: true,
-      data: manipulatedData
+      data: manipulatedData  // Frontend expects direct array for market overview
     });
   } catch (error) {
     console.error('Market overview error:', error);
@@ -1215,7 +1215,6 @@ app.get('/api/v1/market/overview', async (req, res) => {
 
 app.get('/api/v1/market/top-gainers', async (req, res) => {
   try {
-    // Fetch top gainers from CoinGecko
     const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
       params: {
         vs_currency: 'usd',
@@ -1226,7 +1225,6 @@ app.get('/api/v1/market/top-gainers', async (req, res) => {
       }
     });
 
-    // Apply same price manipulation as overview
     const manipulatedData = response.data.map(coin => {
       const fluctuation = (Math.random() * (0.0965254 + 0.069755)) - 0.069755;
       const manipulatedPrice = coin.current_price * (1 + fluctuation);
@@ -1244,7 +1242,7 @@ app.get('/api/v1/market/top-gainers', async (req, res) => {
 
     res.json({
       success: true,
-      data: manipulatedData
+      data: manipulatedData  // Frontend expects direct array for top gainers
     });
   } catch (error) {
     console.error('Top gainers error:', error);
@@ -1258,15 +1256,12 @@ app.get('/api/v1/market/top-gainers', async (req, res) => {
 
 app.get('/api/v1/market/trending', async (req, res) => {
   try {
-    // Fetch trending coins from CoinGecko
     const response = await axios.get('https://api.coingecko.com/api/v3/search/trending');
     
-    // Process and manipulate prices
     const trendingCoins = response.data.coins.slice(0, 5).map(coin => {
       const fluctuation = (Math.random() * (0.0965254 + 0.069755)) - 0.069755;
       const manipulatedPrice = coin.item.data.price * (1 + fluctuation);
       
-      // Get sparkline data from separate API call since trending endpoint doesn't provide it
       return {
         id: coin.item.id,
         symbol: coin.item.symbol.toUpperCase(),
@@ -1274,11 +1269,10 @@ app.get('/api/v1/market/trending', async (req, res) => {
         image: coin.item.large,
         current_price: manipulatedPrice,
         price_change_percentage_24h: coin.item.data.price_change_percentage_24h.usd,
-        sparkline_in_7d: { price: [] } // Will be populated below
+        sparkline_in_7d: { price: [] }
       };
     });
 
-    // Fetch sparkline data for each trending coin
     const coinsWithSparklines = await Promise.all(trendingCoins.map(async coin => {
       try {
         const sparklineResponse = await axios.get(`https://api.coingecko.com/api/v3/coins/${coin.id}/market_chart`, {
@@ -1295,13 +1289,13 @@ app.get('/api/v1/market/trending', async (req, res) => {
           }
         };
       } catch (e) {
-        return coin; // Return without sparkline if API call fails
+        return coin;
       }
     }));
 
     res.json({
       success: true,
-      data: coinsWithSparklines
+      data: coinsWithSparklines  // Frontend expects direct array for trending
     });
   } catch (error) {
     console.error('Trending coins error:', error);
