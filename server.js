@@ -1162,123 +1162,139 @@ module.exports = {
 };
 //Done
 
-// Cache setup
-let cachedTrending = [];
-let lastTrendingFetch = 0;
 
-// 1. Primary CoinGecko Trending
-async function fetchCoinGeckoTrending() {
-  const trending = await axios.get(
-    'https://api.coingecko.com/api/v3/search/trending',
-    { timeout: 5000 }
-  );
-  
-  const coinIds = trending.data.coins.map(c => c.item.id).join(',');
-  
-  const { data } = await axios.get(
-    `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${coinIds}&order=market_cap_desc&per_page=20&page=1&sparkline=true`,
-    { timeout: 5000 }
-  );
 
-  return data.map(coin => ({
-    id: coin.id,
-    name: coin.name,
-    symbol: coin.symbol,
-    image: coin.image,
-    currentPrice: coin.current_price,
-    change24h: coin.price_change_percentage_24h || 0,
-    sparkline: coin.sparkline_in_7d.price
-  }));
-}
-
-// 2. Fallback #1 - CoinPaprika Trending
-async function fetchCoinPaprikaTrending() {
-  const { data } = await axios.get(
-    'https://api.coinpaprika.com/v1/coins/trending',
-    { timeout: 3000 }
-  );
-
-  const coinIds = data.slice(0, 20).map(c => c.id).join(',');
-  
-  const marketData = await axios.get(
-    `https://api.coinpaprika.com/v1/tickers?quotes=USD&coins=${coinIds}`,
-    { timeout: 3000 }
-  );
-
-  return marketData.data.map(coin => ({
-    id: coin.id,
-    name: coin.name,
-    symbol: coin.symbol,
-    image: `https://static.coinpaprika.com/coin/${coin.id}/logo.png`,
-    currentPrice: coin.quotes.USD.price,
-    change24h: coin.quotes.USD.percent_change_24h || 0,
-    sparkline: Array(7).fill(0).map((_,i) => 
-      coin.quotes.USD.price * (1 + (Math.random() * 0.1 - 0.05))
-    )
-  }));
-}
-
-// 3. Fallback #2 - Nomics Trending
-async function fetchNomicsTrending() {
-  const { data } = await axios.get(
-    'https://api.nomics.com/v1/currencies/ticker?key=YOUR_NOMICS_KEY&interval=1h&convert=USD&per-page=20&sort=volume_desc',
-    { timeout: 3000 }
-  );
-
-  return data.map(coin => ({
-    id: coin.id,
-    name: coin.name,
-    symbol: coin.currency,
-    image: coin.logo_url,
-    currentPrice: parseFloat(coin.price),
-    change24h: parseFloat(coin['1h'].price_change_pct) * 100,
-    sparkline: Array(7).fill(0).map((_,i) => 
-      parseFloat(coin.price) * (1 + (i * 0.01))
-    )
-  }));
-}
-
-router.get('/markets/trending', async (req, res) => {
+// Market Overview Endpoint
+router.get('/markets', async (req, res) => {
   try {
-    // Try CoinGecko first
-    const trending = await fetchCoinGeckoTrending();
-    cachedTrending = trending;
-    lastTrendingFetch = Date.now();
-    return res.json({ success: true, trending });
-  } catch (primaryError) {
-    console.log('CoinGecko trending failed, trying fallbacks...');
-    
-    // Use cache if fresh (<10 minutes old)
-    if (Date.now() - lastTrendingFetch < 600000 && cachedTrending.length > 0) {
-      return res.json({ success: true, trending: cachedTrending });
-    }
-    
-    // Try CoinPaprika
-    try {
-      const trending = await fetchCoinPaprikaTrending();
-      cachedTrending = trending;
-      lastTrendingFetch = Date.now();
-      return res.json({ success: true, trending });
-    } catch (fallback1Error) {
-      console.log('CoinPaprika failed, trying Nomics...');
-      
-      // Try Nomics
-      try {
-        const trending = await fetchNomicsTrending();
-        cachedTrending = trending;
-        lastTrendingFetch = Date.now();
-        return res.json({ success: true, trending });
-      } catch (finalError) {
-        console.error('All trending APIs failed:', finalError);
-        return res.status(500).json({ 
-          success: false,
-          message: 'All trending sources unavailable'
-        });
+    const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
+      params: {
+        vs_currency: 'usd',
+        order: 'market_cap_desc',
+        per_page: 100,
+        page: 1,
+        sparkline: true,
+        price_change_percentage: '1h,24h,7d'
       }
-    }
+    });
+
+    const marketData = response.data.map(coin => ({
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      currentPrice: coin.current_price,
+      marketCap: coin.market_cap,
+      volume: coin.total_volume,
+      high24h: coin.high_24h,
+      low24h: coin.low_24h,
+      change24h: coin.price_change_percentage_24h,
+      sparkline: coin.sparkline_in_7d.price
+    }));
+
+    res.json({ success: true, marketData });
+  } catch (error) {
+    console.error('Error fetching market data:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch market data' });
   }
 });
 
+// Top Gainers Endpoint
+router.get('/markets/gainers', async (req, res) => {
+  try {
+    const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
+      params: {
+        vs_currency: 'usd',
+        order: 'price_change_percentage_24h_desc',
+        per_page: 20,
+        page: 1,
+        sparkline: true
+      }
+    });
+
+    const gainers = response.data.map(coin => ({
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      currentPrice: coin.current_price,
+      change24h: coin.price_change_percentage_24h,
+      sparkline: coin.sparkline_in_7d.price
+    }));
+
+    res.json({ success: true, gainers });
+  } catch (error) {
+    console.error('Error fetching gainers:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch top gainers' });
+  }
+});
+
+// Trending Endpoint
+router.get('/markets/trending', async (req, res) => {
+  try {
+    // First get trending coins from CoinGecko
+    const trendingResponse = await axios.get('https://api.coingecko.com/api/v3/search/trending');
+    
+    // Get detailed data for each trending coin
+    const trendingCoins = trendingResponse.data.coins.slice(0, 20);
+    const coinIds = trendingCoins.map(coin => coin.item.id).join(',');
+    
+    const detailsResponse = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
+      params: {
+        vs_currency: 'usd',
+        ids: coinIds,
+        per_page: 20,
+        page: 1,
+        sparkline: true
+      }
+    });
+
+    const trending = detailsResponse.data.map(coin => ({
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      currentPrice: coin.current_price,
+      change24h: coin.price_change_percentage_24h,
+      sparkline: coin.sparkline_in_7d.price
+    }));
+
+    res.json({ success: true, trending });
+  } catch (error) {
+    console.error('Error fetching trending coins:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch trending coins' });
+  }
+});
+
+// All Coins Endpoint
+router.get('/markets/all', async (req, res) => {
+  try {
+    const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
+      params: {
+        vs_currency: 'usd',
+        order: 'market_cap_desc',
+        per_page: 250,
+        page: 1
+      }
+    });
+
+    const coins = response.data.map(coin => ({
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      currentPrice: coin.current_price,
+      change24h: coin.price_change_percentage_24h
+    }));
+
+    res.json({ success: true, coins });
+  } catch (error) {
+    console.error('Error fetching all coins:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch all coins' });
+  }
+});
+
+module.exports = router;
 // Other API Routes
 
 // Authentication Routes
