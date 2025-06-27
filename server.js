@@ -1161,10 +1161,6 @@ module.exports = {
   }
 };
 //Done
-// Market Data Endpoints with Redis Caching
-const CACHE_TTL = 60; // 1 minute cache
-const { redisClient } = require('./redis');
-
 // Price manipulation logic
 const manipulatePrice = (price, id) => {
   const seed = id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
