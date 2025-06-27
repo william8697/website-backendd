@@ -1165,11 +1165,12 @@ module.exports = {
 
 
 
+// server.js - Consolidated Market Data Endpoints with ioredis
 
 const Redis = require('ioredis');
 const CACHE_TTL = 60; // 1 minute cache
 
-// Initialize Redis client with your configuration
+// Initialize Redis client (single instance)
 const redisClient = new Redis({
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: 14450,
@@ -1181,25 +1182,21 @@ const redisClient = new Redis({
   }
 });
 
-// Enhanced price manipulation with controlled fluctuations
+// Enhanced price manipulation with controlled fluctuations (+5.99% to -6.88%)
 const manipulatePrice = (price, id) => {
-  // Create a consistent seed based on coin ID and current hour
   const seed = id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
   const hourSeed = Math.floor(Date.now() / 3600000);
+  const random = (Math.sin(seed + hourSeed) + 1) / 2; // 0 to 1 range
   
-  // Generate fluctuation between -6.88% and +5.99%
-  const fluctuationRange = 0.0599 - (-0.0688); // Total range
-  const baseFluctuation = -0.0688; // Starting from -6.88%
+  // Calculate fluctuation between -6.88% and +5.99%
+  const minFluctuation = -0.0688;
+  const maxFluctuation = 0.0599;
+  const fluctuation = minFluctuation + (random * (maxFluctuation - minFluctuation));
   
-  // Use seeded random for consistency during the same hour
-  const random = (Math.sin(seed + hourSeed) + 1) / 2; // Convert to 0-1 range
-  const fluctuation = baseFluctuation + (random * fluctuationRange);
-  
-  // Apply the fluctuation
   return price * (1 + fluctuation);
 };
 
-// Cache middleware using ioredis
+// Cache middleware
 const cacheMiddleware = (ttl) => {
   return async (req, res, next) => {
     const key = `market:${req.originalUrl}`;
@@ -1209,11 +1206,14 @@ const cacheMiddleware = (ttl) => {
       if (cachedData) {
         return res.json(JSON.parse(cachedData));
       }
-      res.sendResponse = res.json;
+      
+      // Override res.json to cache responses
+      const originalJson = res.json;
       res.json = async (body) => {
         await redisClient.setex(key, ttl, JSON.stringify(body));
-        res.sendResponse(body);
+        originalJson.call(res, body);
       };
+      
       next();
     } catch (err) {
       console.error('Redis error:', err);
@@ -1241,7 +1241,7 @@ app.get('/api/v1/markets', cacheMiddleware(CACHE_TTL), async (req, res) => {
       symbol: coin.symbol.toUpperCase(),
       name: coin.name,
       image: coin.image,
-      originalPrice: coin.current_price, // Store original for reference
+      originalPrice: coin.current_price,
       currentPrice: manipulatePrice(coin.current_price, coin.id),
       priceChange24h: coin.price_change_percentage_24h,
       priceChange1h: coin.price_change_percentage_1h_in_currency || 0,
@@ -1251,7 +1251,7 @@ app.get('/api/v1/markets', cacheMiddleware(CACHE_TTL), async (req, res) => {
       circulatingSupply: coin.circulating_supply,
       totalSupply: coin.total_supply || coin.circulating_supply,
       sparkline: coin.sparkline_in_7d?.price || [],
-      fluctuationRange: "+5.99% to -6.88%" // Show users the possible fluctuation
+      fluctuationRange: "+5.99% to -6.88%"
     }));
 
     res.json({ success: true, data: processedData });
@@ -1265,7 +1265,6 @@ app.get('/api/v1/markets', cacheMiddleware(CACHE_TTL), async (req, res) => {
   }
 });
 
-// Top Gainers Endpoint (shows 5 coins)
 app.get('/api/v1/markets/gainers', cacheMiddleware(CACHE_TTL), async (req, res) => {
   try {
     const { data } = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
@@ -1287,8 +1286,8 @@ app.get('/api/v1/markets/gainers', cacheMiddleware(CACHE_TTL), async (req, res) 
       currentPrice: manipulatePrice(coin.current_price, coin.id),
       priceChange24h: coin.price_change_percentage_24h,
       sparkline: coin.sparkline_in_7d?.price || [],
-      priceFluctuation: "±5-7%", // Indicate potential fluctuation to traders
-      isVolatile: true // Flag for UI to highlight trading opportunity
+      priceFluctuation: "±5-7%",
+      isVolatile: true
     }));
 
     res.json({ success: true, data: processedData });
@@ -1302,7 +1301,6 @@ app.get('/api/v1/markets/gainers', cacheMiddleware(CACHE_TTL), async (req, res) 
   }
 });
 
-// Trending Endpoint (shows 5 coins)
 app.get('/api/v1/markets/trending', cacheMiddleware(CACHE_TTL), async (req, res) => {
   try {
     const { data } = await axios.get('https://api.coingecko.com/api/v3/search/trending');
@@ -1316,8 +1314,8 @@ app.get('/api/v1/markets/trending', cacheMiddleware(CACHE_TTL), async (req, res)
       currentPrice: manipulatePrice(coin.item.data.price, coin.item.id),
       priceChange24h: coin.item.data.price_change_percentage_24h.usd,
       sparkline: [],
-      tradingOpportunity: true, // Flag for UI
-      riskLevel: "Medium" // Indicate to users this is volatile
+      tradingOpportunity: true,
+      riskLevel: "Medium"
     }));
 
     // Fetch sparklines for trending coins
@@ -1343,13 +1341,19 @@ app.get('/api/v1/markets/trending', cacheMiddleware(CACHE_TTL), async (req, res)
   }
 });
 
-// Error handling for Redis
+// Redis connection events
 redisClient.on('error', (err) => {
   console.error('Redis connection error:', err);
 });
 
 redisClient.on('connect', () => {
   console.log('Connected to Redis successfully');
+});
+
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
 
 // Other API Routes
