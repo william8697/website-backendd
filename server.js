@@ -1164,14 +1164,6 @@ module.exports = {
 
 
 
-
-// server.js - Consolidated Market Data Endpoints with ioredis
-
-const Redis = require('ioredis');
-const CACHE_TTL = 60; // 1 minute cache
-
-// Initialize Redis client (single instance)
-const redisClient = new Redis({
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: 14450,
   password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR',
