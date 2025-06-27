@@ -1165,13 +1165,6 @@ module.exports = {
 
 
 
-// Redis client with error handling
-const redisClient = redis.createClient({
-  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-  port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
-});
-
 // Redis connection with error handling
 (async () => {
   try {
