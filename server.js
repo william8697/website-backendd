@@ -1161,20 +1161,66 @@ module.exports = {
   }
 };
 //Done
-// Market Data Endpoints with Redis Caching
-const CACHE_TTL = 60; // 1 minute cache
-const { redisClient } = require('./redis');
+const { createClient } = require('redis');
 
-// Price manipulation logic (consistent across all endpoints)
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Redis setup with your credentials
+let redisClient;
+(async () => {
+  redisClient = createClient({
+    socket: {
+      host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+      port: 14450
+    },
+    password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
+  });
+  
+  redisClient.on('error', (err) => console.log('Redis Client Error', err));
+  redisClient.on('connect', () => console.log('Connected to Redis'));
+  
+  try {
+    await redisClient.connect();
+    console.log('Redis connection established');
+  } catch (err) {
+    console.error('Redis connection failed:', err);
+    process.exit(1);
+  }
+})();
+
+// Cache middleware
+const cacheMiddleware = (ttl) => {
+  return async (req, res, next) => {
+    const key = req.originalUrl;
+    
+    try {
+      const cachedData = await redisClient.get(key);
+      if (cachedData) {
+        console.log('Serving from cache');
+        return res.json(JSON.parse(cachedData));
+      }
+      next();
+    } catch (err) {
+      console.error('Redis error:', err);
+      next();
+    }
+  };
+};
+
+// Price manipulation logic
 const manipulatePrice = (price, id) => {
-  // Seed random based on coin ID for consistency
   const seed = id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
   const fluctuation = (Math.sin(seed + Date.now() / 3600000) * 0.11999) - 0.09555;
   return price * (1 + fluctuation);
 };
 
 // Market Overview Endpoint
-app.get('/api/v1/markets', cacheMiddleware(CACHE_TTL), async (req, res) => {
+app.get('/api/v1/markets', cacheMiddleware(60), async (req, res) => {
   try {
     const { data } = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
       params: {
@@ -1206,6 +1252,7 @@ app.get('/api/v1/markets', cacheMiddleware(CACHE_TTL), async (req, res) => {
       };
     });
 
+    await redisClient.setEx(req.originalUrl, 60, JSON.stringify({ success: true, data: processedData }));
     res.json({ success: true, data: processedData });
   } catch (error) {
     console.error('Market overview error:', error);
@@ -1218,7 +1265,7 @@ app.get('/api/v1/markets', cacheMiddleware(CACHE_TTL), async (req, res) => {
 });
 
 // Top Gainers Endpoint
-app.get('/api/v1/markets/gainers', cacheMiddleware(CACHE_TTL), async (req, res) => {
+app.get('/api/v1/markets/gainers', cacheMiddleware(60), async (req, res) => {
   try {
     const { data } = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
       params: {
@@ -1243,6 +1290,7 @@ app.get('/api/v1/markets/gainers', cacheMiddleware(CACHE_TTL), async (req, res) 
       };
     });
 
+    await redisClient.setEx(req.originalUrl, 60, JSON.stringify({ success: true, data: processedData }));
     res.json({ success: true, data: processedData });
   } catch (error) {
     console.error('Top gainers error:', error);
@@ -1255,7 +1303,7 @@ app.get('/api/v1/markets/gainers', cacheMiddleware(CACHE_TTL), async (req, res) 
 });
 
 // Trending Endpoint
-app.get('/api/v1/markets/trending', cacheMiddleware(CACHE_TTL), async (req, res) => {
+app.get('/api/v1/markets/trending', cacheMiddleware(60), async (req, res) => {
   try {
     const { data } = await axios.get('https://api.coingecko.com/api/v3/search/trending');
     
@@ -1272,7 +1320,6 @@ app.get('/api/v1/markets/trending', cacheMiddleware(CACHE_TTL), async (req, res)
       };
     });
 
-    // Fetch sparklines for trending coins
     const coinsWithSparklines = await Promise.all(trendingCoins.map(async coin => {
       try {
         const { data } = await axios.get(`https://api.coingecko.com/api/v3/coins/${coin.id}/market_chart`, {
@@ -1282,8 +1329,9 @@ app.get('/api/v1/markets/trending', cacheMiddleware(CACHE_TTL), async (req, res)
       } catch (e) {
         return coin;
       }
-    });
+    }));
 
+    await redisClient.setEx(req.originalUrl, 60, JSON.stringify({ success: true, data: coinsWithSparklines }));
     res.json({ success: true, data: coinsWithSparklines });
   } catch (error) {
     console.error('Trending coins error:', error);
@@ -1293,6 +1341,11 @@ app.get('/api/v1/markets/trending', cacheMiddleware(CACHE_TTL), async (req, res)
       code: 'TRENDING_COINS_ERROR'
     });
   }
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
 // Other API Routes
 
