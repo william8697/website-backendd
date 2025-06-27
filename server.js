@@ -1161,155 +1161,185 @@ module.exports = {
   }
 };
 //Done
+
+
+
+
 const router = express.Router();
 
-// Redis client setup
+// Redis client with error handling
 const redisClient = redis.createClient({
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: 14450,
   password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
 });
 
-redisClient.on('error', (err) => console.log('Redis Client Error', err));
-
-// Connect to Redis
+// Redis connection with error handling
 (async () => {
-  await redisClient.connect();
+  try {
+    await redisClient.connect();
+    console.log('Connected to Redis');
+  } catch (err) {
+    console.error('Redis connection error:', err);
+  }
 })();
 
-// Helper function to apply random price fluctuation
-function applyPriceFluctuation(price) {
-  const fluctuation = (Math.random() * 11.9885) - 5.6555; // Range: -5.6555% to +5.333%
-  return price * (1 + (fluctuation / 100));
-}
+// Price fluctuation parameters
+const MIN_FLUCTUATION = -5.6555;
+const MAX_FLUCTUATION = 5.333;
+const FLUCTUATION_RANGE = MAX_FLUCTUATION - MIN_FLUCTUATION;
 
-// Cache middleware
-async function cacheData(req, res, next) {
-  const cacheKey = 'market_data';
+// Safe number parser
+const safeParseNumber = (value, defaultValue = 0) => {
+  const num = parseFloat(value);
+  return isNaN(num) ? defaultValue : num;
+};
+
+// Data validation and sanitization
+const validateCoinData = (coin) => {
+  return {
+    id: coin.id || 'unknown',
+    name: coin.name || 'Unknown Asset',
+    symbol: (coin.symbol || '???').toUpperCase(),
+    image: coin.image || coin.large || 'https://via.placeholder.com/32',
+    basePrice: safeParseNumber(coin.current_price || coin.item?.data?.price),
+    currentPrice: 0, // Will be set later
+    priceChange1h: safeParseNumber(coin.price_change_percentage_1h_in_currency),
+    priceChange24h: safeParseNumber(coin.price_change_percentage_24h_in_currency),
+    priceChange7d: safeParseNumber(coin.price_change_percentage_7d_in_currency),
+    totalVolume: safeParseNumber(coin.total_volume),
+    marketCap: safeParseNumber(coin.market_cap),
+    circulatingSupply: safeParseNumber(coin.circulating_supply),
+    sparkline: (coin.sparkline_in_7d?.price || []).length > 0 
+      ? coin.sparkline_in_7d.price 
+      : Array(7).fill(0).map(() => safeParseNumber(coin.current_price) * (0.95 + Math.random() * 0.1))
+  };
+};
+
+// Apply consistent price fluctuations
+const applyConsistentFluctuations = (coins) => {
+  const fluctuationCache = {};
+  
+  return coins.map(coin => {
+    // Get or create fluctuation for this coin
+    if (!fluctuationCache[coin.id]) {
+      fluctuationCache[coin.id] = MIN_FLUCTUATION + (Math.random() * FLUCTUATION_RANGE);
+    }
+    
+    const fluctuation = fluctuationCache[coin.id];
+    const currentPrice = coin.basePrice * (1 + (fluctuation / 100));
+    
+    return {
+      ...coin,
+      currentPrice,
+      priceChange1h: safeParseNumber(coin.priceChange1h, (Math.random() * 2) - 1),
+      priceChange24h: safeParseNumber(coin.priceChange24h, (Math.random() * 10) - 5),
+      priceChange7d: safeParseNumber(coin.priceChange7d, (Math.random() * 20) - 10)
+    };
+  });
+};
+
+// Cache middleware with error handling
+const cacheData = async (req, res, next) => {
+  const cacheKey = 'market_data_v2';
   
   try {
     const cachedData = await redisClient.get(cacheKey);
     
     if (cachedData) {
       const data = JSON.parse(cachedData);
-      
-      // Apply fresh fluctuations to cached data
-      data.marketOverview = data.marketOverview.map(coin => ({
-        ...coin,
-        currentPrice: applyPriceFluctuation(coin.basePrice),
-        priceChange1h: (Math.random() * 2) - 1,
-        priceChange24h: (Math.random() * 10) - 5,
-        priceChange7d: (Math.random() * 20) - 10
-      }));
-      
-      data.topGainers = data.topGainers.map(coin => ({
-        ...coin,
-        currentPrice: applyPriceFluctuation(coin.basePrice),
-        priceChange24h: Math.abs((Math.random() * 15) + 5) // Ensure positive for gainers
-      }));
-      
-      data.trending = data.trending.map(coin => ({
-        ...coin,
-        currentPrice: applyPriceFluctuation(coin.basePrice),
-        priceChange24h: (Math.random() * 20) - 5 // Wider range for trending
-      }));
-      
-      return res.json(data);
+      const processedData = {
+        marketOverview: applyConsistentFluctuations(data.marketOverview),
+        topGainers: applyConsistentFluctuations(data.topGainers),
+        trending: applyConsistentFluctuations(data.trending)
+      };
+      return res.json(processedData);
     }
-    
     next();
   } catch (err) {
     console.error('Cache error:', err);
     next();
   }
-}
+};
 
-// Main endpoint
+// Main endpoint with comprehensive error handling
 router.get('/market-data', cacheData, async (req, res) => {
   try {
-    // Fetch data from CoinGecko API
-    const [marketData, gainersData, trendingData] = await Promise.all([
-      axios.get('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=true&price_change_percentage=1h,24h,7d'),
-      axios.get('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=percent_change_24h_desc&per_page=20&page=1&sparkline=true'),
-      axios.get('https://api.coingecko.com/api/v3/search/trending')
-    ]);
+    // Fetch data from CoinGecko API with fallbacks
+    let marketData = [], gainersData = [], trendingData = [];
+    
+    try {
+      [marketData, gainersData, trendingData] = await Promise.all([
+        axios.get('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=true&price_change_percentage=1h,24h,7d')
+          .then(res => res.data)
+          .catch(() => []),
+        axios.get('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=percent_change_24h_desc&per_page=20&page=1&sparkline=true')
+          .then(res => res.data)
+          .catch(() => []),
+        axios.get('https://api.coingecko.com/api/v3/search/trending')
+          .then(res => res.data.coins || [])
+          .catch(() => [])
+      ]);
+    } catch (apiError) {
+      console.error('API fetch error:', apiError);
+      // Continue with empty arrays if API fails
+    }
 
-    // Process market overview data
-    const marketOverview = marketData.data.map(coin => {
-      const basePrice = coin.current_price;
-      const currentPrice = applyPriceFluctuation(basePrice);
+    // Process data with validation
+    const processedMarketOverview = marketData.map(validateCoinData);
+    const processedGainers = gainersData.map(validateCoinData)
+      .sort((a, b) => safeParseNumber(b.priceChange24h) - safeParseNumber(a.priceChange24h))
+      .slice(0, 20);
       
+    const processedTrending = trendingData.map((coin, index) => {
+      const baseCoin = validateCoinData({
+        ...coin.item,
+        ...coin.item.data
+      });
       return {
-        id: coin.id,
-        name: coin.name,
-        symbol: coin.symbol.toUpperCase(),
-        image: coin.image,
-        basePrice: basePrice,
-        currentPrice: currentPrice,
-        priceChange1h: coin.price_change_percentage_1h_in_currency || (Math.random() * 2) - 1,
-        priceChange24h: coin.price_change_percentage_24h_in_currency || (Math.random() * 10) - 5,
-        priceChange7d: coin.price_change_percentage_7d_in_currency || (Math.random() * 20) - 10,
-        totalVolume: coin.total_volume,
-        marketCap: coin.market_cap,
-        circulatingSupply: coin.circulating_supply,
-        sparkline: coin.sparkline_in_7d?.price || Array(7).fill().map(() => basePrice * (0.95 + Math.random() * 0.1))
+        ...baseCoin,
+        priceChange24h: safeParseNumber(baseCoin.priceChange24h, (Math.random() * 20) - 5)
       };
     });
 
-    // Process top gainers data
-    const topGainers = gainersData.data.map(coin => {
-      const basePrice = coin.current_price;
-      const currentPrice = applyPriceFluctuation(basePrice);
-      const priceChange24h = Math.abs(coin.price_change_percentage_24h || (Math.random() * 15) + 5);
-      
-      return {
-        id: coin.id,
-        name: coin.name,
-        symbol: coin.symbol.toUpperCase(),
-        image: coin.image,
-        basePrice: basePrice,
-        currentPrice: currentPrice,
-        priceChange24h: priceChange24h,
-        sparkline: coin.sparkline_in_7d?.price || Array(7).fill().map(() => basePrice * (0.95 + Math.random() * 0.1))
-      };
-    }).sort((a, b) => b.priceChange24h - a.priceChange24h).slice(0, 20);
-
-    // Process trending data
-    const trending = trendingData.data.coins.map((coin, index) => {
-      const basePrice = coin.item.data.price;
-      const currentPrice = applyPriceFluctuation(basePrice);
-      
-      return {
-        id: coin.item.id,
-        name: coin.item.name,
-        symbol: coin.item.symbol.toUpperCase(),
-        image: coin.item.large,
-        basePrice: basePrice,
-        currentPrice: currentPrice,
-        priceChange24h: (Math.random() * 20) - 5,
-        sparkline: Array(7).fill().map(() => basePrice * (0.9 + Math.random() * 0.2))
-      };
-    });
-
-    // Prepare response data
+    // Prepare final response
     const responseData = {
-      marketOverview: marketOverview,
-      topGainers: topGainers,
-      trending: trending
+      marketOverview: processedMarketOverview,
+      topGainers: processedGainers,
+      trending: processedTrending.slice(0, 20) // Ensure we don't return too many items
     };
 
-    // Cache the data for 5 minutes
-    await redisClient.setEx('market_data', 300, JSON.stringify(responseData));
+    // Cache with error handling
+    try {
+      await redisClient.setEx('market_data_v2', 300, JSON.stringify(responseData));
+    } catch (cacheError) {
+      console.error('Cache write error:', cacheError);
+    }
 
-    res.json(responseData);
+    // Apply fluctuations before sending
+    const finalResponse = {
+      marketOverview: applyConsistentFluctuations(responseData.marketOverview),
+      topGainers: applyConsistentFluctuations(responseData.topGainers),
+      trending: applyConsistentFluctuations(responseData.trending)
+    };
+
+    res.json(finalResponse);
   } catch (error) {
-    console.error('Market data error:', error);
-    res.status(500).json({ error: 'Failed to fetch market data' });
+    console.error('Market data processing error:', error);
+    
+    // Fallback response if everything fails
+    const fallbackResponse = {
+      marketOverview: [],
+      topGainers: [],
+      trending: [],
+      message: 'Market data is currently unavailable. Please try again later.'
+    };
+    
+    res.status(500).json(fallbackResponse);
   }
 });
 
 module.exports = router;
-
 // Other API Routes
 
 // Authentication Routes
