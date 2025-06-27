@@ -1168,7 +1168,7 @@ module.exports = {
 router.get('/markets', async (req, res) => {
   try {
     const { data } = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=true&price_change_percentage=1h,24h,7d'
+      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=true&price_change_percentage=1h,24h,7d,30d'
     );
 
     const marketData = data.map(coin => ({
@@ -1181,20 +1181,21 @@ router.get('/markets', async (req, res) => {
       volume: coin.total_volume,
       high24h: coin.high_24h,
       low24h: coin.low_24h,
-      change24h: coin.price_change_percentage_24h,
-      sparkline: coin.sparkline_in_7d.price
+      change24h: coin.price_change_percentage_24h_in_currency,
+      sparkline: coin.sparkline_in_7d?.price || []
     }));
 
-    res.json({ success: true, marketData });
+    res.json({ marketData }); // Frontend expects { marketData } not { success, marketData }
   } catch (error) {
-    res.status(500).json({ success: false, error: 'Failed to fetch market data' });
+    console.error('Market data error:', error);
+    res.status(500).json({ error: 'Failed to fetch market data' });
   }
 });
 
 router.get('/markets/gainers', async (req, res) => {
   try {
     const { data } = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=price_change_percentage_24h_desc&per_page=20&page=1&sparkline=true&price_change_percentage=1h,24h,7d'
+      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=price_change_percentage_24h_desc&per_page=20&page=1&sparkline=true'
     );
 
     const gainers = data.map(coin => ({
@@ -1203,25 +1204,26 @@ router.get('/markets/gainers', async (req, res) => {
       symbol: coin.symbol,
       image: coin.image,
       currentPrice: coin.current_price,
-      change24h: coin.price_change_percentage_24h,
-      sparkline: coin.sparkline_in_7d.price
+      change24h: coin.price_change_percentage_24h_in_currency,
+      sparkline: coin.sparkline_in_7d?.price || []
     }));
 
-    res.json({ success: true, gainers });
+    res.json({ gainers }); // Match frontend expectation
   } catch (error) {
-    res.status(500).json({ success: false, error: 'Failed to fetch gainers data' });
+    console.error('Gainers error:', error);
+    res.status(500).json({ error: 'Failed to fetch gainers' });
   }
 });
 
 router.get('/markets/trending', async (req, res) => {
   try {
-    // First get trending coin IDs from search trends
+    // Get trending coins
     const trends = await axios.get('https://api.coingecko.com/api/v3/search/trending');
     const coinIds = trends.data.coins.map(coin => coin.item.id).join(',');
 
-    // Then get full market data for those coins
+    // Get market data for trending coins
     const { data } = await axios.get(
-      `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${coinIds}&order=market_cap_desc&per_page=20&page=1&sparkline=true&price_change_percentage=1h,24h,7d`
+      `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${coinIds}&order=market_cap_desc&per_page=20&page=1&sparkline=true`
     );
 
     const trending = data.map(coin => ({
@@ -1230,13 +1232,14 @@ router.get('/markets/trending', async (req, res) => {
       symbol: coin.symbol,
       image: coin.image,
       currentPrice: coin.current_price,
-      change24h: coin.price_change_percentage_24h,
-      sparkline: coin.sparkline_in_7d.price
+      change24h: coin.price_change_percentage_24h_in_currency,
+      sparkline: coin.sparkline_in_7d?.price || []
     }));
 
-    res.json({ success: true, trending });
+    res.json({ trending }); // Match frontend expectation
   } catch (error) {
-    res.status(500).json({ success: false, error: 'Failed to fetch trending data' });
+    console.error('Trending error:', error);
+    res.status(500).json({ error: 'Failed to fetch trending' });
   }
 });
 
