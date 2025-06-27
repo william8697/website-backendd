@@ -1165,13 +1165,6 @@ module.exports = {
 const CACHE_TTL = 60; // 1 minute cache
 const { redisClient } = require('./redis');
 
-// Configure Redis client
-const redisConfig = {
-  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-  port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
-};
-
 // Price manipulation logic
 const manipulatePrice = (price, id) => {
   const seed = id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
