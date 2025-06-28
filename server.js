@@ -1162,176 +1162,123 @@ module.exports = {
 };
 //Done
 
-// Cache setup
-const NodeCache = require('node-cache');
-const cache = new NodeCache({ stdTTL: 60 }); // Cache for 60 seconds
-
 // CoinGecko API configuration
 const COINGECKO_API = 'https://api.coingecko.com/api/v3';
 
-/**
- * @route GET /api/v1/markets/trending
- * @desc Get trending cryptocurrencies
- * @access Public
- */
-router.get('/trending', apiLimiter, async (req, res) => {
+// Helper function to fetch from CoinGecko with error handling
+const fetchCoinGecko = async (endpoint) => {
   try {
-    // Check cache first
-    const cachedData = cache.get('trending');
-    if (cachedData) {
-      return res.json({
-        success: true,
-        data: cachedData
-      });
-    }
-
-    // Fetch from CoinGecko
-    const response = await axios.get(`${COINGECKO_API}/search/trending`);
-    const trendingCoins = response.data.coins.map(coin => ({
-      id: coin.item.id,
-      name: coin.item.name,
-      symbol: coin.item.symbol,
-      image: coin.item.large,
-      currentPrice: 0, // Will be updated in the next step
-      change24h: 0, // Will be updated in the next step
-      marketCap: 0, // Will be updated in the next step
-      volume: 0 // Will be updated in the next step
-    }));
-
-    // Get detailed market data for each trending coin
-    const coinIds = trendingCoins.map(coin => coin.id).join(',');
-    const marketData = await axios.get(
-      `${COINGECKO_API}/coins/markets?vs_currency=usd&ids=${coinIds}&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`
-    );
-
-    // Update trending coins with market data
-    const updatedTrending = trendingCoins.map(coin => {
-      const marketInfo = marketData.data.find(c => c.id === coin.id);
-      return {
-        ...coin,
-        currentPrice: marketInfo?.current_price || 0,
-        change24h: marketInfo?.price_change_percentage_24h || 0,
-        marketCap: marketInfo?.market_cap || 0,
-        volume: marketInfo?.total_volume || 0,
-        high24h: marketInfo?.high_24h || 0,
-        low24h: marketInfo?.low_24h || 0
-      };
-    });
-
-    // Cache the data
-    cache.set('trending', updatedTrending);
-
-    res.json({
-      success: true,
-      data: updatedTrending
-    });
+    const response = await axios.get(`${COINGECKO_API}${endpoint}`);
+    return response.data;
   } catch (error) {
-    console.error('Error fetching trending data:', error.message);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch trending data'
-    });
+    console.error('CoinGecko API error:', error.message);
+    throw new Error('Failed to fetch market data');
   }
-});
+};
 
-/**
- * @route GET /api/v1/markets/gainers
- * @desc Get top gainers (24h)
- * @access Public
- */
-router.get('/gainers', apiLimiter, async (req, res) => {
+// Market data endpoint - matches frontend expectation
+router.get('/markets', async (req, res) => {
   try {
-    // Check cache first
-    const cachedData = cache.get('gainers');
-    if (cachedData) {
-      return res.json({
-        success: true,
-        data: cachedData
-      });
-    }
-
-    // Fetch top gainers from CoinGecko
-    const response = await axios.get(
-      `${COINGECKO_API}/coins/markets?vs_currency=usd&order=price_change_percentage_24h_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`
-    );
-
-    const gainers = response.data.map(coin => ({
+    const data = await fetchCoinGecko('/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false');
+    
+    const formattedData = data.map(coin => ({
       id: coin.id,
       name: coin.name,
       symbol: coin.symbol,
       image: coin.image,
       currentPrice: coin.current_price,
       change24h: coin.price_change_percentage_24h,
-      marketCap: coin.market_cap,
       volume: coin.total_volume,
+      marketCap: coin.market_cap,
       high24h: coin.high_24h,
       low24h: coin.low_24h
     }));
 
-    // Cache the data
-    cache.set('gainers', gainers);
-
-    res.json({
-      success: true,
-      data: gainers
-    });
+    res.json({ marketData: formattedData });
   } catch (error) {
-    console.error('Error fetching gainers data:', error.message);
-    res.status(500).json({
+    res.status(500).json({ 
       success: false,
-      error: 'Failed to fetch gainers data'
+      error: error.message 
     });
   }
 });
 
-/**
- * @route GET /api/v1/markets
- * @desc Get general market data
- * @access Public
- */
-router.get('/', apiLimiter, async (req, res) => {
+// Top gainers endpoint - matches frontend expectation
+router.get('/markets/gainers', async (req, res) => {
   try {
-    // Check cache first
-    const cachedData = cache.get('market');
-    if (cachedData) {
-      return res.json({
-        success: true,
-        marketData: cachedData
-      });
-    }
-
-    // Fetch top 100 coins by market cap
-    const response = await axios.get(
-      `${COINGECKO_API}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false&price_change_percentage=1h,24h,7d`
-    );
-
-    const marketData = response.data.map(coin => ({
+    const data = await fetchCoinGecko('/coins/markets?vs_currency=usd&order=price_change_percentage_24h_desc&per_page=20&page=1&sparkline=false');
+    
+    const formattedData = data.map(coin => ({
       id: coin.id,
       name: coin.name,
       symbol: coin.symbol,
       image: coin.image,
       currentPrice: coin.current_price,
-      change1h: coin.price_change_percentage_1h_in_currency,
-      change24h: coin.price_change_percentage_24h_in_currency,
-      change7d: coin.price_change_percentage_7d_in_currency,
-      marketCap: coin.market_cap,
-      volume: coin.total_volume,
-      high24h: coin.high_24h,
-      low24h: coin.low_24h
+      change24h: coin.price_change_percentage_24h
     }));
 
-    // Cache the data
-    cache.set('market', marketData);
-
-    res.json({
+    res.json({ 
       success: true,
-      marketData: marketData
+      gainers: formattedData 
     });
   } catch (error) {
-    console.error('Error fetching market data:', error.message);
-    res.status(500).json({
+    res.status(500).json({ 
       success: false,
-      error: 'Failed to fetch market data'
+      error: error.message 
+    });
+  }
+});
+
+// Trending coins endpoint - matches frontend expectation
+router.get('/markets/trending', async (req, res) => {
+  try {
+    // First get trending coin IDs from search/trending
+    const trending = await fetchCoinGecko('/search/trending');
+    const coinIds = trending.coins.map(coin => coin.item.id).join(',');
+    
+    // Then get full market data for those coins
+    const data = await fetchCoinGecko(`/coins/markets?vs_currency=usd&ids=${coinIds}&per_page=20&page=1`);
+    
+    const formattedData = data.map(coin => ({
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      currentPrice: coin.current_price,
+      change24h: coin.price_change_percentage_24h
+    }));
+
+    res.json({ 
+      success: true,
+      trending: formattedData 
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+});
+
+// All coins endpoint - matches frontend expectation
+router.get('/markets/all', async (req, res) => {
+  try {
+    const data = await fetchCoinGecko('/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1');
+    
+    const formattedData = data.map(coin => ({
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      currentPrice: coin.current_price,
+      change24h: coin.price_change_percentage_24h
+    }));
+
+    res.json(formattedData);
+  } catch (error) {
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
     });
   }
 });
