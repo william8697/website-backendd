@@ -1164,7 +1164,6 @@ module.exports = {
 
 
 const { check, validationResult } = require('express-validator');
-const rateLimit = require('express-rate-limit');
 
 // Configure rate limiting
 const apiLimiter = rateLimit({
