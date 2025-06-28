@@ -1162,20 +1162,6 @@ module.exports = {
 };
 //Done
 
-// CoinGecko API configuration
-const COINGECKO_API = 'https://api.coingecko.com/api/v3';
-
-// Helper function to fetch from CoinGecko with error handling
-const fetchCoinGecko = async (endpoint) => {
-  try {
-    const response = await axios.get(`${COINGECKO_API}${endpoint}`);
-    return response.data;
-  } catch (error) {
-    console.error('CoinGecko API error:', error.message);
-    throw new Error('Failed to fetch market data');
-  }
-};
-
 // Market data endpoint - matches frontend expectation
 router.get('/markets', async (req, res) => {
   try {
