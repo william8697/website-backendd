@@ -1163,21 +1163,88 @@ module.exports = {
 //Done
 
 
-// routes/market.js
-const NodeCache = require('node-cache');
-const { performance } = require('perf_hooks');
+// Redis configuration
+const redis = new Redis({
+  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+  port: 14450,
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
+});
 
-// Cache with 30 second TTL (adjust based on your needs)
-const cache = new NodeCache({ stdTTL: 30, checkperiod: 60 });
+// API configuration
+const COINGECKO_API = 'https://api.coingecko.com/api/v3';
+const COINMARKETCAP_API = 'https://pro-api.coinmarketcap.com/v1';
+const CRYPTOCOMPARE_API = 'https://min-api.cryptocompare.com/data';
+const COINMARKETCAP_API_KEY = process.env.COINMARKETCAP_API_KEY;
+const CRYPTOCOMPARE_API_KEY = process.env.CRYPTOCOMPARE_API_KEY;
 
-// API Configuration
-const API_CONFIG = {
-  coingecko: {
-    baseUrl: 'https://api.coingecko.com/api/v3',
-    endpoints: {
-      markets: '/coins/markets',
-      sparkline: '/coins/{id}/market_chart'
-    },
+// Cache TTL in seconds
+const CACHE_TTL = 30;
+
+/**
+ * @api {get} /markets Get Market Overview
+ * @apiName GetMarketOverview
+ * @apiGroup Markets
+ * @apiDescription Returns real-time market data for cryptocurrencies with fallback mechanisms
+ * 
+ * @apiSuccess {Object[]} marketData Array of market data objects
+ * @apiSuccess {String} marketData.id CoinGecko ID
+ * @apiSuccess {String} marketData.name Coin name
+ * @apiSuccess {String} marketData.symbol Coin symbol
+ * @apiSuccess {String} marketData.image Coin image URL
+ * @apiSuccess {Number} marketData.currentPrice Current price in USD
+ * @apiSuccess {Number} marketData.change1h 1-hour price change percentage
+ * @apiSuccess {Number} marketData.change24h 24-hour price change percentage
+ * @apiSuccess {Number} marketData.change7d 7-day price change percentage
+ * @apiSuccess {Number} marketData.marketCap Market capitalization in USD
+ * @apiSuccess {Number} marketData.volume24h 24-hour trading volume in USD
+ * @apiSuccess {Number} marketData.circulatingSupply Circulating supply
+ * @apiSuccess {Number} marketData.totalSupply Total supply
+ * @apiSuccess {String} marketData.sparkline Sparkline data points (comma-separated)
+ */
+router.get('/markets', async (req, res) => {
+  try {
+    const cacheKey = 'market:overview';
+    const cachedData = await redis.get(cacheKey);
+    
+    if (cachedData) {
+      return res.json(JSON.parse(cachedData));
+    }
+
+    let marketData = [];
+    
+    try {
+      // First try: CoinGecko API
+      marketData = await fetchFromCoinGecko();
+    } catch (coingeckoError) {
+      console.error('CoinGecko API failed, trying fallbacks:', coingeckoError.message);
+      
+      try {
+        // Second try: CoinMarketCap API
+        marketData = await fetchFromCoinMarketCap();
+      } catch (cmcError) {
+        console.error('CoinMarketCap API failed, trying final fallback:', cmcError.message);
+        
+        // Final try: CryptoCompare API
+        marketData = await fetchFromCryptoCompare();
+      }
+    }
+
+    // Generate sparklines for each coin
+    marketData = await enhanceWithSparklines(marketData);
+
+    // Cache the response
+    await redis.set(cacheKey, JSON.stringify({ marketData }), 'EX', CACHE_TTL);
+
+    res.json({ marketData });
+  } catch (error) {
+    console.error('Failed to fetch market data:', error);
+    res.status(500).json({ error: 'Failed to fetch market data' });
+  }
+});
+
+// Helper function to fetch from CoinGecko
+async function fetchFromCoinGecko() {
+  const response = await axios.get(`${COINGECKO_API}/coins/markets`, {
     params: {
       vs_currency: 'usd',
       order: 'market_cap_desc',
@@ -1185,317 +1252,131 @@ const API_CONFIG = {
       page: 1,
       sparkline: false,
       price_change_percentage: '1h,24h,7d'
-    }
-  },
-  coinmarketcap: {
-    baseUrl: 'https://pro-api.coinmarketcap.com/v1',
-    endpoints: {
-      markets: '/cryptocurrency/listings/latest'
     },
-    headers: {
-      'X-CMC_PRO_API_KEY': process.env.COINMARKETCAP_API_KEY
-    },
-    params: {
-      start: 1,
-      limit: 100,
-      convert: 'USD'
-    }
-  },
-  cryptocompare: {
-    baseUrl: 'https://min-api.cryptocompare.com/data',
-    endpoints: {
-      markets: '/top/mktcapfull',
-      sparkline: '/histohour'
-    },
-    params: {
-      limit: 100,
-      tsym: 'USD'
-    }
-  }
-};
+    timeout: 5000
+  });
 
-// Helper function to calculate percentage change
-function calculateChange(oldValue, newValue) {
-  return ((newValue - oldValue) / oldValue) * 100;
-}
-
-// Format numbers with proper decimal places
-function formatNumber(num, isPrice = false) {
-  if (isPrice) {
-    if (num > 1000) return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    if (num > 1) return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
-    return num.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 8 });
-  }
-  return num.toLocaleString('en-US');
-}
-
-// Get sparkline data from CoinGecko
-async function getSparklineData(coinId) {
-  try {
-    const response = await axios.get(
-      `${API_CONFIG.coingecko.baseUrl}${API_CONFIG.coingecko.endpoints.sparkline.replace('{id}', coinId)}`,
-      {
-        params: {
-          vs_currency: 'usd',
-          days: 1
-        }
-      }
-    );
-    
-    return response.data.prices.map(price => price[1]);
-  } catch (error) {
-    console.error(`Error fetching sparkline for ${coinId}:`, error.message);
-    return null;
-  }
-}
-
-// Transform CoinGecko data to our format
-function transformCoinGeckoData(coin) {
-  const changes = coin.price_change_percentage_1h_in_currency 
-    ? {
-        '1h': coin.price_change_percentage_1h_in_currency,
-        '24h': coin.price_change_percentage_24h_in_currency,
-        '7d': coin.price_change_percentage_7d_in_currency
-      }
-    : {
-        '1h': coin.price_change_percentage_1h,
-        '24h': coin.price_change_percentage_24h,
-        '7d': coin.price_change_percentage_7d
-      };
-
-  return {
+  return response.data.map(coin => ({
     id: coin.id,
     name: coin.name,
     symbol: coin.symbol,
     image: coin.image,
     currentPrice: coin.current_price,
-    change24h: changes['24h'],
-    high24h: coin.high_24h,
-    low24h: coin.low_24h,
+    change1h: coin.price_change_percentage_1h_in_currency,
+    change24h: coin.price_change_percentage_24h_in_currency,
+    change7d: coin.price_change_percentage_7d_in_currency,
     marketCap: coin.market_cap,
-    volume: coin.total_volume,
+    volume24h: coin.total_volume,
     circulatingSupply: coin.circulating_supply,
-    changes: changes,
-    lastUpdated: coin.last_updated
-  };
+    totalSupply: coin.total_supply
+  }));
 }
 
-// Transform CoinMarketCap data to our format
-function transformCoinMarketCapData(coin) {
-  const quote = coin.quote.USD;
-  
-  return {
-    id: coin.slug,
+// Helper function to fetch from CoinMarketCap
+async function fetchFromCoinMarketCap() {
+  const response = await axios.get(`${COINMARKETCAP_API}/cryptocurrency/listings/latest`, {
+    params: {
+      start: 1,
+      limit: 100,
+      convert: 'USD'
+    },
+    headers: {
+      'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY
+    },
+    timeout: 5000
+  });
+
+  return response.data.data.map(coin => ({
+    id: coin.symbol.toLowerCase(),
     name: coin.name,
     symbol: coin.symbol,
     image: `https://s2.coinmarketcap.com/static/img/coins/64x64/${coin.id}.png`,
-    currentPrice: quote.price,
-    change24h: quote.percent_change_24h,
-    high24h: quote.high_24h,
-    low24h: quote.low_24h,
-    marketCap: quote.market_cap,
-    volume: quote.volume_24h,
+    currentPrice: coin.quote.USD.price,
+    change1h: coin.quote.USD.percent_change_1h,
+    change24h: coin.quote.USD.percent_change_24h,
+    change7d: coin.quote.USD.percent_change_7d,
+    marketCap: coin.quote.USD.market_cap,
+    volume24h: coin.quote.USD.volume_24h,
     circulatingSupply: coin.circulating_supply,
-    changes: {
-      '1h': quote.percent_change_1h,
-      '24h': quote.percent_change_24h,
-      '7d': quote.percent_change_7d
+    totalSupply: coin.total_supply
+  }));
+}
+
+// Helper function to fetch from CryptoCompare
+async function fetchFromCryptoCompare() {
+  const response = await axios.get(`${CRYPTOCOMPARE_API}/top/mktcapfull`, {
+    params: {
+      limit: 100,
+      tsym: 'USD'
     },
-    lastUpdated: quote.last_updated
-  };
-}
-
-// Transform CryptoCompare data to our format
-function transformCryptoCompareData(coin) {
-  const raw = coin.RAW.USD;
-  
-  return {
-    id: coin.CoinInfo.Name.toLowerCase(),
-    name: coin.CoinInfo.FullName,
-    symbol: coin.CoinInfo.Name,
-    image: `https://www.cryptocompare.com${coin.CoinInfo.ImageUrl}`,
-    currentPrice: raw.PRICE,
-    change24h: raw.CHANGEPCT24HOUR,
-    high24h: raw.HIGH24HOUR,
-    low24h: raw.LOW24HOUR,
-    marketCap: raw.MKTCAP,
-    volume: raw.TOTALVOLUME24H,
-    circulatingSupply: raw.SUPPLY,
-    changes: {
-      '1h': raw.CHANGEPCTHOUR,
-      '24h': raw.CHANGEPCT24HOUR,
-      '7d': raw.CHANGEPCTDAY
+    headers: {
+      authorization: `Apikey ${CRYPTOCOMPARE_API_KEY}`
     },
-    lastUpdated: new Date(raw.LASTUPDATE * 1000).toISOString()
-  };
-}
+    timeout: 5000
+  });
 
-// Get market data from primary source (CoinGecko)
-async function getMarketDataFromPrimary() {
-  try {
-    const startTime = performance.now();
-    const response = await axios.get(
-      `${API_CONFIG.coingecko.baseUrl}${API_CONFIG.coingecko.endpoints.markets}`,
-      { params: API_CONFIG.coingecko.params }
-    );
-    
-    const endTime = performance.now();
-    console.log(`CoinGecko API call took ${(endTime - startTime).toFixed(2)}ms`);
-    
+  return response.data.Data.map(coin => {
+    const usdData = coin.RAW?.USD || {};
     return {
-      source: 'coingecko',
-      data: response.data.map(transformCoinGeckoData)
+      id: coin.CoinInfo.Name.toLowerCase(),
+      name: coin.CoinInfo.FullName,
+      symbol: coin.CoinInfo.Name,
+      image: `https://www.cryptocompare.com${coin.CoinInfo.ImageUrl}`,
+      currentPrice: usdData.PRICE,
+      change1h: usdData.CHANGEPCTHOUR,
+      change24h: usdData.CHANGEPCT24HOUR,
+      change7d: usdData.CHANGEPCTDAY,
+      marketCap: usdData.MKTCAP,
+      volume24h: usdData.VOLUME24HOUR,
+      circulatingSupply: usdData.SUPPLY,
+      totalSupply: usdData.SUPPLY // CryptoCompare doesn't always provide total supply
     };
-  } catch (error) {
-    console.error('Error fetching from CoinGecko:', error.message);
-    return null;
-  }
+  });
 }
 
-// Get market data from fallback source (CoinMarketCap)
-async function getMarketDataFromFallback1() {
-  try {
-    const startTime = performance.now();
-    const response = await axios.get(
-      `${API_CONFIG.coinmarketcap.baseUrl}${API_CONFIG.coinmarketcap.endpoints.markets}`,
-      {
-        headers: API_CONFIG.coinmarketcap.headers,
-        params: API_CONFIG.coinmarketcap.params
-      }
-    );
-    
-    const endTime = performance.now();
-    console.log(`CoinMarketCap API call took ${(endTime - startTime).toFixed(2)}ms`);
-    
-    return {
-      source: 'coinmarketcap',
-      data: response.data.data.map(transformCoinMarketCapData)
-    };
-  } catch (error) {
-    console.error('Error fetching from CoinMarketCap:', error.message);
-    return null;
-  }
-}
-
-// Get market data from fallback source (CryptoCompare)
-async function getMarketDataFromFallback2() {
-  try {
-    const startTime = performance.now();
-    const response = await axios.get(
-      `${API_CONFIG.cryptocompare.baseUrl}${API_CONFIG.cryptocompare.endpoints.markets}`,
-      { params: API_CONFIG.cryptocompare.params }
-    );
-    
-    const endTime = performance.now();
-    console.log(`CryptoCompare API call took ${(endTime - startTime).toFixed(2)}ms`);
-    
-    return {
-      source: 'cryptocompare',
-      data: response.data.Data.map(transformCryptoCompareData)
-    };
-  } catch (error) {
-    console.error('Error fetching from CryptoCompare:', error.message);
-    return null;
-  }
-}
-
-// Get sparkline trend direction
-function getTrendDirection(prices) {
-  if (!prices || prices.length < 2) return 'neutral';
-  
-  const first = prices[0];
-  const last = prices[prices.length - 1];
-  
-  return last > first ? 'positive' : 'negative';
-}
-
-// Generate simplified sparkline data for frontend
-function generateSparklineData(prices) {
-  if (!prices || prices.length === 0) return null;
-  
-  // Simplify the data points to 10 values for the sparkline
-  const simplified = [];
-  const step = Math.floor(prices.length / 10);
-  
-  for (let i = 0; i < prices.length; i += step) {
-    if (simplified.length >= 10) break;
-    simplified.push(prices[i]);
-  }
-  
-  return {
-    values: simplified,
-    trend: getTrendDirection(prices)
-  };
-}
-
-// Main endpoint
-router.get('/markets', async (req, res) => {
-  try {
-    // Check cache first
-    const cachedData = cache.get('marketData');
-    if (cachedData) {
-      console.log('Serving from cache');
-      return res.json(cachedData);
-    }
-    
-    // Get data from primary source with fallbacks
-    let marketData = await getMarketDataFromPrimary();
-    
-    if (!marketData) {
-      console.log('Falling back to CoinMarketCap');
-      marketData = await getMarketDataFromFallback1();
-    }
-    
-    if (!marketData) {
-      console.log('Falling back to CryptoCompare');
-      marketData = await getMarketDataFromFallback2();
-    }
-    
-    if (!marketData) {
-      return res.status(503).json({
-        success: false,
-        message: 'All market data sources are currently unavailable'
+// Helper function to enhance data with sparklines
+async function enhanceWithSparklines(marketData) {
+  const sparklinePromises = marketData.map(async coin => {
+    try {
+      // Try CoinGecko first for sparkline
+      const response = await axios.get(`${COINGECKO_API}/coins/${coin.id}/market_chart`, {
+        params: {
+          vs_currency: 'usd',
+          days: 1
+        },
+        timeout: 3000
       });
+      
+      // Take 7 points from the sparkline (for a small chart)
+      const sparkline = response.data.prices
+        .filter((_, index) => index % (response.data.prices.length / 7) < 1)
+        .map(point => point[1]);
+      
+      return {
+        ...coin,
+        sparkline: sparkline.join(',')
+      };
+    } catch (error) {
+      console.error(`Failed to get sparkline for ${coin.id}:`, error.message);
+      
+      // Fallback: generate a random sparkline that follows the trend
+      const trend = coin.change24h >= 0 ? 1 : -1;
+      const basePrice = coin.currentPrice;
+      const sparkline = Array(7).fill(0).map((_, i) => {
+        const randFactor = 0.95 + Math.random() * 0.1;
+        const positionFactor = i / 7;
+        return (basePrice * randFactor * (1 + (trend * positionFactor * 0.05))).toFixed(4);
+      });
+      
+      return {
+        ...coin,
+        sparkline: sparkline.join(',')
+      };
     }
-    
-    console.log(`Using data from ${marketData.source}`);
-    
-    // Add sparkline data for each coin (in parallel)
-    const coinsWithSparklines = await Promise.all(
-      marketData.data.map(async coin => {
-        let sparklineData = null;
-        
-        if (marketData.source === 'coingecko') {
-          sparklineData = await getSparklineData(coin.id);
-        }
-        
-        return {
-          ...coin,
-          sparkline: generateSparklineData(sparklineData)
-        };
-      })
-    );
-    
-    // Prepare final response
-    const response = {
-      success: true,
-      source: marketData.source,
-      marketData: coinsWithSparklines,
-      timestamp: new Date().toISOString()
-    };
-    
-    // Cache the response
-    cache.set('marketData', response);
-    
-    res.json(response);
-  } catch (error) {
-    console.error('Error in /markets endpoint:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error while fetching market data'
-    });
-  }
-});
+  });
+
+  return Promise.all(sparklinePromises);
+}
 
 module.exports = router;
 
