@@ -1126,7 +1126,7 @@ router.get('/market-stats', async (req, res) => {
     // Generate random changes
     const tradersChange = Math.floor(
       Math.random() * (MARKET_STATS_CONFIG.TRADERS_RANGE.max - MARKET_STATS_CONFIG.TRADERS_RANGE.min + 1) + 
-      MARKET_STATS_CONFIG.TRADERS_RANGE.min
+      MARKET_STATS_CONFIG.TRADERS_RANGE.min;
     );
     
     const volumeChange = (Math.random() * 
