@@ -1161,223 +1161,192 @@ module.exports = {
   }
 };
 //Done
-({
-  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-  port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
+
+
+const { check, validationResult } = require('express-validator');
+const rateLimit = require('express-rate-limit');
+
+// Configure rate limiting
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
 });
 
-// API configuration
-const COINGECKO_API = 'https://api.coingecko.com/api/v3';
-const COINMARKETCAP_API = 'https://pro-api.coinmarketcap.com/v1';
-const CRYPTOCOMPARE_API = 'https://min-api.cryptocompare.com/data';
-const COINMARKETCAP_API_KEY = process.env.COINMARKETCAP_API_KEY;
-const CRYPTOCOMPARE_API_KEY = process.env.CRYPTOCOMPARE_API_KEY;
+// Cache setup
+const NodeCache = require('node-cache');
+const cache = new NodeCache({ stdTTL: 60 }); // Cache for 60 seconds
 
-// Cache TTL in seconds
-const CACHE_TTL = 30;
+// CoinGecko API configuration
+const COINGECKO_API = 'https://api.coingecko.com/api/v3';
 
 /**
- * @api {get} /markets Get Market Overview
- * @apiName GetMarketOverview
- * @apiGroup Markets
- * @apiDescription Returns real-time market data for cryptocurrencies with fallback mechanisms
- * 
- * @apiSuccess {Object[]} marketData Array of market data objects
- * @apiSuccess {String} marketData.id CoinGecko ID
- * @apiSuccess {String} marketData.name Coin name
- * @apiSuccess {String} marketData.symbol Coin symbol
- * @apiSuccess {String} marketData.image Coin image URL
- * @apiSuccess {Number} marketData.currentPrice Current price in USD
- * @apiSuccess {Number} marketData.change1h 1-hour price change percentage
- * @apiSuccess {Number} marketData.change24h 24-hour price change percentage
- * @apiSuccess {Number} marketData.change7d 7-day price change percentage
- * @apiSuccess {Number} marketData.marketCap Market capitalization in USD
- * @apiSuccess {Number} marketData.volume24h 24-hour trading volume in USD
- * @apiSuccess {Number} marketData.circulatingSupply Circulating supply
- * @apiSuccess {Number} marketData.totalSupply Total supply
- * @apiSuccess {String} marketData.sparkline Sparkline data points (comma-separated)
+ * @route GET /api/v1/markets/trending
+ * @desc Get trending cryptocurrencies
+ * @access Public
  */
-router.get('/markets', async (req, res) => {
+router.get('/trending', apiLimiter, async (req, res) => {
   try {
-    const cacheKey = 'market:overview';
-    const cachedData = await redis.get(cacheKey);
-    
+    // Check cache first
+    const cachedData = cache.get('trending');
     if (cachedData) {
-      return res.json(JSON.parse(cachedData));
+      return res.json({
+        success: true,
+        data: cachedData
+      });
     }
 
-    let marketData = [];
-    
-    try {
-      // First try: CoinGecko API
-      marketData = await fetchFromCoinGecko();
-    } catch (coingeckoError) {
-      console.error('CoinGecko API failed, trying fallbacks:', coingeckoError.message);
-      
-      try {
-        // Second try: CoinMarketCap API
-        marketData = await fetchFromCoinMarketCap();
-      } catch (cmcError) {
-        console.error('CoinMarketCap API failed, trying final fallback:', cmcError.message);
-        
-        // Final try: CryptoCompare API
-        marketData = await fetchFromCryptoCompare();
-      }
-    }
+    // Fetch from CoinGecko
+    const response = await axios.get(`${COINGECKO_API}/search/trending`);
+    const trendingCoins = response.data.coins.map(coin => ({
+      id: coin.item.id,
+      name: coin.item.name,
+      symbol: coin.item.symbol,
+      image: coin.item.large,
+      currentPrice: 0, // Will be updated in the next step
+      change24h: 0, // Will be updated in the next step
+      marketCap: 0, // Will be updated in the next step
+      volume: 0 // Will be updated in the next step
+    }));
 
-    // Generate sparklines for each coin
-    marketData = await enhanceWithSparklines(marketData);
+    // Get detailed market data for each trending coin
+    const coinIds = trendingCoins.map(coin => coin.id).join(',');
+    const marketData = await axios.get(
+      `${COINGECKO_API}/coins/markets?vs_currency=usd&ids=${coinIds}&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`
+    );
 
-    // Cache the response
-    await redis.set(cacheKey, JSON.stringify({ marketData }), 'EX', CACHE_TTL);
+    // Update trending coins with market data
+    const updatedTrending = trendingCoins.map(coin => {
+      const marketInfo = marketData.data.find(c => c.id === coin.id);
+      return {
+        ...coin,
+        currentPrice: marketInfo?.current_price || 0,
+        change24h: marketInfo?.price_change_percentage_24h || 0,
+        marketCap: marketInfo?.market_cap || 0,
+        volume: marketInfo?.total_volume || 0,
+        high24h: marketInfo?.high_24h || 0,
+        low24h: marketInfo?.low_24h || 0
+      };
+    });
 
-    res.json({ marketData });
+    // Cache the data
+    cache.set('trending', updatedTrending);
+
+    res.json({
+      success: true,
+      data: updatedTrending
+    });
   } catch (error) {
-    console.error('Failed to fetch market data:', error);
-    res.status(500).json({ error: 'Failed to fetch market data' });
+    console.error('Error fetching trending data:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch trending data'
+    });
   }
 });
 
-// Helper function to fetch from CoinGecko
-async function fetchFromCoinGecko() {
-  const response = await axios.get(`${COINGECKO_API}/coins/markets`, {
-    params: {
-      vs_currency: 'usd',
-      order: 'market_cap_desc',
-      per_page: 100,
-      page: 1,
-      sparkline: false,
-      price_change_percentage: '1h,24h,7d'
-    },
-    timeout: 5000
-  });
-
-  return response.data.map(coin => ({
-    id: coin.id,
-    name: coin.name,
-    symbol: coin.symbol,
-    image: coin.image,
-    currentPrice: coin.current_price,
-    change1h: coin.price_change_percentage_1h_in_currency,
-    change24h: coin.price_change_percentage_24h_in_currency,
-    change7d: coin.price_change_percentage_7d_in_currency,
-    marketCap: coin.market_cap,
-    volume24h: coin.total_volume,
-    circulatingSupply: coin.circulating_supply,
-    totalSupply: coin.total_supply
-  }));
-}
-
-// Helper function to fetch from CoinMarketCap
-async function fetchFromCoinMarketCap() {
-  const response = await axios.get(`${COINMARKETCAP_API}/cryptocurrency/listings/latest`, {
-    params: {
-      start: 1,
-      limit: 100,
-      convert: 'USD'
-    },
-    headers: {
-      'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY
-    },
-    timeout: 5000
-  });
-
-  return response.data.data.map(coin => ({
-    id: coin.symbol.toLowerCase(),
-    name: coin.name,
-    symbol: coin.symbol,
-    image: `https://s2.coinmarketcap.com/static/img/coins/64x64/${coin.id}.png`,
-    currentPrice: coin.quote.USD.price,
-    change1h: coin.quote.USD.percent_change_1h,
-    change24h: coin.quote.USD.percent_change_24h,
-    change7d: coin.quote.USD.percent_change_7d,
-    marketCap: coin.quote.USD.market_cap,
-    volume24h: coin.quote.USD.volume_24h,
-    circulatingSupply: coin.circulating_supply,
-    totalSupply: coin.total_supply
-  }));
-}
-
-// Helper function to fetch from CryptoCompare
-async function fetchFromCryptoCompare() {
-  const response = await axios.get(`${CRYPTOCOMPARE_API}/top/mktcapfull`, {
-    params: {
-      limit: 100,
-      tsym: 'USD'
-    },
-    headers: {
-      authorization: `Apikey ${CRYPTOCOMPARE_API_KEY}`
-    },
-    timeout: 5000
-  });
-
-  return response.data.Data.map(coin => {
-    const usdData = coin.RAW?.USD || {};
-    return {
-      id: coin.CoinInfo.Name.toLowerCase(),
-      name: coin.CoinInfo.FullName,
-      symbol: coin.CoinInfo.Name,
-      image: `https://www.cryptocompare.com${coin.CoinInfo.ImageUrl}`,
-      currentPrice: usdData.PRICE,
-      change1h: usdData.CHANGEPCTHOUR,
-      change24h: usdData.CHANGEPCT24HOUR,
-      change7d: usdData.CHANGEPCTDAY,
-      marketCap: usdData.MKTCAP,
-      volume24h: usdData.VOLUME24HOUR,
-      circulatingSupply: usdData.SUPPLY,
-      totalSupply: usdData.SUPPLY // CryptoCompare doesn't always provide total supply
-    };
-  });
-}
-
-// Helper function to enhance data with sparklines
-async function enhanceWithSparklines(marketData) {
-  const sparklinePromises = marketData.map(async coin => {
-    try {
-      // Try CoinGecko first for sparkline
-      const response = await axios.get(`${COINGECKO_API}/coins/${coin.id}/market_chart`, {
-        params: {
-          vs_currency: 'usd',
-          days: 1
-        },
-        timeout: 3000
+/**
+ * @route GET /api/v1/markets/gainers
+ * @desc Get top gainers (24h)
+ * @access Public
+ */
+router.get('/gainers', apiLimiter, async (req, res) => {
+  try {
+    // Check cache first
+    const cachedData = cache.get('gainers');
+    if (cachedData) {
+      return res.json({
+        success: true,
+        data: cachedData
       });
-      
-      // Take 7 points from the sparkline (for a small chart)
-      const sparkline = response.data.prices
-        .filter((_, index) => index % (response.data.prices.length / 7) < 1)
-        .map(point => point[1]);
-      
-      return {
-        ...coin,
-        sparkline: sparkline.join(',')
-      };
-    } catch (error) {
-      console.error(`Failed to get sparkline for ${coin.id}:`, error.message);
-      
-      // Fallback: generate a random sparkline that follows the trend
-      const trend = coin.change24h >= 0 ? 1 : -1;
-      const basePrice = coin.currentPrice;
-      const sparkline = Array(7).fill(0).map((_, i) => {
-        const randFactor = 0.95 + Math.random() * 0.1;
-        const positionFactor = i / 7;
-        return (basePrice * randFactor * (1 + (trend * positionFactor * 0.05))).toFixed(4);
-      });
-      
-      return {
-        ...coin,
-        sparkline: sparkline.join(',')
-      };
     }
-  });
 
-  return Promise.all(sparklinePromises);
-}
+    // Fetch top gainers from CoinGecko
+    const response = await axios.get(
+      `${COINGECKO_API}/coins/markets?vs_currency=usd&order=price_change_percentage_24h_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`
+    );
+
+    const gainers = response.data.map(coin => ({
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      currentPrice: coin.current_price,
+      change24h: coin.price_change_percentage_24h,
+      marketCap: coin.market_cap,
+      volume: coin.total_volume,
+      high24h: coin.high_24h,
+      low24h: coin.low_24h
+    }));
+
+    // Cache the data
+    cache.set('gainers', gainers);
+
+    res.json({
+      success: true,
+      data: gainers
+    });
+  } catch (error) {
+    console.error('Error fetching gainers data:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch gainers data'
+    });
+  }
+});
+
+/**
+ * @route GET /api/v1/markets
+ * @desc Get general market data
+ * @access Public
+ */
+router.get('/', apiLimiter, async (req, res) => {
+  try {
+    // Check cache first
+    const cachedData = cache.get('market');
+    if (cachedData) {
+      return res.json({
+        success: true,
+        marketData: cachedData
+      });
+    }
+
+    // Fetch top 100 coins by market cap
+    const response = await axios.get(
+      `${COINGECKO_API}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false&price_change_percentage=1h,24h,7d`
+    );
+
+    const marketData = response.data.map(coin => ({
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      currentPrice: coin.current_price,
+      change1h: coin.price_change_percentage_1h_in_currency,
+      change24h: coin.price_change_percentage_24h_in_currency,
+      change7d: coin.price_change_percentage_7d_in_currency,
+      marketCap: coin.market_cap,
+      volume: coin.total_volume,
+      high24h: coin.high_24h,
+      low24h: coin.low_24h
+    }));
+
+    // Cache the data
+    cache.set('market', marketData);
+
+    res.json({
+      success: true,
+      marketData: marketData
+    });
+  } catch (error) {
+    console.error('Error fetching market data:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch market data'
+    });
+  }
+});
 
 module.exports = router;
-
-
 // Other API Routes
 
 // Authentication Routes
