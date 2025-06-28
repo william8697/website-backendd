@@ -1162,15 +1162,6 @@ module.exports = {
 };
 //Done
 
-
-const { check, validationResult } = require('express-validator');
-
-// Configure rate limiting
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
-});
-
 // Cache setup
 const NodeCache = require('node-cache');
 const cache = new NodeCache({ stdTTL: 60 }); // Cache for 60 seconds
