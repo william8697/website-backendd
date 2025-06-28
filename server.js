@@ -1087,22 +1087,6 @@ async function updateMarketStats() {
   }
 }
 
-// Initialize market stats service
-async function initMarketStats() {
-  await initRedisStats();
-  
-  // Update stats every second
-  setInterval(async () => {
-    try {
-      await updateMarketStats();
-    } catch (error) {
-      console.error('Update cycle error:', error.message);
-    }
-  }, 1000);
-
-  console.log('Market stats engine started');
-}
-
 /**
  * GET /api/v1/market-stats
  * Returns current market statistics
@@ -1160,6 +1144,22 @@ router.get('/market-stats', async (req, res) => {
     });
   }
 });
+
+// Initialize market stats service
+async function initMarketStats() {
+  await initRedisStats();
+  
+  // Update stats every second
+  setInterval(async () => {
+    try {
+      await updateMarketStats();
+    } catch (error) {
+      console.error('Update cycle error:', error.message);
+    }
+  }, 1000);
+
+  console.log('Market stats engine started');
+}
 
 module.exports = {
   router,
