@@ -973,18 +973,10 @@ function deduplicateArticles(articles) {
   });
 }
 
+
 const Redis = require('ioredis');
 
-// Market stats configuration
-const MARKET_STATS_CONFIG = {
-  BASE_TRADERS: 8654545,
-  TRADERS_RANGE: { min: 9, max: 2911 },
-  BASE_VOLUME: 2754896125.4,
-  VOLUME_RANGE: { min: 111, max: 511333.994 },
-  TOTAL_ASSETS: 100
-};
-
-// Redis configuration
+// Redis configuration - using your existing Redis credentials
 const redis = new Redis({
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: 14450,
@@ -996,124 +988,139 @@ const redis = new Redis({
   }
 });
 
-// Fallback stats
+// Configuration for market statistics
+const MARKET_STATS_CONFIG = {
+  // Base values
+  BASE_TRADERS: 8654545,
+  BASE_VOLUME: 2754896125.4,
+  TOTAL_ASSETS: 100,
+  
+  // Ranges for fluctuations
+  TRADERS_RANGE: { min: 9, max: 2911 },
+  VOLUME_RANGE: { min: 111, max: 511333.994 },
+  
+  // Update intervals (in ms)
+  MIN_UPDATE_INTERVAL: 2000,
+  MAX_UPDATE_INTERVAL: 60000
+};
+
+// Fallback in-memory store if Redis fails
 let fallbackStats = {
-  traders: MARKET_STATS_CONFIG.BASE_TRADERS,
-  volume: MARKET_STATS_CONFIG.BASE_VOLUME,
+  totalTraders: MARKET_STATS_CONFIG.BASE_TRADERS,
+  dailyVolume: MARKET_STATS_CONFIG.BASE_VOLUME,
   lastUpdated: Date.now(),
-  tradersInterval: getRandomUpdateInterval(),
-  volumeInterval: getRandomUpdateInterval(),
   usingFallback: false
 };
 
-function getRandomUpdateInterval() {
-  return Math.floor(Math.random() * 58000 + 2000);
-}
-
-// Initialize Redis connection
-async function initRedisStats() {
+/**
+ * Initialize market stats in Redis
+ */
+async function initMarketStats() {
   try {
     await redis.ping();
-    console.log('Redis connection established');
-
-    const exists = await redis.exists('marketStats');
+    console.log('Connected to Redis for market stats');
+    
+    // Check if market stats exist in Redis
+    const exists = await redis.exists('marketStats:v2');
     if (!exists) {
-      await redis.hset('marketStats', {
-        traders: MARKET_STATS_CONFIG.BASE_TRADERS,
-        volume: MARKET_STATS_CONFIG.BASE_VOLUME,
+      const initialStats = {
+        totalTraders: MARKET_STATS_CONFIG.BASE_TRADERS,
+        dailyVolume: MARKET_STATS_CONFIG.BASE_VOLUME,
         lastUpdated: Date.now(),
-        tradersInterval: getRandomUpdateInterval(),
-        volumeInterval: getRandomUpdateInterval()
-      });
-      console.log('Initial market stats set in Redis');
+        tradersChange: MARKET_STATS_CONFIG.TRADERS_RANGE.min,
+        volumeChange: MARKET_STATS_CONFIG.VOLUME_RANGE.min
+      };
+      
+      await redis.hset('marketStats:v2', initialStats);
+      console.log('Initialized market stats in Redis');
     }
   } catch (error) {
-    console.error('Redis initialization failed:', error.message);
+    console.error('Failed to initialize Redis for market stats:', error);
     fallbackStats.usingFallback = true;
   }
 }
 
-// Update market stats in Redis
+/**
+ * Update market stats with random fluctuations
+ */
 async function updateMarketStats() {
-  const now = Date.now();
-  let stats;
-
   try {
-    stats = await redis.hgetall('marketStats');
-  } catch (error) {
-    console.error('Redis read error:', error.message);
-    stats = fallbackStats;
-  }
+    // Get current stats
+    let stats;
+    try {
+      stats = await redis.hgetall('marketStats:v2');
+    } catch (error) {
+      console.error('Failed to get market stats from Redis:', error);
+      stats = fallbackStats;
+    }
 
-  const parsedStats = {
-    traders: parseInt(stats.traders || fallbackStats.traders),
-    volume: parseFloat(stats.volume || fallbackStats.volume),
-    lastUpdated: parseInt(stats.lastUpdated || fallbackStats.lastUpdated),
-    tradersInterval: parseInt(stats.tradersInterval || fallbackStats.tradersInterval),
-    volumeInterval: parseInt(stats.volumeInterval || fallbackStats.volumeInterval)
-  };
+    // Parse the stats
+    const parsedStats = {
+      totalTraders: parseInt(stats.totalTraders || fallbackStats.totalTraders),
+      dailyVolume: parseFloat(stats.dailyVolume || fallbackStats.dailyVolume),
+      lastUpdated: parseInt(stats.lastUpdated || fallbackStats.lastUpdated),
+      tradersChange: parseInt(stats.tradersChange || MARKET_STATS_CONFIG.TRADERS_RANGE.min),
+      volumeChange: parseFloat(stats.volumeChange || MARKET_STATS_CONFIG.VOLUME_RANGE.min)
+    };
 
-  const updates = {};
-  let needsUpdate = false;
-
-  if (now - parsedStats.lastUpdated >= parsedStats.tradersInterval) {
-    updates.traders = parsedStats.traders + Math.floor(
-      Math.random() * (MARKET_STATS_CONFIG.TRADERS_RANGE.max - MARKET_STATS_CONFIG.TRADERS_RANGE.min + 1) + 
-      MARKET_STATS_CONFIG.TRADERS_RANGE.min
+    // Calculate time since last update
+    const now = Date.now();
+    const timeSinceUpdate = now - parsedStats.lastUpdated;
+    const updateInterval = Math.floor(
+      Math.random() * 
+      (MARKET_STATS_CONFIG.MAX_UPDATE_INTERVAL - MARKET_STATS_CONFIG.MIN_UPDATE_INTERVAL + 1) + 
+      MARKET_STATS_CONFIG.MIN_UPDATE_INTERVAL
     );
-    updates.tradersInterval = getRandomUpdateInterval();
-    needsUpdate = true;
-  }
 
-  if (now - parsedStats.lastUpdated >= parsedStats.volumeInterval) {
-    updates.volume = parsedStats.volume + 
-      (Math.random() * (MARKET_STATS_CONFIG.VOLUME_RANGE.max - MARKET_STATS_CONFIG.VOLUME_RANGE.min) + 
-      MARKET_STATS_CONFIG.VOLUME_RANGE.min;
-    updates.volumeInterval = getRandomUpdateInterval();
-    needsUpdate = true;
-  }
+    // Only update if enough time has passed
+    if (timeSinceUpdate >= updateInterval) {
+      // Generate random changes
+      const newTradersChange = Math.floor(
+        Math.random() * 
+        (MARKET_STATS_CONFIG.TRADERS_RANGE.max - MARKET_STATS_CONFIG.TRADERS_RANGE.min + 1) + 
+        MARKET_STATS_CONFIG.TRADERS_RANGE.min
+      );
+      
+      const newVolumeChange = 
+        (Math.random() * 
+        (MARKET_STATS_CONFIG.VOLUME_RANGE.max - MARKET_STATS_CONFIG.VOLUME_RANGE.min)) + 
+        MARKET_STATS_CONFIG.VOLUME_RANGE.min;
 
-  if (needsUpdate) {
-    updates.lastUpdated = now;
-    try {
-      await redis.hset('marketStats', updates);
-      Object.assign(fallbackStats, updates);
-      fallbackStats.usingFallback = false;
-    } catch (error) {
-      console.error('Redis write error:', error.message);
-      Object.assign(fallbackStats, updates);
-      fallbackStats.usingFallback = true;
+      // Calculate new values
+      const updates = {
+        totalTraders: parsedStats.totalTraders + newTradersChange,
+        dailyVolume: parsedStats.dailyVolume + newVolumeChange,
+        tradersChange: newTradersChange,
+        volumeChange: newVolumeChange,
+        lastUpdated: now
+      };
+
+      // Save to Redis or fallback
+      try {
+        await redis.hset('marketStats:v2', updates);
+        fallbackStats.usingFallback = false;
+      } catch (error) {
+        console.error('Failed to update Redis, using fallback:', error);
+        Object.assign(fallbackStats, updates);
+        fallbackStats.usingFallback = true;
+      }
     }
+  } catch (error) {
+    console.error('Error in market stats update cycle:', error);
   }
-}
-
-// Initialize market stats service
-async function initMarketStats() {
-  await initRedisStats();
-  
-  // Update stats every second
-  setInterval(async () => {
-    try {
-      await updateMarketStats();
-    } catch (error) {
-      console.error('Update cycle error:', error.message);
-    }
-  }, 1000);
-
-  console.log('Market stats engine started');
 }
 
 /**
- * GET /api/v1/market-stats
- * Returns current market statistics
+ * GET /api/v1/market-statistics
+ * Returns market statistics in exact format expected by frontend
  */
-router.get('/market-stats', async (req, res) => {
+router.get('/market-statistics', async (req, res) => {
   try {
     let stats;
     let source = 'redis';
 
     try {
-      stats = await redis.hgetall('marketStats');
+      stats = await redis.hgetall('marketStats:v2');
       if (!stats || Object.keys(stats).length === 0) {
         throw new Error('Empty Redis response');
       }
@@ -1123,48 +1130,57 @@ router.get('/market-stats', async (req, res) => {
       source = 'fallback';
     }
 
-    // Generate random changes
-    const tradersChange = Math.floor(
-      Math.random() * (MARKET_STATS_CONFIG.TRADERS_RANGE.max - MARKET_STATS_CONFIG.TRADERS_RANGE.min + 1) + 
-      MARKET_STATS_CONFIG.TRADERS_RANGE.min;
-    );
-    
-    const volumeChange = (Math.random() * 
-      (MARKET_STATS_CONFIG.VOLUME_RANGE.max - MARKET_STATS_CONFIG.VOLUME_RANGE.min)) + 
-      MARKET_STATS_CONFIG.VOLUME_RANGE.min;
-
-    // Build response matching frontend requirements
-    res.json({
+    // Format the response exactly as expected by the frontend
+    const response = {
       success: true,
       data: {
-        totalTraders: parseInt(stats.traders),
-        dailyVolume: parseFloat(stats.volume),
+        // Total number of traders (formatted with commas)
+        totalTraders: parseInt(stats.totalTraders || MARKET_STATS_CONFIG.BASE_TRADERS),
+        
+        // Daily trading volume (formatted as currency)
+        dailyVolume: parseFloat(stats.dailyVolume || MARKET_STATS_CONFIG.BASE_VOLUME),
+        
+        // Fixed number of assets
         totalAssets: MARKET_STATS_CONFIG.TOTAL_ASSETS,
-        tradersChange: tradersChange,
-        volumeChange: parseFloat(volumeChange.toFixed(2)),
-        lastUpdated: parseInt(stats.lastUpdated),
+        
+        // Change in number of traders (positive/negative)
+        tradersChange: parseInt(stats.tradersChange || MARKET_STATS_CONFIG.TRADERS_RANGE.min),
+        
+        // Change in trading volume (positive/negative)
+        volumeChange: parseFloat(stats.volumeChange || MARKET_STATS_CONFIG.VOLUME_RANGE.min),
+        
+        // Last updated timestamp
+        lastUpdated: parseInt(stats.lastUpdated || Date.now()),
+        
+        // Metadata
         _meta: {
           source: source,
           updatedAt: new Date().toISOString()
         }
       }
-    });
+    };
 
+    res.json(response);
   } catch (error) {
-    console.error('Market stats endpoint error:', error);
+    console.error('Market statistics endpoint error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to load market stats',
+      error: 'Failed to load market statistics',
       code: 'MARKET_STATS_ERROR',
       details: error.message
     });
   }
 });
 
+// Initialize and start periodic updates
+initMarketStats();
+setInterval(updateMarketStats, 1000); // Update every second
+
 module.exports = {
   router,
-  initMarketStats
-};        
+  initMarketStats,
+  updateMarketStats
+};
 //Done
 
 
