@@ -1163,85 +1163,342 @@ module.exports = {
 //Done
 
 
+// routes/market.js
+const NodeCache = require('node-cache');
+const { performance } = require('perf_hooks');
 
+// Cache with 30 second TTL (adjust based on your needs)
+const cache = new NodeCache({ stdTTL: 30, checkperiod: 60 });
 
+// API Configuration
+const API_CONFIG = {
+  coingecko: {
+    baseUrl: 'https://api.coingecko.com/api/v3',
+    endpoints: {
+      markets: '/coins/markets',
+      sparkline: '/coins/{id}/market_chart'
+    },
+    params: {
+      vs_currency: 'usd',
+      order: 'market_cap_desc',
+      per_page: 100,
+      page: 1,
+      sparkline: false,
+      price_change_percentage: '1h,24h,7d'
+    }
+  },
+  coinmarketcap: {
+    baseUrl: 'https://pro-api.coinmarketcap.com/v1',
+    endpoints: {
+      markets: '/cryptocurrency/listings/latest'
+    },
+    headers: {
+      'X-CMC_PRO_API_KEY': process.env.COINMARKETCAP_API_KEY
+    },
+    params: {
+      start: 1,
+      limit: 100,
+      convert: 'USD'
+    }
+  },
+  cryptocompare: {
+    baseUrl: 'https://min-api.cryptocompare.com/data',
+    endpoints: {
+      markets: '/top/mktcapfull',
+      sparkline: '/histohour'
+    },
+    params: {
+      limit: 100,
+      tsym: 'USD'
+    }
+  }
+};
+
+// Helper function to calculate percentage change
+function calculateChange(oldValue, newValue) {
+  return ((newValue - oldValue) / oldValue) * 100;
+}
+
+// Format numbers with proper decimal places
+function formatNumber(num, isPrice = false) {
+  if (isPrice) {
+    if (num > 1000) return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (num > 1) return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+    return num.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 8 });
+  }
+  return num.toLocaleString('en-US');
+}
+
+// Get sparkline data from CoinGecko
+async function getSparklineData(coinId) {
+  try {
+    const response = await axios.get(
+      `${API_CONFIG.coingecko.baseUrl}${API_CONFIG.coingecko.endpoints.sparkline.replace('{id}', coinId)}`,
+      {
+        params: {
+          vs_currency: 'usd',
+          days: 1
+        }
+      }
+    );
+    
+    return response.data.prices.map(price => price[1]);
+  } catch (error) {
+    console.error(`Error fetching sparkline for ${coinId}:`, error.message);
+    return null;
+  }
+}
+
+// Transform CoinGecko data to our format
+function transformCoinGeckoData(coin) {
+  const changes = coin.price_change_percentage_1h_in_currency 
+    ? {
+        '1h': coin.price_change_percentage_1h_in_currency,
+        '24h': coin.price_change_percentage_24h_in_currency,
+        '7d': coin.price_change_percentage_7d_in_currency
+      }
+    : {
+        '1h': coin.price_change_percentage_1h,
+        '24h': coin.price_change_percentage_24h,
+        '7d': coin.price_change_percentage_7d
+      };
+
+  return {
+    id: coin.id,
+    name: coin.name,
+    symbol: coin.symbol,
+    image: coin.image,
+    currentPrice: coin.current_price,
+    change24h: changes['24h'],
+    high24h: coin.high_24h,
+    low24h: coin.low_24h,
+    marketCap: coin.market_cap,
+    volume: coin.total_volume,
+    circulatingSupply: coin.circulating_supply,
+    changes: changes,
+    lastUpdated: coin.last_updated
+  };
+}
+
+// Transform CoinMarketCap data to our format
+function transformCoinMarketCapData(coin) {
+  const quote = coin.quote.USD;
+  
+  return {
+    id: coin.slug,
+    name: coin.name,
+    symbol: coin.symbol,
+    image: `https://s2.coinmarketcap.com/static/img/coins/64x64/${coin.id}.png`,
+    currentPrice: quote.price,
+    change24h: quote.percent_change_24h,
+    high24h: quote.high_24h,
+    low24h: quote.low_24h,
+    marketCap: quote.market_cap,
+    volume: quote.volume_24h,
+    circulatingSupply: coin.circulating_supply,
+    changes: {
+      '1h': quote.percent_change_1h,
+      '24h': quote.percent_change_24h,
+      '7d': quote.percent_change_7d
+    },
+    lastUpdated: quote.last_updated
+  };
+}
+
+// Transform CryptoCompare data to our format
+function transformCryptoCompareData(coin) {
+  const raw = coin.RAW.USD;
+  
+  return {
+    id: coin.CoinInfo.Name.toLowerCase(),
+    name: coin.CoinInfo.FullName,
+    symbol: coin.CoinInfo.Name,
+    image: `https://www.cryptocompare.com${coin.CoinInfo.ImageUrl}`,
+    currentPrice: raw.PRICE,
+    change24h: raw.CHANGEPCT24HOUR,
+    high24h: raw.HIGH24HOUR,
+    low24h: raw.LOW24HOUR,
+    marketCap: raw.MKTCAP,
+    volume: raw.TOTALVOLUME24H,
+    circulatingSupply: raw.SUPPLY,
+    changes: {
+      '1h': raw.CHANGEPCTHOUR,
+      '24h': raw.CHANGEPCT24HOUR,
+      '7d': raw.CHANGEPCTDAY
+    },
+    lastUpdated: new Date(raw.LASTUPDATE * 1000).toISOString()
+  };
+}
+
+// Get market data from primary source (CoinGecko)
+async function getMarketDataFromPrimary() {
+  try {
+    const startTime = performance.now();
+    const response = await axios.get(
+      `${API_CONFIG.coingecko.baseUrl}${API_CONFIG.coingecko.endpoints.markets}`,
+      { params: API_CONFIG.coingecko.params }
+    );
+    
+    const endTime = performance.now();
+    console.log(`CoinGecko API call took ${(endTime - startTime).toFixed(2)}ms`);
+    
+    return {
+      source: 'coingecko',
+      data: response.data.map(transformCoinGeckoData)
+    };
+  } catch (error) {
+    console.error('Error fetching from CoinGecko:', error.message);
+    return null;
+  }
+}
+
+// Get market data from fallback source (CoinMarketCap)
+async function getMarketDataFromFallback1() {
+  try {
+    const startTime = performance.now();
+    const response = await axios.get(
+      `${API_CONFIG.coinmarketcap.baseUrl}${API_CONFIG.coinmarketcap.endpoints.markets}`,
+      {
+        headers: API_CONFIG.coinmarketcap.headers,
+        params: API_CONFIG.coinmarketcap.params
+      }
+    );
+    
+    const endTime = performance.now();
+    console.log(`CoinMarketCap API call took ${(endTime - startTime).toFixed(2)}ms`);
+    
+    return {
+      source: 'coinmarketcap',
+      data: response.data.data.map(transformCoinMarketCapData)
+    };
+  } catch (error) {
+    console.error('Error fetching from CoinMarketCap:', error.message);
+    return null;
+  }
+}
+
+// Get market data from fallback source (CryptoCompare)
+async function getMarketDataFromFallback2() {
+  try {
+    const startTime = performance.now();
+    const response = await axios.get(
+      `${API_CONFIG.cryptocompare.baseUrl}${API_CONFIG.cryptocompare.endpoints.markets}`,
+      { params: API_CONFIG.cryptocompare.params }
+    );
+    
+    const endTime = performance.now();
+    console.log(`CryptoCompare API call took ${(endTime - startTime).toFixed(2)}ms`);
+    
+    return {
+      source: 'cryptocompare',
+      data: response.data.Data.map(transformCryptoCompareData)
+    };
+  } catch (error) {
+    console.error('Error fetching from CryptoCompare:', error.message);
+    return null;
+  }
+}
+
+// Get sparkline trend direction
+function getTrendDirection(prices) {
+  if (!prices || prices.length < 2) return 'neutral';
+  
+  const first = prices[0];
+  const last = prices[prices.length - 1];
+  
+  return last > first ? 'positive' : 'negative';
+}
+
+// Generate simplified sparkline data for frontend
+function generateSparklineData(prices) {
+  if (!prices || prices.length === 0) return null;
+  
+  // Simplify the data points to 10 values for the sparkline
+  const simplified = [];
+  const step = Math.floor(prices.length / 10);
+  
+  for (let i = 0; i < prices.length; i += step) {
+    if (simplified.length >= 10) break;
+    simplified.push(prices[i]);
+  }
+  
+  return {
+    values: simplified,
+    trend: getTrendDirection(prices)
+  };
+}
+
+// Main endpoint
 router.get('/markets', async (req, res) => {
   try {
-    const { data } = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=true&price_change_percentage=1h,24h,7d,30d'
+    // Check cache first
+    const cachedData = cache.get('marketData');
+    if (cachedData) {
+      console.log('Serving from cache');
+      return res.json(cachedData);
+    }
+    
+    // Get data from primary source with fallbacks
+    let marketData = await getMarketDataFromPrimary();
+    
+    if (!marketData) {
+      console.log('Falling back to CoinMarketCap');
+      marketData = await getMarketDataFromFallback1();
+    }
+    
+    if (!marketData) {
+      console.log('Falling back to CryptoCompare');
+      marketData = await getMarketDataFromFallback2();
+    }
+    
+    if (!marketData) {
+      return res.status(503).json({
+        success: false,
+        message: 'All market data sources are currently unavailable'
+      });
+    }
+    
+    console.log(`Using data from ${marketData.source}`);
+    
+    // Add sparkline data for each coin (in parallel)
+    const coinsWithSparklines = await Promise.all(
+      marketData.data.map(async coin => {
+        let sparklineData = null;
+        
+        if (marketData.source === 'coingecko') {
+          sparklineData = await getSparklineData(coin.id);
+        }
+        
+        return {
+          ...coin,
+          sparkline: generateSparklineData(sparklineData)
+        };
+      })
     );
-
-    const marketData = data.map(coin => ({
-      id: coin.id,
-      name: coin.name,
-      symbol: coin.symbol,
-      image: coin.image,
-      currentPrice: coin.current_price,
-      marketCap: coin.market_cap,
-      volume: coin.total_volume,
-      high24h: coin.high_24h,
-      low24h: coin.low_24h,
-      change24h: coin.price_change_percentage_24h_in_currency,
-      sparkline: coin.sparkline_in_7d?.price || []
-    }));
-
-    res.json({ marketData }); // Frontend expects { marketData } not { success, marketData }
+    
+    // Prepare final response
+    const response = {
+      success: true,
+      source: marketData.source,
+      marketData: coinsWithSparklines,
+      timestamp: new Date().toISOString()
+    };
+    
+    // Cache the response
+    cache.set('marketData', response);
+    
+    res.json(response);
   } catch (error) {
-    console.error('Market data error:', error);
-    res.status(500).json({ error: 'Failed to fetch market data' });
+    console.error('Error in /markets endpoint:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error while fetching market data'
+    });
   }
 });
 
-router.get('/markets/gainers', async (req, res) => {
-  try {
-    const { data } = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=price_change_percentage_24h_desc&per_page=20&page=1&sparkline=true'
-    );
+module.exports = router;
 
-    const gainers = data.map(coin => ({
-      id: coin.id,
-      name: coin.name,
-      symbol: coin.symbol,
-      image: coin.image,
-      currentPrice: coin.current_price,
-      change24h: coin.price_change_percentage_24h_in_currency,
-      sparkline: coin.sparkline_in_7d?.price || []
-    }));
-
-    res.json({ gainers }); // Match frontend expectation
-  } catch (error) {
-    console.error('Gainers error:', error);
-    res.status(500).json({ error: 'Failed to fetch gainers' });
-  }
-});
-
-router.get('/markets/trending', async (req, res) => {
-  try {
-    // Get trending coins
-    const trends = await axios.get('https://api.coingecko.com/api/v3/search/trending');
-    const coinIds = trends.data.coins.map(coin => coin.item.id).join(',');
-
-    // Get market data for trending coins
-    const { data } = await axios.get(
-      `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${coinIds}&order=market_cap_desc&per_page=20&page=1&sparkline=true`
-    );
-
-    const trending = data.map(coin => ({
-      id: coin.id,
-      name: coin.name,
-      symbol: coin.symbol,
-      image: coin.image,
-      currentPrice: coin.current_price,
-      change24h: coin.price_change_percentage_24h_in_currency,
-      sparkline: coin.sparkline_in_7d?.price || []
-    }));
-
-    res.json({ trending }); // Match frontend expectation
-  } catch (error) {
-    console.error('Trending error:', error);
-    res.status(500).json({ error: 'Failed to fetch trending' });
-  }
-});
 
 // Other API Routes
 
