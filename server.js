@@ -974,135 +974,146 @@ function deduplicateArticles(articles) {
 }
 
 
-const Redis = require('ioredis');
 
-// Configuration
-const config = {
-  redis: {
-    host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-    port: 14450,
-    password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR',
-    retryStrategy: (times) => Math.min(times * 100, 5000)
-  },
-  market: {
-    baseTraders: 8654545,
-    baseVolume: 2754896125,
-    tradersRange: { min: 100, max: 2500 },
-    volumeRange: { min: 50000, max: 500000 },
-    updateInterval: 30000 // 30 seconds
-  }
+const { performance } = require('perf_hooks');
+
+// Cache setup
+let statsCache = {
+  data: null,
+  lastUpdated: 0,
+  isUpdating: false
 };
 
-// Initialize Redis client
-const redis = new Redis(config.redis);
+// External data sources
+const COIN_GECKO_API = 'https://api.coingecko.com/api/v3';
+const BINANCE_API = 'https://api.binance.com/api/v3';
 
-// Redis error handling
-redis.on('error', (err) => {
-  console.error('Redis error:', err);
-});
-
-// Initialize market data
-const initMarketData = async () => {
+// Helper function to fetch with retry
+async function fetchWithRetry(url, retries = 3, delay = 1000) {
   try {
-    const exists = await redis.exists('market:stats');
-    if (!exists) {
-      await redis.hmset('market:stats', {
-        'totalTraders': config.market.baseTraders,
-        'dailyVolume': config.market.baseVolume,
-        'lastUpdated': Date.now()
-      });
-      console.log('Initialized market data in Redis');
-    }
-  } catch (err) {
-    console.error('Error initializing market data:', err);
+    const response = await axios.get(url, { timeout: 5000 });
+    return response.data;
+  } catch (error) {
+    if (retries <= 0) throw error;
+    await new Promise(res => setTimeout(res, delay));
+    return fetchWithRetry(url, retries - 1, delay * 2);
   }
-};
+}
 
-// Update market data
-const updateMarketData = async () => {
-  try {
-    const tradersChange = Math.floor(
-      Math.random() * (config.market.tradersRange.max - config.market.tradersRange.min + 1) + 
-      config.market.tradersRange.min
-    );
-    
-    const volumeChange = Math.floor(
-      Math.random() * (config.market.volumeRange.max - config.market.volumeRange.min + 1) + 
-      config.market.volumeRange.min
-    );
+// Calculate 24h volume change percentage
+function calculateVolumeChange(currentVolume, previousVolume) {
+  if (!previousVolume || previousVolume === 0) return 0;
+  return ((currentVolume - previousVolume) / previousVolume) * 100;
+}
 
-    await redis.hincrby('market:stats', 'totalTraders', tradersChange);
-    await redis.hincrbyfloat('market:stats', 'dailyVolume', volumeChange);
-    await redis.hset('market:stats', 'lastUpdated', Date.now());
-    
-    console.log('Market data updated at:', new Date().toISOString());
-  } catch (err) {
-    console.error('Error updating market data:', err);
-  }
-};
-
-// Initialize and set up periodic updates
-(async () => {
-  await initMarketData();
-  setInterval(updateMarketData, config.market.updateInterval);
-})();
-
-// API endpoint with Redis fallback
+// Get market statistics
 router.get('/market-stats', async (req, res) => {
   try {
-    // Try to get data from Redis
-    const stats = await redis.hgetall('market:stats');
-    
-    if (!stats || !stats.totalTraders) {
-      throw new Error('Redis data not available');
+    // Return cached data if it's fresh (updated within last 30 seconds)
+    if (statsCache.data && Date.now() - statsCache.lastUpdated < 30000) {
+      return res.json({
+        success: true,
+        data: statsCache.data
+      });
     }
 
-    const response = {
-      totalTraders: parseInt(stats.totalTraders),
-      dailyVolume: parseFloat(stats.dailyVolume),
-      tradersChange: Math.floor(
-        Math.random() * (config.market.tradersRange.max - config.market.tradersRange.min + 1) + 
-        config.market.tradersRange.min
-      ),
-      volumeChange: Math.floor(
-        Math.random() * (config.market.volumeRange.max - config.market.volumeRange.min + 1) + 
-        config.market.volumeRange.min
-      ),
-      lastUpdated: parseInt(stats.lastUpdated),
-      _meta: {
-        source: 'redis',
-        updatedAt: new Date().toISOString()
-      }
+    // If update is already in progress, return cached data
+    if (statsCache.isUpdating) {
+      return res.json({
+        success: true,
+        data: statsCache.data || getDefaultStats(),
+        message: 'Using cached data while updating'
+      });
+    }
+
+    // Start updating
+    statsCache.isUpdating = true;
+    const startTime = performance.now();
+
+    // Fetch data from multiple sources in parallel
+    const [geckoGlobal, binanceTickers, userStats] = await Promise.all([
+      fetchWithRetry(`${COIN_GECKO_API}/global`),
+      fetchWithRetry(`${BINANCE_API}/ticker/24hr`),
+      getDatabaseUserStats() // Your internal database function
+    ]);
+
+    // Process data
+    const totalVolume24h = geckoGlobal.data.total_volume.usd;
+    const activeCryptocurrencies = geckoGlobal.data.active_cryptocurrencies;
+    const totalTraders = userStats.totalTraders;
+    const tradersChange = userStats.newTradersLast24h;
+
+    // Calculate Binance 24h volume (as backup)
+    const binanceVolume = binanceTickers.reduce((sum, ticker) => {
+      return sum + parseFloat(ticker.quoteVolume);
+    }, 0);
+
+    // Use Binance volume if CoinGecko fails
+    const finalVolume24h = totalVolume24h || binanceVolume * 38000; // Approx BTC price for conversion
+
+    // Calculate volume change (we'd normally store previous volume)
+    const previousVolume = statsCache.data?.dailyVolume || finalVolume24h * 0.95; // Simulate 5% increase
+    const volumeChange = calculateVolumeChange(finalVolume24h, previousVolume);
+
+    // Prepare response
+    const statsData = {
+      totalTraders,
+      tradersChange,
+      dailyVolume: finalVolume24h,
+      volumeChange,
+      totalAssets: activeCryptocurrencies,
+      lastUpdated: Date.now()
     };
 
-    res.json({ success: true, data: response });
+    // Update cache
+    statsCache = {
+      data: statsData,
+      lastUpdated: Date.now(),
+      isUpdating: false
+    };
 
-  } catch (err) {
-    console.error('Error getting market stats:', err);
-    
-    // Fallback response
+    console.log(`Market stats updated in ${(performance.now() - startTime).toFixed(2)}ms`);
+
     res.json({
       success: true,
-      data: {
-        totalTraders: config.market.baseTraders,
-        dailyVolume: config.market.baseVolume,
-        tradersChange: Math.floor(
-          Math.random() * (config.market.tradersRange.max - config.market.tradersRange.min + 1) + 
-          config.market.tradersRange.min
-        ),
-        volumeChange: Math.floor(
-          Math.random() * (config.market.volumeRange.max - config.market.volumeRange.min + 1) + 
-          config.market.volumeRange.min
-        ),
-        lastUpdated: Date.now(),
-        _meta: {
-          source: 'fallback',
-          updatedAt: new Date().toISOString()
-        }
-      }
+      data: statsData
+    });
+
+  } catch (error) {
+    console.error('Error fetching market stats:', error);
+    statsCache.isUpdating = false;
+
+    // Return cached data if available, otherwise default stats
+    const responseData = statsCache.data || getDefaultStats();
+    
+    res.json({
+      success: !!statsCache.data,
+      data: responseData,
+      message: statsCache.data ? 'Using cached data' : 'Using default data due to error'
     });
   }
 });
+
+// Database function mock (replace with your actual implementation)
+async function getDatabaseUserStats() {
+  // In a real implementation, you would query your database
+  return {
+    totalTraders: 1243827,
+    newTradersLast24h: 3421
+  };
+}
+
+// Default stats in case of complete failure
+function getDefaultStats() {
+  return {
+    totalTraders: 1000000,
+    tradersChange: 2000,
+    dailyVolume: 50000000000,
+    volumeChange: 5.2,
+    totalAssets: 100,
+    lastUpdated: Date.now()
+  };
+}
 
 module.exports = router;
 //Done
