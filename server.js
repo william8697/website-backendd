@@ -985,9 +985,6 @@ const redis = new Redis({
   password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
 });
 
-const app = express();
-app.use(cors());
-
 // Initialize values if they don't exist
 async function initializeValues() {
   const exists = await redis.exists('totalTraders', 'dailyVolume');
