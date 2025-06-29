@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
+const Redis = require('ioredis');
 const multer = require('multer');
 const { ethers } = require('ethers'); 
 const path = require('path');
@@ -975,9 +976,7 @@ function deduplicateArticles(articles) {
 
 
 
-const Redis = require('ioredis');
-const express = require('express');
-const cors = require('cors');
+
 
 // Initialize Redis client with your credentials
 const redis = new Redis({
