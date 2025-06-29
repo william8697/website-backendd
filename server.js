@@ -980,7 +980,7 @@ function deduplicateArticles(articles) {
 
 
 
-const app = express();
+
 app.use(cors());
 
 // Redis connection
