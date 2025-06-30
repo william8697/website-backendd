@@ -1027,6 +1027,101 @@ app.get('/api/market-stats', async (req, res) => {
 });
 
 //Done
+// CoinGecko API endpoints
+const COINGECKO_API = 'https://api.coingecko.com/api/v3';
+
+// Cache
+let marketCache = { data: null, timestamp: 0 };
+let gainersCache = { data: null, timestamp: 0 };
+let trendingCache = { data: null, timestamp: 0 };
+
+// Helper function to fetch from CoinGecko
+async function fetchCoingecko(endpoint) {
+  try {
+    const response = await axios.get(`${COINGECKO_API}${endpoint}`);
+    return response.data;
+  } catch (error) {
+    console.error('CoinGecko API error:', error);
+    return null;
+  }
+}
+
+// Market Data Endpoint
+app.get('/api/markets', async (req, res) => {
+  try {
+    // Cache for 1 minute
+    if (Date.now() - marketCache.timestamp < 60000 && marketCache.data) {
+      return res.json(marketCache.data);
+    }
+
+    const data = await fetchCoingecko('/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20');
+    const sparklines = await fetchCoingecko('/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&sparkline=true');
+
+    const merged = data.map((coin, i) => ({
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      current_price: coin.current_price,
+      price_change_percentage_1h_in_currency: coin.price_change_percentage_1h_in_currency,
+      price_change_percentage_24h: coin.price_change_percentage_24h,
+      price_change_percentage_7d_in_currency: coin.price_change_percentage_7d_in_currency,
+      total_volume: coin.total_volume,
+      market_cap: coin.market_cap,
+      sparkline: sparklines[i].sparkline_in_7d.price
+    }));
+
+    marketCache = { data: merged, timestamp: Date.now() };
+    res.json(merged);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch market data' });
+  }
+});
+
+// Top Gainers Endpoint
+app.get('/api/gainers', async (req, res) => {
+  try {
+    if (Date.now() - gainersCache.timestamp < 60000 && gainersCache.data) {
+      return res.json(gainersCache.data);
+    }
+
+    const data = await fetchCoingecko('/coins/markets?vs_currency=usd&order=price_change_percentage_24h_desc&per_page=20');
+    gainersCache = { data, timestamp: Date.now() };
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch gainers' });
+  }
+});
+
+// Trending Endpoint
+app.get('/api/trending', async (req, res) => {
+  try {
+    if (Date.now() - trendingCache.timestamp < 60000 && trendingCache.data) {
+      return res.json(trendingCache.data);
+    }
+
+    const data = await fetchCoingecko('/search/trending');
+    const trending = data.coins.map(coin => coin.item);
+    trendingCache = { data: trending, timestamp: Date.now() };
+    res.json(trending);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch trending' });
+  }
+});
+
+// User Balance Check Middleware
+app.post('/api/trade', (req, res) => {
+  const { amount, balance } = req.body;
+  
+  if (balance < 100) {
+    return res.status(400).json({ error: 'Insufficient balance (minimum $100 required)' });
+  }
+  
+  // Process trade logic here
+  res.json({ success: true });
+});
+
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 
 // Other API Routes
