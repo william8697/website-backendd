@@ -975,69 +975,82 @@ function deduplicateArticles(articles) {
 }
 
 
-// marketStats.js - Market Statistics Module
-const fs = require('fs');
-const path = require('path');
 
-const DATA_FILE = path.join(__dirname, 'market-stats.json');
-let marketStats = null;
 
-function loadMarketStats() {
-    try {
-        if (fs.existsSync(DATA_FILE)) {
-            marketStats = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-        } else {
-            marketStats = {
-                totalTraders: 8000000,
-                dailyVolume: 652000000,
-                lastUpdated: new Date().toISOString()
-            };
-            saveMarketStats();
-        }
-    } catch (err) {
-        console.error('Market stats initialization error:', err);
-        marketStats = {
-            totalTraders: 8000000,
-            dailyVolume: 652000000,
-            lastUpdated: new Date().toISOString()
-        };
+// Redis connection configuration
+const redis = new Redis({
+  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+  port: 14450,
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
+});
+
+// Initial values
+const INITIAL_TRADERS = 8000000;
+const INITIAL_VOLUME = 652000000;
+
+// Initialize Redis values if they don't exist
+async function initializeRedis() {
+  try {
+    const exists = await redis.exists('totalTraders', 'dailyVolume');
+    if (!exists) {
+      await redis.mset(
+        'totalTraders', INITIAL_TRADERS,
+        'dailyVolume', INITIAL_VOLUME
+      );
     }
+  } catch (error) {
+    console.error('Error initializing Redis:', error);
+  }
 }
 
-function saveMarketStats() {
-    fs.writeFile(DATA_FILE, JSON.stringify(marketStats), err => {
-        if (err) console.error('Error saving market stats:', err);
+// Background job to increment values
+function startIncrementJob() {
+  setInterval(async () => {
+    try {
+      // Increment traders by random value between 1 and 917
+      const traderIncrement = Math.floor(Math.random() * 917) + 1;
+      await redis.incrby('totalTraders', traderIncrement);
+
+      // Increment volume by random value between $100 and $100,000
+      const volumeIncrement = Math.floor(Math.random() * (100000 - 100 + 1)) + 100;
+      await redis.incrby('dailyVolume', volumeIncrement);
+    } catch (error) {
+      console.error('Error incrementing values:', error);
+    }
+  }, 10000); // Update every 10 seconds
+}
+
+// Market stats endpoint
+app.get('/api/v1/market-stats', async (req, res) => {
+  try {
+    const [totalTraders, dailyVolume] = await redis.mget('totalTraders', 'dailyVolume');
+    
+    res.json({
+      success: true,
+      data: {
+        totalTraders: parseInt(totalTraders) || INITIAL_TRADERS,
+        dailyVolume: parseInt(dailyVolume) || INITIAL_VOLUME,
+        tradersChange: Math.floor(Math.random() * 917) + 1, // Random change for display
+        volumeChange: Math.floor(Math.random() * (100000 - 100 + 1)) + 100, // Random change for display
+        lastUpdated: new Date().toISOString()
+      }
     });
-}
-
-function updateMarketStats() {
-    if (!marketStats) loadMarketStats();
-    
-    marketStats.totalTraders += Math.floor(Math.random() * 917) + 1;
-    marketStats.dailyVolume += Math.floor(Math.random() * 100000) + 100;
-    marketStats.lastUpdated = new Date().toISOString();
-    saveMarketStats();
-    
-    setTimeout(updateMarketStats, Math.floor(Math.random() * 25000) + 5000);
-}
-
-module.exports = function(app) {
-    loadMarketStats();
-    updateMarketStats();
-    
-    app.get('/api/market-stats', (req, res) => {
-        res.json({
-            success: true,
-            data: {
-                totalTraders: marketStats.totalTraders,
-                dailyVolume: marketStats.dailyVolume,
-                lastUpdated: marketStats.lastUpdated,
-                tradersChange: Math.floor(Math.random() * 1000) + 100,
-                volumeChange: Math.floor(Math.random() * 50000) + 1000
-            }
-        });
+  } catch (error) {
+    console.error('Error fetching market stats:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch market statistics'
     });
-};
+  }
+});
+
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, async () => {
+  await initializeRedis();
+  startIncrementJob();
+  console.log(`Server running on port ${PORT}`);
+});
 //Done
 
 
