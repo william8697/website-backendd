@@ -974,85 +974,86 @@ function deduplicateArticles(articles) {
   });
 }
 
-// Add these near your other Redis configuration
-const marketStatsRedis = new Redis({
+
+
+// Redis connection
+const redis = new Redis({
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR',
-  enableAutoPipelining: true,
-  retryStrategy: (times) => Math.min(times * 50, 2000)
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
 });
 
-// Initialize market stats (call this in your server startup)
-async function initializeMarketStats() {
-  const exists = await marketStatsRedis.exists('market_stats:traders', 'market_stats:volume');
+// Initial values
+const INITIAL_TRADERS = 8000000;
+const INITIAL_VOLUME = 652000000;
+
+// Initialize Redis values if they don't exist
+async function initializeRedis() {
+  const exists = await redis.exists('totalTraders', 'dailyVolume');
   if (!exists) {
-    await marketStatsRedis.mset(
-      'market_stats:traders', 8000000,
-      'market_stats:volume', 652000000
+    await redis.mset(
+      'totalTraders', INITIAL_TRADERS,
+      'dailyVolume', INITIAL_VOLUME
     );
   }
 }
 
-// Background updates (call this in your server startup)
-function startMarketStatsUpdates() {
-  // Update traders count
-  setRandomInterval(async () => {
-    await marketStatsRedis.incrby('market_stats:traders', _.random(1, 917));
-  }, 1000, 5000);
-
-  // Update volume
-  setRandomInterval(async () => {
-    await marketStatsRedis.incrby('market_stats:volume', _.random(100, 100000));
-  }, 2000, 8000);
-}
-
-// Helper function (add to your utilities)
-function setRandomInterval(callback, minDelay, maxDelay) {
-  const execute = () => {
-    callback();
-    setTimeout(execute, _.random(minDelay, maxDelay));
-  };
-  setTimeout(execute, _.random(minDelay, maxDelay));
-}
-
-// Market stats endpoint (add to your routes)
-router.get('/market-stats', rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
-}), async (req, res) => {
+// Background updater
+async function updateStats() {
   try {
-    const [traders, volume] = await marketStatsRedis.mget(
-      'market_stats:traders',
-      'market_stats:volume'
+    // Get current values
+    const [traders, volume] = await redis.mget('totalTraders', 'dailyVolume');
+    
+    // Calculate new values
+    const newTraders = parseInt(traders) + Math.floor(Math.random() * 917) + 1;
+    const newVolume = parseInt(volume) + Math.floor(Math.random() * 100000) + 100;
+    
+    // Update Redis
+    await redis.mset(
+      'totalTraders', newTraders,
+      'dailyVolume', newVolume
     );
+    
+    console.log(`Updated stats - Traders: ${newTraders}, Volume: ${newVolume}`);
+  } catch (err) {
+    console.error('Error updating stats:', err);
+  }
+  
+  // Schedule next update (random between 1-5 seconds)
+  setTimeout(updateStats, Math.floor(Math.random() * 4000) + 1000);
+}
 
+// API endpoint
+app.get('/api/market-stats', async (req, res) => {
+  try {
+    const [totalTraders, dailyVolume] = await redis.mget('totalTraders', 'dailyVolume');
+    
     res.json({
       success: true,
       data: {
-        totalTraders: parseInt(traders) || 8000000,
-        dailyVolume: parseInt(volume) || 652000000,
-        tradersChange: _.random(1, 917),
-        volumeChange: _.random(100, 100000),
+        totalTraders: parseInt(totalTraders),
+        dailyVolume: parseInt(dailyVolume),
+        tradersChange: Math.floor(Math.random() * 917) + 1, // Random change for display
+        volumeChange: Math.floor(Math.random() * 100000) + 100, // Random change for display
         lastUpdated: new Date().toISOString()
       }
     });
-  } catch (error) {
-    console.error('Market stats error:', error);
+  } catch (err) {
+    console.error('Error fetching market stats:', err);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch market statistics'
+      error: 'Failed to fetch market statistics'
     });
   }
 });
 
-// Then in your server startup:
-initializeMarketStats()
-  .then(() => startMarketStatsUpdates())
-  .catch(err => console.error('Market stats init error:', err));
-
-// Finally, mount the router (with your other routes)
-app.use('/api', router);
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, async () => {
+  await initializeRedis();
+  updateStats(); // Start background updates
+  console.log(`Server running on port ${PORT}`);
+});
 //Done
 
 
