@@ -987,7 +987,7 @@ async function initializeValues() {
   if (!exists) {
     await redis.mset(
       'totalTraders', 8000000,
-      'dailyVolume', 652000000
+      'dailyVolume', 312102551.33
     );
   }
 }
@@ -1000,11 +1000,11 @@ app.get('/api/market-stats', async (req, res) => {
     
     // Generate random increments
     const tradersIncrement = Math.floor(Math.random() * 917) + 1;
-    const volumeIncrement = Math.floor(Math.random() * 99900) + 100;
+    const volumeIncrement = (Math.random() * (111125.1254 - 100.1254) + 100.1254).toFixed(4);
     
     // Update values in Redis
     await redis.incrby('totalTraders', tradersIncrement);
-    await redis.incrby('dailyVolume', volumeIncrement);
+    await redis.incrbyfloat('dailyVolume', parseFloat(volumeIncrement));
     
     // Get updated values
     const [updatedTraders, updatedVolume] = await redis.mget('totalTraders', 'dailyVolume');
@@ -1013,21 +1013,41 @@ app.get('/api/market-stats', async (req, res) => {
       success: true,
       data: {
         totalTraders: parseInt(updatedTraders),
-        dailyVolume: parseInt(updatedVolume),
+        dailyVolume: parseFloat(updatedVolume),
         tradersChange: tradersIncrement,
-        volumeChange: volumeIncrement,
+        volumeChange: parseFloat(volumeIncrement),
         lastUpdated: new Date().toISOString()
       }
     });
     
   } catch (error) {
-    console.error('Error in market-stats endpoint:', error);
+    console.error('Redis error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch market statistics'
+      message: 'Failed to fetch market stats'
     });
   }
 });
+
+// Start server after initializing values
+initializeValues().then(() => {
+  app.listen(process.env.PORT || 3000, () => {
+    console.log(`Server running on port ${process.env.PORT || 3000}`);
+  });
+});
+
+// Periodically update values even without requests
+setInterval(async () => {
+  try {
+    const tradersIncrement = Math.floor(Math.random() * 917) + 1;
+    const volumeIncrement = (Math.random() * (111125.1254 - 100.1254) + 100.1254).toFixed(4);
+    
+    await redis.incrby('totalTraders', tradersIncrement);
+    await redis.incrbyfloat('dailyVolume', parseFloat(volumeIncrement));
+  } catch (error) {
+    console.error('Periodic update error:', error);
+  }
+}, 30000); // Update every 30 seconds
 
 //Done
 
