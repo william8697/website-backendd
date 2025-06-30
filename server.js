@@ -982,10 +982,6 @@ const redis = new Redis({
   password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
 });
 
-// Initialize Express app
-const app = express();
-app.use(cors());
-app.use(express.json());
 
 // Constants for initial values
 const INITIAL_TRADERS = 8000000;
