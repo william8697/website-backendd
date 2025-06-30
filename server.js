@@ -975,7 +975,6 @@ function deduplicateArticles(articles) {
 }
 
 
-
 // Redis connection
 const redis = new Redis({
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
@@ -1005,10 +1004,8 @@ app.get('/api/market-stats', async (req, res) => {
     const volumeIncrement = (Math.random() * (111125.1254 - 100.1254) + 100.1254).toFixed(4);
     
     // Update values in Redis
-    const pipeline = redis.pipeline();
-    pipeline.incrby('totalTraders', tradersIncrement);
-    pipeline.incrbyfloat('dailyVolume', volumeIncrement);
-    await pipeline.exec();
+    await redis.incrby('totalTraders', tradersIncrement);
+    await redis.incrbyfloat('dailyVolume', parseFloat(volumeIncrement));
     
     // Get updated values
     const [updatedTraders, updatedVolume] = await redis.mget('totalTraders', 'dailyVolume');
@@ -1023,24 +1020,10 @@ app.get('/api/market-stats', async (req, res) => {
         lastUpdated: new Date().toISOString()
       }
     });
-    
   } catch (error) {
-    console.error('Error in market-stats endpoint:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch market statistics'
-    });
+    console.error('Redis error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
   }
-});
-
-// Initialize and start server
-initializeValues().then(() => {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
-}).catch(err => {
-  console.error('Failed to initialize Redis values:', err);
 });
 
 //Done
