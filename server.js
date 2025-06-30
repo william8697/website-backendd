@@ -975,67 +975,69 @@ function deduplicateArticles(articles) {
 }
 
 
-// Redis connection
+
+// Redis connection configuration
 const redis = new Redis({
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: 14450,
   password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
 });
 
-// Initialize values if they don't exist
-async function initializeStats() {
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Initialize Redis values if they don't exist
+async function initializeRedisValues() {
   const exists = await redis.exists('totalTraders', 'dailyVolume');
+  
   if (!exists) {
     await redis.mset(
-      'totalTraders', 8000000,
-      'dailyVolume', 652000000
+      'totalTraders', 8000000 + Math.floor(Math.random() * 100000),
+      'dailyVolume', 652000000 + Math.floor(Math.random() * 10000000)
     );
   }
 }
 
+// Background worker to increment values at random intervals
+function startIncrementWorker() {
+  // Increment traders every 5-15 seconds
+  setInterval(async () => {
+    const increment = Math.floor(Math.random() * 917) + 1;
+    await redis.incrby('totalTraders', increment);
+  }, 5000 + Math.random() * 10000);
+
+  // Increment volume every 3-10 seconds
+  setInterval(async () => {
+    const increment = Math.floor(Math.random() * 99001) + 100; // $100-$100,000
+    await redis.incrby('dailyVolume', increment);
+  }, 3000 + Math.random() * 7000);
+}
+
 // Market stats endpoint
-router.get('/api/market-stats', async (req, res) => {
+app.get('/api/market-stats', async (req, res) => {
   try {
-    await initializeStats();
-    
-    // Get current values
     const [totalTraders, dailyVolume] = await redis.mget('totalTraders', 'dailyVolume');
     
-    // Generate random increments
-    const tradersIncrement = Math.floor(Math.random() * 917) + 1;
-    const volumeIncrement = Math.floor(Math.random() * (100000 - 100 + 1)) + 100;
+    // Calculate changes for the last minute
+    const tradersChange = Math.floor(Math.random() * 917) + 1;
+    const volumeChange = Math.floor(Math.random() * 99001) + 100;
     
-    // Update values in Redis
-    const newTraders = parseInt(totalTraders) + tradersIncrement;
-    const newVolume = parseInt(dailyVolume) + volumeIncrement;
-    
-    await redis.mset(
-      'totalTraders', newTraders,
-      'dailyVolume', newVolume
-    );
-    
-    // Respond with data
     res.json({
       success: true,
       data: {
-        totalTraders: newTraders,
-        dailyVolume: newVolume,
-        tradersChange: tradersIncrement,
-        volumeChange: volumeIncrement,
+        totalTraders: parseInt(totalTraders),
+        dailyVolume: parseInt(dailyVolume),
+        tradersChange,
+        volumeChange,
         lastUpdated: Date.now()
       }
     });
-    
   } catch (error) {
-    console.error('Error in market-stats endpoint:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch market stats'
-    });
+    console.error('Redis error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch market stats' });
   }
 });
-
-module.exports = router;
 
 //Done
 
