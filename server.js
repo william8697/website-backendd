@@ -977,72 +977,75 @@ function deduplicateArticles(articles) {
 
 
 
-// Redis connection configuration
+
+
+// Initialize Redis client with your provided credentials
 const redis = new Redis({
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: 14450,
   password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
 });
 
-// Initial values
-const INITIAL_TRADERS = 8000000;
-const INITIAL_VOLUME = 652000000;
-
-// Initialize Redis values if they don't exist
-async function initializeRedis() {
-  try {
-    const exists = await redis.exists('totalTraders', 'dailyVolume');
-    if (!exists) {
-      await redis.mset(
-        'totalTraders', INITIAL_TRADERS,
-        'dailyVolume', INITIAL_VOLUME
-      );
-    }
-  } catch (error) {
-    console.error('Error initializing Redis:', error);
+// Initialize default values if they don't exist
+async function initializeValues() {
+  const exists = await redis.exists('totalTraders', 'dailyVolume');
+  if (!exists) {
+    await redis.mset(
+      'totalTraders', 8000000,
+      'dailyVolume', 652000000
+    );
   }
 }
 
-// Background job to increment values
-function startIncrementJob() {
-  setInterval(async () => {
-    try {
-      // Increment traders by random value between 1 and 917
-      const traderIncrement = Math.floor(Math.random() * 917) + 1;
-      await redis.incrby('totalTraders', traderIncrement);
+// Function to increment values at random intervals
+function startIncrementingValues() {
+  // Increment traders every 1-5 seconds
+  setRandomInterval(async () => {
+    const increment = Math.floor(Math.random() * 917) + 1;
+    await redis.incrby('totalTraders', increment);
+  }, 1000, 5000);
 
-      // Increment volume by random value between $100 and $100,000
-      const volumeIncrement = Math.floor(Math.random() * (100000 - 100 + 1)) + 100;
-      await redis.incrby('dailyVolume', volumeIncrement);
-    } catch (error) {
-      console.error('Error incrementing values:', error);
-    }
-  }, 10000); // Update every 10 seconds
+  // Increment volume every 1-5 seconds
+  setRandomInterval(async () => {
+    const increment = Math.floor(Math.random() * 99000) + 100;
+    await redis.incrby('dailyVolume', increment);
+  }, 1000, 5000);
+}
+
+// Helper function for random intervals
+function setRandomInterval(callback, minDelay, maxDelay) {
+  const execute = () => {
+    callback();
+    const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+    setTimeout(execute, delay);
+  };
+  execute();
 }
 
 // Market stats endpoint
-app.get('/api/v1/market-stats', async (req, res) => {
+app.get('/api/market-stats', async (req, res) => {
   try {
     const [totalTraders, dailyVolume] = await redis.mget('totalTraders', 'dailyVolume');
+    
+    // Get the last change values
+    const [lastTradersChange, lastVolumeChange] = await redis.mget('lastTradersChange', 'lastVolumeChange');
     
     res.json({
       success: true,
       data: {
-        totalTraders: parseInt(totalTraders) || INITIAL_TRADERS,
-        dailyVolume: parseInt(dailyVolume) || INITIAL_VOLUME,
-        tradersChange: Math.floor(Math.random() * 917) + 1, // Random change for display
-        volumeChange: Math.floor(Math.random() * (100000 - 100 + 1)) + 100, // Random change for display
+        totalTraders: parseInt(totalTraders),
+        dailyVolume: parseInt(dailyVolume),
+        tradersChange: parseInt(lastTradersChange || 0),
+        volumeChange: parseInt(lastVolumeChange || 0),
         lastUpdated: new Date().toISOString()
       }
     });
   } catch (error) {
     console.error('Error fetching market stats:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch market statistics'
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch market stats' });
   }
 });
+
 //Done
 
 
