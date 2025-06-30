@@ -974,6 +974,8 @@ function deduplicateArticles(articles) {
   });
 }
 
+
+
 // Redis connection
 const redis = new Redis({
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
@@ -1003,8 +1005,10 @@ app.get('/api/market-stats', async (req, res) => {
     const volumeIncrement = (Math.random() * (111125.1254 - 100.1254) + 100.1254).toFixed(4);
     
     // Update values in Redis
-    await redis.incrby('totalTraders', tradersIncrement);
-    await redis.incrbyfloat('dailyVolume', parseFloat(volumeIncrement));
+    const pipeline = redis.pipeline();
+    pipeline.incrby('totalTraders', tradersIncrement);
+    pipeline.incrbyfloat('dailyVolume', volumeIncrement);
+    await pipeline.exec();
     
     // Get updated values
     const [updatedTraders, updatedVolume] = await redis.mget('totalTraders', 'dailyVolume');
@@ -1021,33 +1025,23 @@ app.get('/api/market-stats', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Redis error:', error);
+    console.error('Error in market-stats endpoint:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch market stats'
+      message: 'Failed to fetch market statistics'
     });
   }
 });
 
-// Start server after initializing values
+// Initialize and start server
 initializeValues().then(() => {
-  app.listen(process.env.PORT || 3000, () => {
-    console.log(`Server running on port ${process.env.PORT || 3000}`);
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
   });
+}).catch(err => {
+  console.error('Failed to initialize Redis values:', err);
 });
-
-// Periodically update values even without requests
-setInterval(async () => {
-  try {
-    const tradersIncrement = Math.floor(Math.random() * 917) + 1;
-    const volumeIncrement = (Math.random() * (111125.1254 - 100.1254) + 100.1254).toFixed(4);
-    
-    await redis.incrby('totalTraders', tradersIncrement);
-    await redis.incrbyfloat('dailyVolume', parseFloat(volumeIncrement));
-  } catch (error) {
-    console.error('Periodic update error:', error);
-  }
-}, 30000); // Update every 30 seconds
 
 //Done
 
