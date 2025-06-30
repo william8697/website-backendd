@@ -975,84 +975,69 @@ function deduplicateArticles(articles) {
 }
 
 
+// marketStats.js - Market Statistics Module
+const fs = require('fs');
+const path = require('path');
 
-// Redis connection
-const redis = new Redis({
-  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
-});
+const DATA_FILE = path.join(__dirname, 'market-stats.json');
+let marketStats = null;
 
-// Initial values
-const INITIAL_TRADERS = 8000000;
-const INITIAL_VOLUME = 652000000;
-
-// Initialize Redis values if they don't exist
-async function initializeRedis() {
-  const exists = await redis.exists('totalTraders', 'dailyVolume');
-  if (!exists) {
-    await redis.mset(
-      'totalTraders', INITIAL_TRADERS,
-      'dailyVolume', INITIAL_VOLUME
-    );
-  }
+function loadMarketStats() {
+    try {
+        if (fs.existsSync(DATA_FILE)) {
+            marketStats = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+        } else {
+            marketStats = {
+                totalTraders: 8000000,
+                dailyVolume: 652000000,
+                lastUpdated: new Date().toISOString()
+            };
+            saveMarketStats();
+        }
+    } catch (err) {
+        console.error('Market stats initialization error:', err);
+        marketStats = {
+            totalTraders: 8000000,
+            dailyVolume: 652000000,
+            lastUpdated: new Date().toISOString()
+        };
+    }
 }
 
-// Background updater
-async function updateStats() {
-  try {
-    // Get current values
-    const [traders, volume] = await redis.mget('totalTraders', 'dailyVolume');
-    
-    // Calculate new values
-    const newTraders = parseInt(traders) + Math.floor(Math.random() * 917) + 1;
-    const newVolume = parseInt(volume) + Math.floor(Math.random() * 100000) + 100;
-    
-    // Update Redis
-    await redis.mset(
-      'totalTraders', newTraders,
-      'dailyVolume', newVolume
-    );
-    
-    console.log(`Updated stats - Traders: ${newTraders}, Volume: ${newVolume}`);
-  } catch (err) {
-    console.error('Error updating stats:', err);
-  }
-  
-  // Schedule next update (random between 1-5 seconds)
-  setTimeout(updateStats, Math.floor(Math.random() * 4000) + 1000);
+function saveMarketStats() {
+    fs.writeFile(DATA_FILE, JSON.stringify(marketStats), err => {
+        if (err) console.error('Error saving market stats:', err);
+    });
 }
 
-// API endpoint
-app.get('/api/market-stats', async (req, res) => {
-  try {
-    const [totalTraders, dailyVolume] = await redis.mget('totalTraders', 'dailyVolume');
+function updateMarketStats() {
+    if (!marketStats) loadMarketStats();
     
-    res.json({
-      success: true,
-      data: {
-        totalTraders: parseInt(totalTraders),
-        dailyVolume: parseInt(dailyVolume),
-        tradersChange: Math.floor(Math.random() * 917) + 1, // Random change for display
-        volumeChange: Math.floor(Math.random() * 100000) + 100, // Random change for display
-        lastUpdated: new Date().toISOString()
-      }
-    });
-  } catch (err) {
-    console.error('Error fetching market stats:', err);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch market statistics'
-    });
-  }
-});
+    marketStats.totalTraders += Math.floor(Math.random() * 917) + 1;
+    marketStats.dailyVolume += Math.floor(Math.random() * 100000) + 100;
+    marketStats.lastUpdated = new Date().toISOString();
+    saveMarketStats();
+    
+    setTimeout(updateMarketStats, Math.floor(Math.random() * 25000) + 5000);
+}
 
-// Start server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, async () => {
-  await initializeRedis();
-  updateStats(); // Start background updates
-  console.log(`Server running on port ${PORT}`);
-});
+module.exports = function(app) {
+    loadMarketStats();
+    updateMarketStats();
+    
+    app.get('/api/market-stats', (req, res) => {
+        res.json({
+            success: true,
+            data: {
+                totalTraders: marketStats.totalTraders,
+                dailyVolume: marketStats.dailyVolume,
+                lastUpdated: marketStats.lastUpdated,
+                tradersChange: Math.floor(Math.random() * 1000) + 100,
+                volumeChange: Math.floor(Math.random() * 50000) + 1000
+            }
+        });
+    });
+};
 //Done
 
 
