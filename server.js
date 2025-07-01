@@ -1030,9 +1030,71 @@ app.get('/api/market-stats', async (req, res) => {
 
 
 
+// Add this JWT authentication middleware before your routes
+const authenticateJWT = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  
+  if (authHeader) {
+    const token = authHeader.split(' ')[1];
+    
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+      if (err) {
+        return res.sendStatus(403);
+      }
+      
+      req.user = user;
+      next();
+    });
+  } else {
+    res.sendStatus(401);
+  }
+};
+
+// WebSocket authentication middleware
+const authenticateWS = (ws, req, next) => {
+  const token = req.url.split('token=')[1];
+  
+  if (token) {
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+      if (err) {
+        ws.close(1008, 'Invalid token');
+        return;
+      }
+      
+      ws.userId = decoded.id;
+      next();
+    });
+  } else {
+    ws.close(1008, 'Token required');
+  }
+};
+
+// Then modify your WebSocket connection to use the middleware
+wss.on('connection', authenticateWS, (ws, req) => {
+  // Send initial data
+  User.findById(ws.userId).then(user => {
+    if (user) {
+      ws.send(JSON.stringify({
+        type: 'INITIAL_DATA',
+        balance: user.balance,
+        portfolio: user.portfolio
+      }));
+    }
+  });
+
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message);
+      if (data.type === 'SUBSCRIBE') {
+        // Handle subscription logic
+      }
+    } catch (err) {
+      console.error('WebSocket message error:', err);
+    }
+  });
+});
 
 
-// Crypto Platform Backend Endpoints (to be added to server.js)
 
 // Market Data Endpoints
 router.get('/api/markets', rateLimit({ windowMs: 5000, max: 50 }), async (req, res) => {
