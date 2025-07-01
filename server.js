@@ -1027,37 +1027,59 @@ app.get('/api/market-stats', async (req, res) => {
 });
 
 //Done
-// CoinGecko API endpoints
+const redis = new Redis({
+  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+  port: 14450,
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
+});
+
 const COINGECKO_API = 'https://api.coingecko.com/api/v3';
 
-// Cache
-let marketCache = { data: null, timestamp: 0 };
-let gainersCache = { data: null, timestamp: 0 };
-let trendingCache = { data: null, timestamp: 0 };
-
-// Helper function to fetch from CoinGecko
-async function fetchCoingecko(endpoint) {
+// Cache middleware
+const cache = (key, ttl = 60) => async (req, res, next) => {
   try {
-    const response = await axios.get(`${COINGECKO_API}${endpoint}`);
-    return response.data;
-  } catch (error) {
-    console.error('CoinGecko API error:', error);
-    return null;
-  }
-}
-
-// Market Data Endpoint
-app.get('/api/markets', async (req, res) => {
-  try {
-    // Cache for 1 minute
-    if (Date.now() - marketCache.timestamp < 60000 && marketCache.data) {
-      return res.json(marketCache.data);
+    const cached = await redis.get(key);
+    if (cached) {
+      return res.json(JSON.parse(cached));
     }
+    next();
+  } catch (err) {
+    next();
+  }
+};
 
-    const data = await fetchCoingecko('/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20');
-    const sparklines = await fetchCoingecko('/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&sparkline=true');
+/**
+ * @api {get} /api/markets Get Market Overview
+ * @apiName GetMarketOverview
+ * @apiGroup Markets
+ * @apiDescription Returns list of cryptocurrencies with market data
+ * 
+ * @apiSuccess {Object[]} data List of cryptocurrencies
+ * @apiSuccess {String} data.id CoinGecko ID
+ * @apiSuccess {String} data.name Coin name
+ * @apiSuccess {String} data.symbol Coin symbol
+ * @apiSuccess {String} data.image Coin image URL
+ * @apiSuccess {Number} data.current_price Current price in USD
+ * @apiSuccess {Number} data.price_change_percentage_1h_in_currency 1h price change percentage
+ * @apiSuccess {Number} data.price_change_percentage_24h 24h price change percentage
+ * @apiSuccess {Number} data.total_volume 24h trading volume
+ * @apiSuccess {Number} data.market_cap Market capitalization
+ * @apiSuccess {Number[]} data.sparkline Sparkline data points
+ */
+router.get('/markets', cache('market-overview'), async (req, res) => {
+  try {
+    const { data } = await axios.get(`${COINGECKO_API}/coins/markets`, {
+      params: {
+        vs_currency: 'usd',
+        order: 'market_cap_desc',
+        per_page: 100,
+        page: 1,
+        sparkline: true,
+        price_change_percentage: '1h,24h,7d'
+      }
+    });
 
-    const merged = data.map((coin, i) => ({
+    const formattedData = data.map(coin => ({
       id: coin.id,
       name: coin.name,
       symbol: coin.symbol,
@@ -1065,65 +1087,19 @@ app.get('/api/markets', async (req, res) => {
       current_price: coin.current_price,
       price_change_percentage_1h_in_currency: coin.price_change_percentage_1h_in_currency,
       price_change_percentage_24h: coin.price_change_percentage_24h,
-      price_change_percentage_7d_in_currency: coin.price_change_percentage_7d_in_currency,
       total_volume: coin.total_volume,
       market_cap: coin.market_cap,
-      sparkline: sparklines[i].sparkline_in_7d.price
+      sparkline: coin.sparkline_in_7d?.price || []
     }));
 
-    marketCache = { data: merged, timestamp: Date.now() };
-    res.json(merged);
+    await redis.set('market-overview', JSON.stringify(formattedData), 'EX', 60);
+    
+    res.json(formattedData);
   } catch (error) {
+    console.error('Market data error:', error);
     res.status(500).json({ error: 'Failed to fetch market data' });
   }
 });
-
-// Top Gainers Endpoint
-app.get('/api/gainers', async (req, res) => {
-  try {
-    if (Date.now() - gainersCache.timestamp < 60000 && gainersCache.data) {
-      return res.json(gainersCache.data);
-    }
-
-    const data = await fetchCoingecko('/coins/markets?vs_currency=usd&order=price_change_percentage_24h_desc&per_page=20');
-    gainersCache = { data, timestamp: Date.now() };
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch gainers' });
-  }
-});
-
-// Trending Endpoint
-app.get('/api/trending', async (req, res) => {
-  try {
-    if (Date.now() - trendingCache.timestamp < 60000 && trendingCache.data) {
-      return res.json(trendingCache.data);
-    }
-
-    const data = await fetchCoingecko('/search/trending');
-    const trending = data.coins.map(coin => coin.item);
-    trendingCache = { data: trending, timestamp: Date.now() };
-    res.json(trending);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch trending' });
-  }
-});
-
-// User Balance Check Middleware
-app.post('/api/trade', (req, res) => {
-  const { amount, balance } = req.body;
-  
-  if (balance < 100) {
-    return res.status(400).json({ error: 'Insufficient balance (minimum $100 required)' });
-  }
-  
-  // Process trade logic here
-  res.json({ success: true });
-});
-
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
-
 // Other API Routes
 
 // Authentication Routes
