@@ -1059,211 +1059,357 @@ app.get('/api/market-stats', async (req, res) => {
 
 
 
-// MongoDB setup for user data
-const formatCoinData = (coin) => ({
-  id: coin.id,
-  name: coin.name,
-  symbol: coin.symbol,
-  image: coin.image?.small || `https://via.placeholder.com/24?text=${coin.symbol.toUpperCase()}`,
-  current_price: coin.current_price,
-  price_change_percentage_1h_in_currency: coin.price_change_percentage_1h_in_currency,
-  price_change_percentage_24h: coin.price_change_percentage_24h,
-  price_change_percentage_7d_in_currency: coin.price_change_percentage_7d_in_currency,
-  total_volume: coin.total_volume,
-  market_cap: coin.market_cap,
-  sparkline_in_7d: coin.sparkline_in_7d || { price: Array(7).fill(coin.current_price) }
+// Redis client setup (assuming it's already declared globally)
+const redisClient = redis.createClient({
+  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+  port: 14450,
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
 });
 
-const checkTradeConditions = async (req) => {
-  // Authentication check
-  if (!req.user) {
-    return { allowed: false, message: "You must be logged in to perform this action" };
+redisClient.on('error', (err) => console.error('Redis Client Error:', err));
+
+// MongoDB connection (assuming mongoose is already declared globally)
+mongoose.connect('mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+});
+
+// Utility functions
+const formatCurrency = (value) => {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value);
+};
+
+const fetchFromCoinGecko = async (endpoint, params = {}) => {
+  try {
+    const response = await axios.get(`https://api.coingecko.com/api/v3/${endpoint}`, {
+      params: {
+        ...params,
+        x_cg_demo_api_key: 'CG-BQ9872X8GFX9QZQYENKQHZ6V' // Replace with your actual API key
+      }
+    });
+    return response.data;
+  } catch (error) {
+    console.error(`CoinGecko API Error (${endpoint}):`, error.message);
+    throw error;
   }
-  
-  // Balance check
-  const user = await User.findById(req.user.id);
-  if (user.balance < 100) {
-    return { allowed: false, message: "Insufficient balance. Please deposit." };
+};
+
+// Middleware to verify trading conditions
+const verifyTradeConditions = async (req, res, next) => {
+  try {
+    // Check authentication
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'You must be logged in to perform this action'
+      });
+    }
+
+    // Verify token and get user
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.id).select('balance');
+    
+    if (!user) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'Invalid user credentials'
+      });
+    }
+
+    // Check minimum balance
+    if (user.balance < 100) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Insufficient balance. Please deposit.'
+      });
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    console.error('Trade verification error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error during trade verification'
+    });
   }
-  
-  return { allowed: true, user };
 };
 
 // Market Overview Endpoint
 app.get('/api/markets', async (req, res) => {
   try {
-    const cacheKey = 'market-overview';
-    const cachedData = await redisClient.get(cacheKey);
+    const limit = parseInt(req.query.limit) || 10;
+    const cacheKey = `markets:${limit}`;
     
+    // Try to get from Redis cache first
+    const cachedData = await redisClient.get(cacheKey);
     if (cachedData) {
-      return res.json(JSON.parse(cachedData));
+      return res.json({ success: true, data: JSON.parse(cachedData) });
     }
 
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=true&price_change_percentage=1h,24h,7d'
-    );
+    // Fetch from CoinGecko API
+    const coins = await fetchFromCoinGecko('coins/markets', {
+      vs_currency: 'usd',
+      order: 'market_cap_desc',
+      per_page: limit,
+      page: 1,
+      sparkline: true,
+      price_change_percentage: '1h,24h,7d'
+    });
 
-    const formattedData = response.data.map(formatCoinData);
-    
+    // Format the data
+    const formattedCoins = coins.map(coin => ({
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      current_price: coin.current_price,
+      price_change_percentage_1h_in_currency: coin.price_change_percentage_1h_in_currency,
+      price_change_percentage_24h: coin.price_change_percentage_24h,
+      price_change_percentage_7d_in_currency: coin.price_change_percentage_7d_in_currency,
+      total_volume: coin.total_volume,
+      market_cap: coin.market_cap,
+      sparkline_in_7d: coin.sparkline_in_7d,
+      high_24h: coin.high_24h,
+      low_24h: coin.low_24h
+    }));
+
     // Cache for 5 minutes
-    await redisClient.setEx(cacheKey, 300, JSON.stringify(formattedData));
-    
-    res.json(formattedData);
+    await redisClient.setEx(cacheKey, 300, JSON.stringify(formattedCoins));
+
+    res.json({ success: true, data: formattedCoins });
   } catch (error) {
     console.error('Market data error:', error);
-    res.status(500).json({ error: 'Failed to fetch market data' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch market data'
+    });
   }
 });
 
 // Top Gainers Endpoint
 app.get('/api/markets/gainers', async (req, res) => {
   try {
-    const cacheKey = 'top-gainers';
-    const cachedData = await redisClient.get(cacheKey);
+    const limit = parseInt(req.query.limit) || 5;
+    const cacheKey = `gainers:${limit}`;
     
+    // Try to get from Redis cache first
+    const cachedData = await redisClient.get(cacheKey);
     if (cachedData) {
-      return res.json(JSON.parse(cachedData));
+      return res.json({ success: true, data: JSON.parse(cachedData) });
     }
 
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=price_change_percentage_24h_desc&per_page=50&page=1&sparkline=true'
-    );
+    // Fetch from CoinGecko API
+    const coins = await fetchFromCoinGecko('coins/markets', {
+      vs_currency: 'usd',
+      order: 'price_change_percentage_24h_desc',
+      per_page: limit,
+      page: 1,
+      price_change_percentage: '24h'
+    });
 
-    const formattedData = response.data.map(formatCoinData);
-    
-    // Cache for 10 minutes
-    await redisClient.setEx(cacheKey, 600, JSON.stringify({ gainers: formattedData }));
-    
-    res.json({ gainers: formattedData });
+    // Format the data
+    const gainers = coins.map(coin => ({
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      current_price: coin.current_price,
+      price_change_percentage_24h: coin.price_change_percentage_24h,
+      total_volume: coin.total_volume,
+      market_cap: coin.market_cap
+    }));
+
+    // Cache for 2 minutes (gainers change more frequently)
+    await redisClient.setEx(cacheKey, 120, JSON.stringify(gainers));
+
+    res.json({ success: true, data: gainers });
   } catch (error) {
     console.error('Gainers data error:', error);
-    res.status(500).json({ error: 'Failed to fetch top gainers' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch top gainers'
+    });
   }
 });
 
 // Trending Coins Endpoint
 app.get('/api/markets/trending', async (req, res) => {
   try {
-    const cacheKey = 'trending-coins';
-    const cachedData = await redisClient.get(cacheKey);
+    const limit = parseInt(req.query.limit) || 5;
+    const cacheKey = `trending:${limit}`;
     
+    // Try to get from Redis cache first
+    const cachedData = await redisClient.get(cacheKey);
     if (cachedData) {
-      return res.json(JSON.parse(cachedData));
+      return res.json({ success: true, data: JSON.parse(cachedData) });
     }
 
-    // Get trending coins from CoinGecko
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/search/trending'
-    );
+    // Fetch from CoinGecko API
+    const trending = await fetchFromCoinGecko('search/trending');
 
-    // Extract coin IDs from trending data
-    const coinIds = response.data.coins.map(coin => coin.item.id).join(',');
+    // Get detailed data for each trending coin
+    const coinIds = trending.coins.map(coin => coin.item.id).slice(0, limit);
+    const detailedData = await fetchFromCoinGecko('coins/markets', {
+      vs_currency: 'usd',
+      ids: coinIds.join(','),
+      price_change_percentage: '24h'
+    });
 
-    // Get detailed market data for trending coins
-    const marketResponse = await axios.get(
-      `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${coinIds}&order=market_cap_desc&per_page=50&page=1&sparkline=true&price_change_percentage=24h`
-    );
+    // Format the data
+    const trendingCoins = detailedData.map(coin => ({
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      current_price: coin.current_price,
+      price_change_percentage_24h: coin.price_change_percentage_24h,
+      total_volume: coin.total_volume,
+      market_cap: coin.market_cap
+    }));
 
-    const formattedData = marketResponse.data.map(formatCoinData);
-    
-    // Cache for 15 minutes
-    await redisClient.setEx(cacheKey, 900, JSON.stringify({ trending: formattedData }));
-    
-    res.json({ trending: formattedData });
+    // Cache for 3 minutes
+    await redisClient.setEx(cacheKey, 180, JSON.stringify(trendingCoins));
+
+    res.json({ success: true, data: trendingCoins });
   } catch (error) {
     console.error('Trending data error:', error);
-    res.status(500).json({ error: 'Failed to fetch trending coins' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch trending coins'
+    });
   }
 });
 
-// Trade Execution Endpoint (used by all sections)
-app.post('/api/trades/:action', authenticateUser, async (req, res) => {
+// Trade Execution Endpoint (used by all three sections)
+app.post('/api/trades/:type', verifyTradeConditions, async (req, res) => {
   try {
-    const { action } = req.params; // 'buy' or 'sell'
-    const { coinId, amount } = req.body;
+    const { type } = req.params; // 'buy' or 'sell'
+    const { coinId, amount, price } = req.body;
     
+    if (!['buy', 'sell'].includes(type)) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Invalid trade type'
+      });
+    }
+
     // Validate input
-    if (!coinId || !amount || isNaN(amount) || amount <= 0) {
-      return res.status(400).json({ error: 'Invalid trade parameters' });
+    if (!coinId || !amount || !price) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Missing required fields'
+      });
     }
+
+    const numericAmount = parseFloat(amount);
+    const numericPrice = parseFloat(price);
     
-    // Check trade conditions
-    const tradeCheck = await checkTradeConditions(req);
-    if (!tradeCheck.allowed) {
-      return res.status(403).json({ error: tradeCheck.message });
+    if (isNaN(numericAmount) || isNaN(numericPrice) || numericAmount <= 0 || numericPrice <= 0) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Invalid amount or price'
+      });
     }
-    
-    // Get current price from CoinGecko
-    const priceResponse = await axios.get(
-      `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false&sparkline=false`
-    );
-    
-    const currentPrice = priceResponse.data.market_data.current_price.usd;
-    const totalCost = currentPrice * amount;
-    
+
+    const totalCost = numericAmount * numericPrice;
+    const user = req.user;
+
     // Check balance for buy orders
-    if (action === 'buy' && tradeCheck.user.balance < totalCost) {
-      return res.status(403).json({ error: 'Insufficient balance for this trade' });
+    if (type === 'buy' && user.balance < totalCost) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Insufficient balance for this trade'
+      });
     }
+
+    // Execute the trade
+    let newBalance;
+    let portfolioUpdate;
     
-    // Execute trade
-    if (action === 'buy') {
-      tradeCheck.user.balance -= totalCost;
+    if (type === 'buy') {
+      newBalance = user.balance - totalCost;
       
       // Add to portfolio or update existing position
-      const existingPosition = tradeCheck.user.portfolio.find(p => p.coinId === coinId);
+      const existingPosition = user.portfolio.find(p => p.coinId === coinId);
       if (existingPosition) {
-        existingPosition.amount += amount;
+        existingPosition.amount += numericAmount;
+        existingPosition.avgPrice = 
+          ((existingPosition.avgPrice * existingPosition.amount) + totalCost) / 
+          (existingPosition.amount + numericAmount);
       } else {
-        tradeCheck.user.portfolio.push({ coinId, amount });
+        user.portfolio.push({
+          coinId,
+          amount: numericAmount,
+          avgPrice: numericPrice
+        });
       }
     } else {
       // Sell logic
-      const existingPosition = tradeCheck.user.portfolio.find(p => p.coinId === coinId);
-      if (!existingPosition || existingPosition.amount < amount) {
-        return res.status(403).json({ error: 'Insufficient coin balance for this trade' });
+      const position = user.portfolio.find(p => p.coinId === coinId);
+      if (!position || position.amount < numericAmount) {
+        return res.status(400).json({ 
+          success: false,
+          error: 'Insufficient coins to sell'
+        });
       }
       
-      tradeCheck.user.balance += totalCost;
-      existingPosition.amount -= amount;
+      newBalance = user.balance + totalCost;
+      position.amount -= numericAmount;
       
-      // Remove position if amount reaches zero
-      if (existingPosition.amount <= 0) {
-        tradeCheck.user.portfolio = tradeCheck.user.portfolio.filter(p => p.coinId !== coinId);
+      // Remove position if amount is zero
+      if (position.amount <= 0) {
+        user.portfolio = user.portfolio.filter(p => p.coinId !== coinId);
       }
     }
-    
-    // Save user
-    await tradeCheck.user.save();
-    
-    res.json({
+
+    // Calculate profit (for sell orders)
+    const profit = type === 'sell' ? 
+      totalCost - (user.portfolio.find(p => p.coinId === coinId)?.avgPrice || numericPrice) * numericAmount : 
+      0;
+
+    // Update user in database
+    user.balance = newBalance;
+    await user.save();
+
+    // Invalidate relevant caches
+    await redisClient.del(`user:${user._id}:portfolio`);
+    await redisClient.del(`user:${user._id}:balance`);
+
+    // Broadcast update via WebSocket if needed
+    if (wsServer) {
+      wsServer.clients.forEach(client => {
+        if (client.userId === user._id.toString()) {
+          client.send(JSON.stringify({
+            type: 'TRADE_EXECUTED',
+            balance: newBalance,
+            portfolio: user.portfolio,
+            profit
+          }));
+        }
+      });
+    }
+
+    res.json({ 
       success: true,
-      newBalance: tradeCheck.user.balance,
-      portfolio: tradeCheck.user.portfolio,
-      price: currentPrice,
-      amount,
-      total: totalCost
+      newBalance,
+      portfolio: user.portfolio,
+      profit
     });
-    
   } catch (error) {
     console.error('Trade execution error:', error);
-    res.status(500).json({ error: 'Trade execution failed' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to execute trade'
+    });
   }
 });
-
-// Authentication middleware
-function authenticateUser(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Authentication required' });
-  
-  try {
-    const decoded = jwt.verify(token, 'your_jwt_secret');
-    req.user = decoded;
-    next();
-  } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
-}
 
 
 
