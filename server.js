@@ -1069,22 +1069,6 @@ redisClient.on('error', (err) => console.log('Redis Client Error', err));
 redisClient.connect();
 
 // MongoDB setup for user data
-mongoose.connect('mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-});
-
-const User = mongoose.model('User', new mongoose.Schema({
-  email: String,
-  password: String,
-  balance: { type: Number, default: 0 },
-  portfolio: [{
-    coinId: String,
-    amount: Number
-  }]
-}));
-
-// Helper functions
 const formatCoinData = (coin) => ({
   id: coin.id,
   name: coin.name,
