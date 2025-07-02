@@ -1003,6 +1003,12 @@ function deduplicateArticles(articles) {
   });
 }
 
+// Create Redis client
+const redis = new Redis({
+  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+  port: 14450,
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
+});
 
 // Initialize values if they don't exist
 async function initializeValues() {
