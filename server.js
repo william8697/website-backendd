@@ -1055,9 +1055,15 @@ app.get('/api/market-stats', async (req, res) => {
 //Done
 
 
-
-
 // Crypto Platform Backend Endpoints
+// Add these to your existing server.js
+
+// Redis client setup
+const redis = new Redis({
+  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+  port: 14450,
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
+});
 
 // Market Data Endpoints
 router.get('/api/markets', rateLimit({ windowMs: 60000, max: 60 }), async (req, res) => {
@@ -1322,9 +1328,6 @@ async function validateBalance(req, res, next) {
   }
   next();
 }
-
-
-
 
 
 // Other API Routes
