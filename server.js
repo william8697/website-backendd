@@ -1059,14 +1059,6 @@ app.get('/api/market-stats', async (req, res) => {
 
 
 
-const User = mongoose.model('User', new mongoose.Schema({
-  email: String,
-  password: String,
-  balance: Number,
-  portfolio: Array,
-  lastLogin: Date
-}));
-
 // CoinGecko API helper
 async function fetchCoinGeckoData(endpoint, params = {}) {
   try {
