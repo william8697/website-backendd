@@ -83,11 +83,7 @@ const apiLimiter = rateLimit({
 });
 app.use('/api/', apiLimiter);
 
-const ioredis = new ioRedis({
-  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-  port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
-});
+
 
 // Database Models
 const UserSchema = new mongoose.Schema({
