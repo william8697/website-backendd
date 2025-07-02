@@ -4,7 +4,6 @@ const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
-const Redis = require('ioredis');
 const multer = require('multer');
 const { ethers } = require('ethers'); 
 const path = require('path');
@@ -43,6 +42,21 @@ const transporter = nodemailer.createTransport({
         pass: '6c08aa4f2c679a'
     }
 });
+// Replace your existing Redis initialization with this:
+
+// At the top of your file (with other requires)
+const Redis = require('ioredis');
+
+// Initialize Redis only if not already initialized
+if (!global.redisClient) {
+  global.redisClient = new Redis({
+    host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+    port: 14450,
+    password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
+  });
+}
+
+// Then use global.redisClient throughout your code instead of redis
 
 // Security Middleware
 app.use(helmet());
@@ -1001,13 +1015,6 @@ function deduplicateArticles(articles) {
 }
 
 
-// Redis connection
-const redis = new Redis({
-  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-  port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
-});
-
 // Initialize values if they don't exist
 async function initializeValues() {
   const exists = await redis.exists('totalTraders', 'dailyVolume');
@@ -1056,15 +1063,6 @@ app.get('/api/market-stats', async (req, res) => {
 
 
 // Crypto Platform Backend Endpoints
-// Add these to your existing server.js
-
-// Redis client setup
-const redis = new Redis({
-  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-  port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
-});
-
 // Market Data Endpoints
 router.get('/api/markets', rateLimit({ windowMs: 60000, max: 60 }), async (req, res) => {
   try {
