@@ -98,28 +98,6 @@ const apiLimiter = rateLimit({
 });
 app.use('/api/', apiLimiter);
 
-// ======================
-// JWT Authentication Middleware
-// ======================
-const authenticateJWT = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  
-  if (authHeader) {
-    const token = authHeader.split(' ')[1];
-    
-    jwt.verify(token, process.env.JWT_SECRET || '17581758Na.%', (err, user) => {
-      if (err) {
-        return res.sendStatus(403); // Forbidden if token is invalid
-      }
-      
-      req.user = user;
-      next();
-    });
-  } else {
-    res.sendStatus(401); // Unauthorized if no token
-  }
-};
-
 // Database Models
 const UserSchema = new mongoose.Schema({
     email: { type: String, unique: true, required: true },
