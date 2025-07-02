@@ -30,7 +30,6 @@ const DEPOSIT_ADDRESS = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4z
 
 // WebSocket Server Setup
 const { createServer } = require('http');
-const { WebSocketServer } = require('ws');
 
 // Create HTTP server
 const server = createServer(app);
