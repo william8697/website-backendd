@@ -1057,7 +1057,279 @@ app.get('/api/market-stats', async (req, res) => {
 
 
 
+// Crypto Platform Backend Endpoints
+// Add these to your existing server.js
 
+// Redis client setup
+const redis = new Redis({
+  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+  port: 14450,
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
+});
+
+// Market Data Endpoints
+router.get('/api/markets', rateLimit({ windowMs: 60000, max: 60 }), async (req, res) => {
+  try {
+    const cacheKey = 'market-data';
+    const cachedData = await redis.get(cacheKey);
+    
+    if (cachedData) {
+      return res.json(JSON.parse(cachedData));
+    }
+
+    const [coinGeckoRes, binanceRes] = await Promise.all([
+      axios.get('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=true&price_change_percentage=1h,24h,7d'),
+      axios.get('https://api.binance.com/api/v3/ticker/24hr')
+    ]);
+
+    const processedData = processMarketData(coinGeckoRes.data, binanceRes.data);
+    await redis.set(cacheKey, JSON.stringify(processedData), 'EX', 30);
+    
+    res.json(processedData);
+  } catch (error) {
+    console.error('Market data error:', error);
+    res.status(500).json({ error: 'Failed to fetch market data' });
+  }
+});
+
+// Top Gainers Endpoint
+router.get('/api/markets/gainers', rateLimit({ windowMs: 60000, max: 60 }), async (req, res) => {
+  try {
+    const cacheKey = 'top-gainers';
+    const cachedData = await redis.get(cacheKey);
+    
+    if (cachedData) {
+      return res.json({ success: true, gainers: JSON.parse(cachedData) });
+    }
+
+    const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=price_change_percentage_24h_desc&per_page=20&page=1');
+    const gainers = response.data.map(coin => ({
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      currentPrice: coin.current_price,
+      change24h: coin.price_change_percentage_24h,
+      volume: coin.total_volume,
+      marketCap: coin.market_cap,
+      sparkline: coin.sparkline_in_7d.price
+    }));
+
+    await redis.set(cacheKey, JSON.stringify(gainers), 'EX', 60);
+    res.json({ success: true, gainers });
+  } catch (error) {
+    console.error('Gainers error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch gainers' });
+  }
+});
+
+// Trending Endpoint
+router.get('/api/markets/trending', rateLimit({ windowMs: 60000, max: 60 }), async (req, res) => {
+  try {
+    const cacheKey = 'trending-coins';
+    const cachedData = await redis.get(cacheKey);
+    
+    if (cachedData) {
+      return res.json({ success: true, trending: JSON.parse(cachedData) });
+    }
+
+    const response = await axios.get('https://api.coingecko.com/api/v3/search/trending');
+    const trending = response.data.coins.map(coin => ({
+      id: coin.item.id,
+      name: coin.item.name,
+      symbol: coin.item.symbol,
+      image: coin.item.large,
+      price: coin.item.price_btc * (await getBTCPrice()),
+      change24h: coin.item.data.price_change_percentage_24h.usd,
+      volume: coin.item.data.total_volume,
+      marketCap: coin.item.data.market_cap
+    }));
+
+    await redis.set(cacheKey, JSON.stringify(trending), 'EX', 120);
+    res.json({ success: true, trending });
+  } catch (error) {
+    console.error('Trending error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch trending coins' });
+  }
+});
+
+// Trade Endpoints
+router.post('/api/trades/buy', authenticateUser, validateBalance, async (req, res) => {
+  try {
+    const { coinId, amount, price } = req.body;
+    const totalCost = amount * price;
+    
+    if (totalCost > req.user.balance) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Insufficient balance' 
+      });
+    }
+
+    // Execute trade logic
+    const trade = await executeTrade(req.user.id, coinId, amount, price, 'buy');
+    
+    // Update user balance
+    const newBalance = req.user.balance - totalCost;
+    await User.findByIdAndUpdate(req.user.id, { balance: newBalance });
+    
+    // Invalidate portfolio cache
+    await redis.del(`portfolio-${req.user.id}`);
+    
+    res.json({ 
+      success: true, 
+      trade,
+      newBalance,
+      message: 'Buy order executed successfully'
+    });
+  } catch (error) {
+    console.error('Buy error:', error);
+    res.status(500).json({ success: false, error: 'Trade failed' });
+  }
+});
+
+// Futures Endpoints
+router.get('/api/futures', rateLimit({ windowMs: 60000, max: 60 }), async (req, res) => {
+  try {
+    const cacheKey = 'futures-data';
+    const cachedData = await redis.get(cacheKey);
+    
+    if (cachedData) {
+      return res.json({ success: true, futures: JSON.parse(cachedData) });
+    }
+
+    const response = await axios.get('https://fapi.binance.com/fapi/v1/ticker/24hr');
+    const futures = response.data.map(pair => ({
+      symbol: pair.symbol,
+      price: parseFloat(pair.lastPrice),
+      change24h: parseFloat(pair.priceChangePercent),
+      fundingRate: parseFloat(pair.lastFundingRate) * 100,
+      volume: parseFloat(pair.volume),
+      openInterest: parseFloat(pair.openInterest)
+    }));
+
+    await redis.set(cacheKey, JSON.stringify(futures), 'EX', 30);
+    res.json({ success: true, futures });
+  } catch (error) {
+    console.error('Futures error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch futures data' });
+  }
+});
+
+// Earn Endpoints
+router.get('/api/earn/products', rateLimit({ windowMs: 60000, max: 60 }), async (req, res) => {
+  try {
+    const cacheKey = 'earn-products';
+    const cachedData = await redis.get(cacheKey);
+    
+    if (cachedData) {
+      return res.json({ success: true, products: JSON.parse(cachedData) });
+    }
+
+    const [staking, savings] = await Promise.all([
+      axios.get('https://api.binance.com/sapi/v1/staking/productList?product=STAKING'),
+      axios.get('https://api.binance.com/sapi/v1/lending/daily/product/list')
+    ]);
+
+    const products = [
+      ...staking.data.map(product => ({
+        id: product.projectId,
+        name: product.projectName,
+        asset: product.asset,
+        apy: parseFloat(product.apy),
+        duration: product.duration,
+        type: 'staking',
+        minAmount: product.minPurchaseAmount
+      })),
+      ...savings.data.map(product => ({
+        id: product.productId,
+        name: product.productName,
+        asset: product.asset,
+        apy: parseFloat(product.avgAnnualInterestRate),
+        duration: 'flexible',
+        type: 'savings',
+        minAmount: product.minPurchaseAmount
+      }))
+    ];
+
+    await redis.set(cacheKey, JSON.stringify(products), 'EX', 3600);
+    res.json({ success: true, products });
+  } catch (error) {
+    console.error('Earn products error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch earn products' });
+  }
+});
+
+// Helper Functions
+async function getBTCPrice() {
+  const cacheKey = 'btc-price';
+  const cachedPrice = await redis.get(cacheKey);
+  
+  if (cachedPrice) {
+    return parseFloat(cachedPrice);
+  }
+
+  const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+  const price = response.data.bitcoin.usd;
+  await redis.set(cacheKey, price.toString(), 'EX', 60);
+  return price;
+}
+
+function processMarketData(coinGeckoData, binanceData) {
+  const binanceMap = binanceData.reduce((acc, pair) => {
+    acc[pair.symbol] = pair;
+    return acc;
+  }, {});
+
+  return coinGeckoData.map(coin => {
+    const binancePair = binanceMap[`${coin.symbol.toUpperCase()}USDT`] || {};
+    return {
+      id: coin.id,
+      name: coin.name,
+      symbol: coin.symbol,
+      image: coin.image,
+      currentPrice: coin.current_price,
+      priceChange1h: coin.price_change_percentage_1h_in_currency,
+      priceChange24h: coin.price_change_percentage_24h_in_currency,
+      priceChange7d: coin.price_change_percentage_7d_in_currency,
+      volume24h: coin.total_volume,
+      marketCap: coin.market_cap,
+      high24h: coin.high_24h,
+      low24h: coin.low_24h,
+      sparkline: coin.sparkline_in_7d.price,
+      orderBook: {
+        bids: binancePair.bidPrice ? [[binancePair.bidPrice, binancePair.bidQty]] : [],
+        asks: binancePair.askPrice ? [[binancePair.askPrice, binancePair.askQty]] : []
+      }
+    };
+  });
+}
+
+async function executeTrade(userId, coinId, amount, price, type) {
+  const trade = new Trade({
+    userId,
+    coinId,
+    amount,
+    price,
+    type,
+    status: 'completed',
+    executedAt: new Date()
+  });
+
+  await trade.save();
+  return trade;
+}
+
+// Middleware
+async function validateBalance(req, res, next) {
+  if (req.user.balance < 100) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Insufficient balance. Please deposit.' 
+    });
+  }
+  next();
+}
 
 
 
