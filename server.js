@@ -1069,7 +1069,6 @@ redisClient.on('error', (err) => console.log('Redis Client Error', err));
 redisClient.connect();
 
 // MongoDB setup for user data
-const mongoose = require('mongoose');
 mongoose.connect('mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
   useNewUrlParser: true,
   useUnifiedTopology: true
