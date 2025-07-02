@@ -148,6 +148,30 @@ const TransactionSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
+// Futures Position Schema
+const futuresSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  pair: String,
+  position: String, // 'long' or 'short'
+  amount: Number,
+  entryPrice: Number,
+  leverage: Number,
+  liquidationPrice: Number,
+  timestamp: { type: Date, default: Date.now }
+});
+
+// Earn Deposit Schema
+const earnSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  asset: String,
+  amount: Number,
+  apy: Number,
+  duration: String, // 'flexible', '30d', '90d'
+  startDate: { type: Date, default: Date.now }
+});
+
+
+
 const SupportTicketSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     email: { type: String, required: true },
@@ -198,6 +222,8 @@ const Transaction = mongoose.model('Transaction', TransactionSchema);
 const SupportTicket = mongoose.model('SupportTicket', SupportTicketSchema);
 const FAQ = mongoose.model('FAQ', FAQSchema);
 const Coin = mongoose.model('Coin', CoinSchema);
+const Futures = mongoose.model('Futures', futuresSchema);
+const Earn = mongoose.model('Earn', earnSchema);
 const SystemLog = mongoose.model('SystemLog', SystemLogSchema);
 
 // Initialize default admin if not exists
