@@ -22,6 +22,7 @@ const NEWS_UPDATE_INTERVAL = 60 * 60 * 1000; // 1 hour
 const app = express();
 const axios = require('axios');
 const router = express.Router();
+const Redis = require('ioredis');
 const _ = require('lodash');
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = '17581758Na.%';
