@@ -21,6 +21,7 @@ const CRYPTOCOMPARE_KEY = '5d87784487440f9f5fde0fae0f8e36c5b59033162e7f72a3044b5
 const NEWS_UPDATE_INTERVAL = 60 * 60 * 1000; // 1 hour
 const app = express();
 const axios = require('axios');
+const { createServer } = require('http');
 const router = express.Router();
 const _ = require('lodash');
 const PORT = process.env.PORT || 5000;
@@ -28,21 +29,6 @@ const JWT_SECRET = '17581758Na.%';
 const DEPOSIT_ADDRESS = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
 
 
-// WebSocket Server Setup
-const { createServer } = require('http');
-
-// Create HTTP server
-const server = createServer(app);
-
-// Create WebSocket server
-const wss = new WebSocketServer({ noServer: true });
-
-// Handle HTTP server upgrade
-server.on('upgrade', (request, socket, head) => {
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit('connection', ws, request);
-  });
-});
 
 // MongoDB Connection
 mongoose.connect('mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
