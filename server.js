@@ -44,21 +44,6 @@ const transporter = nodemailer.createTransport({
         pass: '6c08aa4f2c679a'
     }
 });
-// Replace your existing Redis initialization with this:
-
-// At the top of your file (with other requires)
-const Redis = require('ioredis');
-
-// Initialize Redis only if not already initialized
-if (!global.redisClient) {
-  global.redisClient = new Redis({
-    host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-    port: 14450,
-    password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
-  });
-}
-
-// Then use global.redisClient throughout your code instead of redis
 
 // Security Middleware
 app.use(helmet());
@@ -97,6 +82,12 @@ const apiLimiter = rateLimit({
     max: 100
 });
 app.use('/api/', apiLimiter);
+
+const redis = new Redis({
+  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+  port: 14450,
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
+});
 
 // Database Models
 const UserSchema = new mongoose.Schema({
