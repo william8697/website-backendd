@@ -1007,9 +1007,9 @@ const Redis = require('ioredis');
 
 // Create Redis client
 const redis = new Redis({
-  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com:14450',
   port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
 });
 
 // Initialize values if they don't exist
