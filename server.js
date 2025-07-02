@@ -1059,11 +1059,12 @@ app.get('/api/market-stats', async (req, res) => {
 
 
 
-// Redis client setup (assuming it's already declared globally)
-const redisClient = redis.createClient({
-  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-  port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
+
+
+const redis = new Redis({
+  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com', // Remove port from here
+  port: 14450, // Port as separate property
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
 });
 
 redisClient.on('error', (err) => console.error('Redis Client Error:', err));
