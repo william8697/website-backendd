@@ -1059,12 +1059,6 @@ app.get('/api/market-stats', async (req, res) => {
 
 
 
-const redis = new Redis({
-  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com', // Remove port from here
-  port: 14450, // Port as separate property
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
-});
-
 // MongoDB setup for user data
 const formatCoinData = (coin) => ({
   id: coin.id,
