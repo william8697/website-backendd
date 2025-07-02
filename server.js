@@ -1119,36 +1119,53 @@ router.get('/api/markets/gainers', rateLimit({ windowMs: 60000, max: 60 }), asyn
   }
 });
 
-// Trending Endpoint
+
+// Helper function should be defined BEFORE the routes that use it
+async function getBTCPrice() {
+  const cacheKey = 'btc-price';
+  const cachedPrice = await global.redisClient.get(cacheKey);
+  
+  if (cachedPrice) {
+    return parseFloat(cachedPrice);
+  }
+
+  const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+  const price = response.data.bitcoin.usd;
+  await global.redisClient.set(cacheKey, price.toString(), 'EX', 60);
+  return price;
+}
+
+// Then your trending endpoint should be updated to:
 router.get('/api/markets/trending', rateLimit({ windowMs: 60000, max: 60 }), async (req, res) => {
   try {
     const cacheKey = 'trending-coins';
-    const cachedData = await redis.get(cacheKey);
+    const cachedData = await global.redisClient.get(cacheKey);
     
     if (cachedData) {
       return res.json({ success: true, trending: JSON.parse(cachedData) });
     }
 
     const response = await axios.get('https://api.coingecko.com/api/v3/search/trending');
-    const trending = response.data.coins.map(coin => ({
+    const btcPrice = await getBTCPrice(); // Get BTC price first
+    
+    const trending = await Promise.all(response.data.coins.map(async (coin) => ({
       id: coin.item.id,
       name: coin.item.name,
       symbol: coin.item.symbol,
       image: coin.item.large,
-      price: coin.item.price_btc * (await getBTCPrice()),
-      change24h: coin.item.data.price_change_percentage_24h.usd,
+      price: coin.item.price_btc * btcPrice,
+      change24h: coin.item.data.price_change_percentage_24h?.usd || 0,
       volume: coin.item.data.total_volume,
       marketCap: coin.item.data.market_cap
-    }));
+    })));
 
-    await redis.set(cacheKey, JSON.stringify(trending), 'EX', 120);
+    await global.redisClient.set(cacheKey, JSON.stringify(trending), 'EX', 120);
     res.json({ success: true, trending });
   } catch (error) {
     console.error('Trending error:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch trending coins' });
   }
 });
-
 // Trade Endpoints
 router.post('/api/trades/buy', authenticateUser, validateBalance, async (req, res) => {
   try {
