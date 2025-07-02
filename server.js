@@ -1058,227 +1058,310 @@ app.get('/api/market-stats', async (req, res) => {
 //Done
 
 
-// Market Overview Endpoint
-router.get('/markets/overview', [
-  check('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100')
-], async (req, res) => {
+// Market Data Endpoints
+router.get('/markets/overview', async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     const limit = parseInt(req.query.limit) || 10;
-    const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
-      params: {
-        vs_currency: 'usd',
-        order: 'market_cap_desc',
-        per_page: limit,
-        page: 1,
-        sparkline: true,
-        price_change_percentage: '1h,24h,7d'
+    
+    // Fetch market data from CoinGecko
+    const response = await axios.get(
+      'https://api.coingecko.com/api/v3/coins/markets',
+      {
+        params: {
+          vs_currency: 'usd',
+          order: 'market_cap_desc',
+          per_page: limit,
+          page: 1,
+          sparkline: true,
+          price_change_percentage: '1h,24h,7d'
+        }
       }
-    });
+    );
 
-    const data = response.data.map(coin => ({
+    const formattedData = response.data.map(coin => ({
       id: coin.id,
       name: coin.name,
       symbol: coin.symbol,
       image: coin.image,
       current_price: coin.current_price,
-      price_change_percentage_1h_in_currency: coin.price_change_percentage_1h_in_currency,
-      price_change_percentage_24h: coin.price_change_percentage_24h,
-      price_change_percentage_7d_in_currency: coin.price_change_percentage_7d_in_currency,
-      total_volume: coin.total_volume,
+      price_change_percentage_1h: coin.price_change_percentage_1h_in_currency,
+      price_change_percentage_24h: coin.price_change_percentage_24h_in_currency,
+      price_change_percentage_7d: coin.price_change_percentage_7d_in_currency,
       market_cap: coin.market_cap,
-      sparkline_in_7d: coin.sparkline_in_7d
+      total_volume: coin.total_volume,
+      sparkline_in_7d: coin.sparkline_in_7d,
+      last_updated: coin.last_updated
     }));
 
-    res.json({ success: true, data });
+    res.json({
+      success: true,
+      data: formattedData
+    });
   } catch (error) {
-    console.error('Market overview error:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch market data' });
+    console.error('Error fetching market overview:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch market data'
+    });
   }
 });
 
-// Top Gainers Endpoint
-router.get('/markets/gainers', [
-  check('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100')
-], async (req, res) => {
+router.get('/markets/gainers', async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     const limit = parseInt(req.query.limit) || 10;
-    const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
-      params: {
-        vs_currency: 'usd',
-        order: 'price_change_percentage_24h_desc',
-        per_page: limit,
-        page: 1,
-        sparkline: false,
-        price_change_percentage: '24h'
+    
+    // Fetch top gainers from CoinGecko
+    const response = await axios.get(
+      'https://api.coingecko.com/api/v3/coins/markets',
+      {
+        params: {
+          vs_currency: 'usd',
+          order: 'price_change_percentage_24h_desc',
+          per_page: limit,
+          page: 1,
+          sparkline: false,
+          price_change_percentage: '1h,24h,7d'
+        }
       }
-    });
+    );
 
-    const data = response.data.map(coin => ({
+    const formattedData = response.data.map(coin => ({
       id: coin.id,
       name: coin.name,
       symbol: coin.symbol,
       image: coin.image,
       current_price: coin.current_price,
-      price_change_percentage_24h: coin.price_change_percentage_24h,
+      price_change_percentage_24h: coin.price_change_percentage_24h_in_currency,
+      market_cap: coin.market_cap,
       total_volume: coin.total_volume,
-      market_cap: coin.market_cap
+      last_updated: coin.last_updated
     }));
 
-    res.json({ success: true, data });
-  } catch (error) {
-    console.error('Top gainers error:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch top gainers' });
-  }
-});
-
-// Trending Coins Endpoint
-router.get('/markets/trending', [
-  check('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const limit = parseInt(req.query.limit) || 10;
-    const response = await axios.get('https://api.coingecko.com/api/v3/search/trending');
-    
-    const data = response.data.coins.slice(0, limit).map(coin => {
-      const coinData = coin.item;
-      return {
-        id: coinData.id,
-        name: coinData.name,
-        symbol: coinData.symbol,
-        image: coinData.large,
-        current_price: coinData.price_btc * await getBTCPrice(), // Convert from BTC to USD
-        price_change_percentage_24h: coinData.data.price_change_percentage_24h.usd,
-        total_volume: coinData.data.total_volume,
-        market_cap: coinData.data.market_cap
-      };
+    res.json({
+      success: true,
+      data: formattedData
     });
-
-    res.json({ success: true, data });
   } catch (error) {
-    console.error('Trending coins error:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch trending coins' });
+    console.error('Error fetching top gainers:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch top gainers'
+    });
   }
 });
 
-// Helper function to get current BTC price in USD
-async function getBTCPrice() {
-  const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
-  return response.data.bitcoin.usd;
-}
-
-// Trade Execution Endpoint (used by all sections)
-router.post('/markets/trade/:action', authMiddleware, [
-  check('coinId').notEmpty().withMessage('Coin ID is required'),
-  check('amount').isFloat({ min: 0.00000001 }).withMessage('Amount must be a positive number'),
-  check('price').isFloat({ min: 0.00000001 }).withMessage('Price must be a positive number')
-], async (req, res) => {
+router.get('/markets/trending', async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    const limit = parseInt(req.query.limit) || 10;
+    
+    // First get trending coin IDs from search trends
+    const trendingResponse = await axios.get(
+      'https://api.coingecko.com/api/v3/search/trending'
+    );
+
+    const trendingIds = trendingResponse.data.coins
+      .slice(0, limit)
+      .map(coin => coin.item.id);
+
+    // Then fetch full market data for those coins
+    if (trendingIds.length > 0) {
+      const marketResponse = await axios.get(
+        'https://api.coingecko.com/api/v3/coins/markets',
+        {
+          params: {
+            vs_currency: 'usd',
+            ids: trendingIds.join(','),
+            sparkline: false,
+            price_change_percentage: '1h,24h,7d'
+          }
+        }
+      );
+
+      const formattedData = marketResponse.data.map(coin => ({
+        id: coin.id,
+        name: coin.name,
+        symbol: coin.symbol,
+        image: coin.image,
+        current_price: coin.current_price,
+        price_change_percentage_24h: coin.price_change_percentage_24h_in_currency,
+        market_cap: coin.market_cap,
+        total_volume: coin.total_volume,
+        last_updated: coin.last_updated
+      }));
+
+      res.json({
+        success: true,
+        data: formattedData
+      });
+    } else {
+      res.json({
+        success: true,
+        data: []
+      });
+    }
+  } catch (error) {
+    console.error('Error fetching trending coins:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch trending coins'
+    });
+  }
+});
+
+// Trade Execution Endpoint
+router.post('/markets/trade', authenticateUser, async (req, res) => {
+  try {
+    const { coinId, amount, price, type } = req.body;
+    const userId = req.user._id;
+
+    // Validate input
+    if (!coinId || !amount || !price || !type) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields'
+      });
     }
 
-    const { coinId, amount, price } = req.body;
-    const action = req.params.action; // 'buy' or 'sell'
-    const userId = req.user.id;
-    
-    // Check user balance
+    if (isNaN(amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid amount'
+      });
+    }
+
+    if (amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Amount must be greater than 0'
+      });
+    }
+
+    // Check minimum balance for trade
+    const tradeValue = amount * price;
+    const minTradeValue = 100; // $100 minimum
+
+    if (tradeValue < minTradeValue) {
+      return res.status(400).json({
+        success: false,
+        error: `Minimum trade amount is $${minTradeValue}`
+      });
+    }
+
+    // Fetch user balance
     const user = await User.findById(userId);
     if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
     }
 
-    const totalValue = amount * price;
-    
-    if (action === 'buy' && user.balance < totalValue) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Insufficient balance. Please deposit.',
-        required: totalValue,
-        currentBalance: user.balance
+    // Additional checks for sell orders
+    if (type === 'sell') {
+      const portfolioItem = user.portfolio.find(item => item.coinId === coinId);
+      if (!portfolioItem || portfolioItem.amount < amount) {
+        return res.status(400).json({
+          success: false,
+          error: 'Insufficient balance for this trade'
+        });
+      }
+    }
+
+    // Check if user has enough balance for buy orders
+    if (type === 'buy' && user.balance < tradeValue) {
+      return res.status(400).json({
+        success: false,
+        error: 'Insufficient balance'
       });
     }
 
     // Execute trade
-    let portfolioItem = await Portfolio.findOne({ userId, coinId });
-    
-    if (action === 'buy') {
+    let profit = 0;
+    let newBalance = user.balance;
+    let newPortfolio = [...user.portfolio];
+
+    if (type === 'buy') {
       // Deduct from balance and add to portfolio
-      user.balance -= totalValue;
+      newBalance -= tradeValue;
       
-      if (portfolioItem) {
-        portfolioItem.amount += amount;
-        portfolioItem.avgPrice = ((portfolioItem.avgPrice * portfolioItem.amount) + (price * amount)) / (portfolioItem.amount + amount);
+      const existingItem = newPortfolio.find(item => item.coinId === coinId);
+      if (existingItem) {
+        existingItem.amount += amount;
+        existingItem.avgPrice = ((existingItem.avgPrice * (existingItem.amount - amount)) + (price * amount)) / existingItem.amount;
       } else {
-        portfolioItem = new Portfolio({
-          userId,
+        newPortfolio.push({
           coinId,
           amount,
           avgPrice: price
         });
       }
-    } else { // sell
-      if (!portfolioItem || portfolioItem.amount < amount) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Insufficient coin balance to sell'
-        });
-      }
+    } else {
+      // Sell logic - add to balance and deduct from portfolio
+      const portfolioItem = newPortfolio.find(item => item.coinId === coinId);
+      profit = (price - portfolioItem.avgPrice) * amount;
+      newBalance += tradeValue;
       
-      // Add to balance and deduct from portfolio
-      user.balance += totalValue;
       portfolioItem.amount -= amount;
-      
       if (portfolioItem.amount <= 0) {
-        await Portfolio.deleteOne({ _id: portfolioItem._id });
-        portfolioItem = null;
+        newPortfolio = newPortfolio.filter(item => item.coinId !== coinId);
       }
     }
 
-    // Save changes
-    await user.save();
-    if (portfolioItem) await portfolioItem.save();
-    
-    // Record transaction
-    const transaction = new Transaction({
-      userId,
-      coinId,
-      action,
-      amount,
-      price,
-      totalValue,
-      status: 'completed'
+    // Update user in database
+    await User.findByIdAndUpdate(userId, {
+      balance: newBalance,
+      portfolio: newPortfolio
     });
-    await transaction.save();
 
-    res.json({ 
+    // Emit WebSocket update
+    if (req.app.get('io')) {
+      req.app.get('io').emit('tradeUpdate', {
+        userId: userId.toString(),
+        balance: newBalance,
+        portfolio: newPortfolio,
+        profit
+      });
+    }
+
+    res.json({
       success: true,
-      newBalance: user.balance,
-      portfolio: await Portfolio.find({ userId }),
-      profit: action === 'sell' ? (price - (portfolioItem?.avgPrice || 0)) * amount : 0
+      data: {
+        newBalance,
+        portfolio: newPortfolio,
+        profit
+      }
     });
-
   } catch (error) {
-    console.error('Trade execution error:', error);
-    res.status(500).json({ success: false, message: 'Trade execution failed' });
+    console.error('Error executing trade:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to execute trade'
+    });
   }
 });
 
+// Authentication middleware
+function authenticateUser(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({
+      success: false,
+      error: 'Invalid or expired token'
+    });
+  }
+}
 
 // Other API Routes
 
