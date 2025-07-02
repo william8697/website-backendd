@@ -1205,6 +1205,34 @@ router.get('/api/markets/trending', async (req, res) => {
  * @apiName GetTradePairs
  * @apiGroup Trading
  */
+
+// ======================
+// AUTHENTICATION MIDDLEWARE
+// ======================
+
+const authenticateUser = async (req, res, next) => {
+  try {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+    
+    if (!token) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
+    const user = await User.findById(decoded.id);
+
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    req.user = user;
+    req.token = token;
+    next();
+  } catch (error) {
+    res.status(401).json({ error: 'Please authenticate' });
+  }
+};
+
 router.get('/api/trade/pairs', async (req, res) => {
   try {
     const cacheKey = 'trade-pairs';
