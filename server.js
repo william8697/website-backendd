@@ -1057,246 +1057,176 @@ app.get('/api/market-stats', async (req, res) => {
 
 //Done
 
-
-
-const { MongoClient, ObjectId } = require('mongodb');
-
-
 ({
   host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX',
-  enableOfflineQueue: false,
-  maxRetriesPerRequest: 3,
-  retryStrategy: (times) => Math.min(times * 100, 5000)
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX'
 });
 
-// Rate limiter configuration (5 requests per minute per endpoint)
-const rateLimiter = new RateLimiterRedis({
-  storeClient: redis,
-  points: 5,
-  duration: 60,
-  keyPrefix: 'rl_flx'
-});
-
-// MongoDB connection with production settings
-const mongoUri = 'mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
-const mongoClient = new MongoClient(mongoUri, {
-  connectTimeoutMS: 10000,
-  socketTimeoutMS: 30000,
-  serverSelectionTimeoutMS: 5000,
-  maxPoolSize: 50,
-  retryWrites: true,
-  retryReads: true
-});
-
-let db;
-(async () => {
-  try {
-    await mongoClient.connect();
-    db = mongoClient.db('bitluxo');
-    console.log('MongoDB connected successfully');
-  } catch (err) {
-    console.error('MongoDB connection error:', err);
-    process.exit(1);
-  }
-})();
-
-// JWT configuration
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
+// Middleware to authenticate JWT and attach user to request
+const authenticateJWT = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  
+  if (authHeader) {
+    const token = authHeader.split(' ')[1];
     
-    // Check Redis for session validity
-    const sessionValid = await redis.get(`session:${decoded.id}`);
-    if (!sessionValid) {
-      return res.status(401).json({ error: 'Session expired or invalid' });
-    }
+    jwt.verify(token, JWT_SECRET, async (err, user) => {
+      if (err) {
+        return res.sendStatus(403);
+      }
 
-    req.user = decoded;
-    next();
-  } catch (err) {
-    if (err.name === 'TokenExpiredError') {
-      return res.status(401).json({ error: 'Token expired' });
-    }
-    return res.status(401).json({ error: 'Invalid token' });
-  }
-};
+      // Check if token is blacklisted in Redis
+      const isBlacklisted = await redis.get(`blacklist:${token}`);
+      if (isBlacklisted) {
+        return res.sendStatus(403);
+      }
 
-// Rate limiting middleware
-const rateLimit = async (req, res, next) => {
-  try {
-    await rateLimiter.consume(req.ip);
-    next();
-  } catch (rlRejected) {
-    res.status(429).json({ 
-      error: 'Too many requests',
-      retryAfter: rlRejected.msBeforeNext / 1000
+      // Fetch user balance from Redis cache or fallback to MongoDB
+      let balance = await redis.get(`user:${user.userId}:balance`);
+      if (!balance) {
+        const dbUser = await User.findById(user.userId).select('balance');
+        if (!dbUser) return res.sendStatus(404);
+        
+        balance = dbUser.balance;
+        await redis.set(`user:${user.userId}:balance`, balance, 'EX', 3600); // Cache for 1 hour
+      }
+
+      req.user = {
+        ...user,
+        balance: parseFloat(balance)
+      };
+      next();
     });
+  } else {
+    res.sendStatus(401);
   }
 };
 
 /**
- * @route GET /api/user/balance
- * @desc Check user balance and trading eligibility
- * @access Private
- * @security JWT
+ * @api {get} /api/balance Check User Balance
+ * @apiName GetBalance
+ * @apiGroup User
+ * @apiHeader {String} Authorization Bearer token
+ * 
+ * @apiSuccess {Number} balance Current user balance in USD
+ * @apiSuccess {Boolean} canTrade Whether balance meets $100 minimum
  */
-router.get('/balance', rateLimit, authenticate, async (req, res) => {
+router.get('/api/balance', authenticateJWT, async (req, res) => {
   try {
-    // Try to get from Redis cache first
-    const cacheKey = `user:${req.user.id}:balance`;
-    const cachedBalance = await redis.get(cacheKey);
+    res.json({
+      balance: req.user.balance,
+      canTrade: req.user.balance >= 100
+    });
+  } catch (error) {
+    console.error('Balance check error:', error);
+    res.status(500).json({ error: 'Failed to check balance' });
+  }
+});
 
-    if (cachedBalance) {
-      const { balance, lastUpdated } = JSON.parse(cachedBalance);
-      return res.json({ 
-        balance,
-        canTrade: balance >= 100,
-        cached: true,
-        lastUpdated
-      });
+/**
+ * @api {post} /api/trade/execute Execute Trade
+ * @apiName ExecuteTrade
+ * @apiGroup Trading
+ * @apiHeader {String} Authorization Bearer token
+ * 
+ * @apiBody {String} coinId Coin identifier (e.g., "bitcoin")
+ * @apiBody {Number} amount Amount to trade
+ * @apiBody {Number} price Current price per unit
+ * @apiBody {String="buy","sell"} type Trade type
+ * 
+ * @apiSuccess {Number} newBalance Updated balance after trade
+ * @apiSuccess {Object} trade Executed trade details
+ */
+router.post('/api/trade/execute', authenticateJWT, async (req, res) => {
+  const { coinId, amount, price, type } = req.body;
+  
+  // Validate input
+  if (!coinId || !amount || !price || !type || !['buy', 'sell'].includes(type)) {
+    return res.status(400).json({ error: 'Invalid trade parameters' });
+  }
+
+  if (amount <= 0 || price <= 0) {
+    return res.status(400).json({ error: 'Amount and price must be positive' });
+  }
+
+  const totalValue = amount * price;
+  
+  // Check balance for buy orders
+  if (type === 'buy' && req.user.balance < totalValue) {
+    return res.status(400).json({ 
+      error: 'Insufficient balance',
+      required: totalValue,
+      available: req.user.balance
+    });
+  }
+
+  // Check minimum balance requirement
+  if (req.user.balance < 100) {
+    return res.status(400).json({ 
+      error: 'Minimum $100 balance required to trade',
+      required: 100,
+      available: req.user.balance
+    });
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // 1. Update user balance
+    let newBalance;
+    if (type === 'buy') {
+      newBalance = req.user.balance - totalValue;
+    } else {
+      newBalance = req.user.balance + totalValue;
     }
 
-    // Fetch from MongoDB if not in cache
-    const user = await db.collection('users').findOne(
-      { _id: new ObjectId(req.user.id) },
-      { projection: { balance: 1 } }
+    // 2. Update user in MongoDB
+    await User.findByIdAndUpdate(
+      req.user.userId,
+      { $set: { balance: newBalance } },
+      { session }
     );
 
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
+    // 3. Create trade record
+    const trade = new Trade({
+      userId: req.user.userId,
+      coinId,
+      amount,
+      price,
+      type,
+      totalValue,
+      status: 'completed'
+    });
+    await trade.save({ session });
 
-    // Cache the balance with 30-second TTL
-    const balanceData = {
-      balance: user.balance,
-      lastUpdated: new Date().toISOString()
-    };
-    await redis.setex(cacheKey, 30, JSON.stringify(balanceData));
+    // 4. Update Redis cache
+    await redis.set(`user:${req.user.userId}:balance`, newBalance.toString());
+    await redis.publish('trade-updates', JSON.stringify({
+      userId: req.user.userId,
+      newBalance,
+      trade: _.pick(trade, ['coinId', 'amount', 'price', 'type'])
+    }));
+
+    await session.commitTransaction();
+    session.endSession();
 
     res.json({
-      balance: user.balance,
-      canTrade: user.balance >= 100
+      newBalance,
+      trade: _.pick(trade, ['coinId', 'amount', 'price', 'type', 'createdAt'])
     });
-  } catch (err) {
-    console.error('Balance check error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    
+    console.error('Trade execution error:', error);
+    res.status(500).json({ error: 'Trade execution failed' });
   }
 });
 
-/**
- * @route POST /api/trades
- * @desc Execute a trade (buy/sell)
- * @access Private
- * @security JWT
- * @body {String} coinId Coin identifier
- * @body {Number} amount Amount to trade
- * @body {Number} price Current price
- * @body {String} type 'buy' or 'sell'
- */
-router.post('/trades', rateLimit, authenticate, async (req, res) => {
-  try {
-    const { coinId, amount, price, type } = req.body;
-
-    // Input validation
-    if (!['buy', 'sell'].includes(type)) {
-      return res.status(400).json({ error: 'Invalid trade type' });
-    }
-    if (isNaN(amount) || amount <= 0) {
-      return res.status(400).json({ error: 'Invalid amount' });
-    }
-    if (isNaN(price) || price <= 0) {
-      return res.status(400).json({ error: 'Invalid price' });
-    }
-
-    // Start MongoDB session for transaction
-    const session = mongoClient.startSession();
-    let result;
-
-    try {
-      await session.withTransaction(async () => {
-        // Get user with write concern
-        const user = await db.collection('users').findOne(
-          { _id: new ObjectId(req.user.id) },
-          { session }
-        );
-
-        if (!user) {
-          throw new Error('User not found');
-        }
-
-        // Check balance for buy trades
-        const totalCost = amount * price;
-        if (type === 'buy' && user.balance < totalCost) {
-          throw new Error('Insufficient balance');
-        }
-
-        // Update user balance
-        const balanceUpdate = type === 'buy' 
-          ? { $inc: { balance: -totalCost } }
-          : { $inc: { balance: totalCost } };
-
-        await db.collection('users').updateOne(
-          { _id: new ObjectId(req.user.id) },
-          balanceUpdate,
-          { session }
-        );
-
-        // Record the trade
-        const trade = {
-          userId: new ObjectId(req.user.id),
-          coinId,
-          amount,
-          price,
-          type,
-          total: totalCost,
-          status: 'completed',
-          timestamp: new Date()
-        };
-
-        const tradeResult = await db.collection('trades').insertOne(trade, { session });
-        
-        // Update portfolio if buy
-        if (type === 'buy') {
-          await db.collection('portfolios').updateOne(
-            { userId: new ObjectId(req.user.id), coinId },
-            { $inc: { amount } },
-            { upsert: true, session }
-          );
-        }
-
-        result = {
-          newBalance: type === 'buy' ? user.balance - totalCost : user.balance + totalCost,
-          tradeId: tradeResult.insertedId
-        };
-
-        // Invalidate balance cache
-        await redis.del(`user:${req.user.id}:balance`);
-      });
-    } finally {
-      await session.endSession();
-    }
-
-    res.json({
-      success: true,
-      newBalance: result.newBalance,
-      tradeId: result.tradeId
-    });
-  } catch (err) {
-    console.error('Trade execution error:', err);
-    const status = err.message === 'Insufficient balance' ? 400 : 500;
-    res.status(status).json({ 
-      error: err.message || 'Trade execution failed' 
-    });
-  }
-});
-
-// Error handling middleware (should be at the end)
-router.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ error: 'Internal server error' });
-});
-
-module.exports = router;
+// Add the routes to your Express app
+app.use(router);
 
 
 // Other API Routes
