@@ -1104,17 +1104,6 @@ let db;
 
 // JWT configuration
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
-
-// Middleware to verify JWT and attach user to request
-const authenticate = async (req, res, next) => {
-  try {
-    const authHeader = req.headers['authorization'];
-    if (!authHeader) return res.status(401).json({ error: 'Authorization header missing' });
-
-    const token = authHeader.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Token missing' });
-
-    const decoded = jwt.verify(token, JWT_SECRET);
     
     // Check Redis for session validity
     const sessionValid = await redis.get(`session:${decoded.id}`);
