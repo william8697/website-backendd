@@ -1057,204 +1057,260 @@ app.get('/api/market-stats', async (req, res) => {
 
 //Done
 
-// Market Overview Endpoint
-app.get('/api/markets/overview', async (req, res) => {
+
+
+const { MongoClient, ObjectId } = require('mongodb');
+
+
+// Initialize Redis client with production settings
+const redis = new Redis({
+  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+  port: 14450,
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwX',
+  enableOfflineQueue: false,
+  maxRetriesPerRequest: 3,
+  retryStrategy: (times) => Math.min(times * 100, 5000)
+});
+
+// Rate limiter configuration (5 requests per minute per endpoint)
+const rateLimiter = new RateLimiterRedis({
+  storeClient: redis,
+  points: 5,
+  duration: 60,
+  keyPrefix: 'rl_flx'
+});
+
+// MongoDB connection with production settings
+const mongoUri = 'mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+const mongoClient = new MongoClient(mongoUri, {
+  connectTimeoutMS: 10000,
+  socketTimeoutMS: 30000,
+  serverSelectionTimeoutMS: 5000,
+  maxPoolSize: 50,
+  retryWrites: true,
+  retryReads: true
+});
+
+let db;
+(async () => {
   try {
-    const limit = parseInt(req.query.limit) || 10;
+    await mongoClient.connect();
+    db = mongoClient.db('bitluxo');
+    console.log('MongoDB connected successfully');
+  } catch (err) {
+    console.error('MongoDB connection error:', err);
+    process.exit(1);
+  }
+})();
+
+// JWT configuration
+const JWT_SECRET = process.env.JWT_SECRET || '17581758Na.%';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
+
+// Middleware to verify JWT and attach user to request
+const authenticate = async (req, res, next) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.status(401).json({ error: 'Authorization header missing' });
+
+    const token = authHeader.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Token missing' });
+
+    const decoded = jwt.verify(token, JWT_SECRET);
     
-    // Fetch data from CoinGecko API
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets',
-      {
-        params: {
-          vs_currency: 'usd',
-          order: 'market_cap_desc',
-          per_page: limit,
-          page: 1,
-          sparkline: true,
-          price_change_percentage: '1h,24h,7d'
-        }
-      }
+    // Check Redis for session validity
+    const sessionValid = await redis.get(`session:${decoded.id}`);
+    if (!sessionValid) {
+      return res.status(401).json({ error: 'Session expired or invalid' });
+    }
+
+    req.user = decoded;
+    next();
+  } catch (err) {
+    if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Token expired' });
+    }
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
+// Rate limiting middleware
+const rateLimit = async (req, res, next) => {
+  try {
+    await rateLimiter.consume(req.ip);
+    next();
+  } catch (rlRejected) {
+    res.status(429).json({ 
+      error: 'Too many requests',
+      retryAfter: rlRejected.msBeforeNext / 1000
+    });
+  }
+};
+
+/**
+ * @route GET /api/user/balance
+ * @desc Check user balance and trading eligibility
+ * @access Private
+ * @security JWT
+ */
+router.get('/balance', rateLimit, authenticate, async (req, res) => {
+  try {
+    // Try to get from Redis cache first
+    const cacheKey = `user:${req.user.id}:balance`;
+    const cachedBalance = await redis.get(cacheKey);
+
+    if (cachedBalance) {
+      const { balance, lastUpdated } = JSON.parse(cachedBalance);
+      return res.json({ 
+        balance,
+        canTrade: balance >= 100,
+        cached: true,
+        lastUpdated
+      });
+    }
+
+    // Fetch from MongoDB if not in cache
+    const user = await db.collection('users').findOne(
+      { _id: new ObjectId(req.user.id) },
+      { projection: { balance: 1 } }
     );
 
-    const data = response.data.map(coin => ({
-      id: coin.id,
-      name: coin.name,
-      symbol: coin.symbol,
-      image: coin.image,
-      current_price: coin.current_price,
-      price_change_percentage_1h_in_currency: coin.price_change_percentage_1h_in_currency,
-      price_change_percentage_24h: coin.price_change_percentage_24h,
-      price_change_percentage_7d: coin.price_change_percentage_7d_in_currency,
-      total_volume: coin.total_volume,
-      market_cap: coin.market_cap,
-      sparkline_in_7d: coin.sparkline_in_7d
-    }));
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-    res.json(data);
-  } catch (error) {
-    console.error('Error fetching market overview:', error);
-    res.status(500).json({ error: 'Failed to fetch market data' });
+    // Cache the balance with 30-second TTL
+    const balanceData = {
+      balance: user.balance,
+      lastUpdated: new Date().toISOString()
+    };
+    await redis.setex(cacheKey, 30, JSON.stringify(balanceData));
+
+    res.json({
+      balance: user.balance,
+      canTrade: user.balance >= 100
+    });
+  } catch (err) {
+    console.error('Balance check error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Top Gainers Endpoint
-app.get('/api/markets/gainers', async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 5;
-    
-    // Fetch data from CoinGecko API
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets',
-      {
-        params: {
-          vs_currency: 'usd',
-          order: 'price_change_percentage_24h_desc',
-          per_page: limit,
-          page: 1,
-          sparkline: false
-        }
-      }
-    );
-
-    const data = response.data.map(coin => ({
-      id: coin.id,
-      name: coin.name,
-      symbol: coin.symbol,
-      image: coin.image,
-      current_price: coin.current_price,
-      price_change_percentage_24h: coin.price_change_percentage_24h
-    }));
-
-    res.json(data);
-  } catch (error) {
-    console.error('Error fetching top gainers:', error);
-    res.status(500).json({ error: 'Failed to fetch top gainers' });
-  }
-});
-
-// Trending Coins Endpoint
-app.get('/api/markets/trending', async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 5;
-    
-    // First fetch trending coin IDs from search/trending
-    const trendingResponse = await axios.get(
-      'https://api.coingecko.com/api/v3/search/trending'
-    );
-
-    const coinIds = trendingResponse.data.coins
-      .slice(0, limit)
-      .map(coin => coin.item.id)
-      .join(',');
-
-    // Then fetch detailed market data for these coins
-    const marketResponse = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets',
-      {
-        params: {
-          vs_currency: 'usd',
-          ids: coinIds,
-          sparkline: false
-        }
-      }
-    );
-
-    const data = marketResponse.data.map(coin => ({
-      id: coin.id,
-      name: coin.name,
-      symbol: coin.symbol,
-      image: coin.image,
-      current_price: coin.current_price,
-      price_change_percentage_24h: coin.price_change_percentage_24h
-    }));
-
-    res.json(data);
-  } catch (error) {
-    console.error('Error fetching trending coins:', error);
-    res.status(500).json({ error: 'Failed to fetch trending coins' });
-  }
-});
-
-// Trade Execution Endpoint (for Market Overview section)
-app.post('/api/trades/execute', authenticateUser, async (req, res) => {
+/**
+ * @route POST /api/trades
+ * @desc Execute a trade (buy/sell)
+ * @access Private
+ * @security JWT
+ * @body {String} coinId Coin identifier
+ * @body {Number} amount Amount to trade
+ * @body {Number} price Current price
+ * @body {String} type 'buy' or 'sell'
+ */
+router.post('/trades', rateLimit, authenticate, async (req, res) => {
   try {
     const { coinId, amount, price, type } = req.body;
-    const userId = req.user.id;
 
-    // Check minimum balance requirement ($100)
-    const user = await User.findById(userId);
-    if (user.balance < 100) {
-      return res.status(400).json({ 
-        error: 'Insufficient balance. Please deposit.' 
-      });
+    // Input validation
+    if (!['buy', 'sell'].includes(type)) {
+      return res.status(400).json({ error: 'Invalid trade type' });
+    }
+    if (isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid amount' });
+    }
+    if (isNaN(price) || price <= 0) {
+      return res.status(400).json({ error: 'Invalid price' });
     }
 
-    // Calculate total trade value
-    const totalValue = amount * price;
+    // Start MongoDB session for transaction
+    const session = mongoClient.startSession();
+    let result;
 
-    // Check if user has sufficient balance for buy orders
-    if (type === 'buy' && user.balance < totalValue) {
-      return res.status(400).json({ 
-        error: 'Insufficient balance for this trade' 
-      });
-    }
+    try {
+      await session.withTransaction(async () => {
+        // Get user with write concern
+        const user = await db.collection('users').findOne(
+          { _id: new ObjectId(req.user.id) },
+          { session }
+        );
 
-    // Execute trade (simplified example)
-    if (type === 'buy') {
-      user.balance -= totalValue;
-      // Add to portfolio
-      const existingPosition = user.portfolio.find(p => p.coinId === coinId);
-      if (existingPosition) {
-        existingPosition.amount += amount;
-        existingPosition.avgPrice = 
-          ((existingPosition.avgPrice * existingPosition.amount) + totalValue) / 
-          (existingPosition.amount + amount);
-      } else {
-        user.portfolio.push({
+        if (!user) {
+          throw new Error('User not found');
+        }
+
+        // Check balance for buy trades
+        const totalCost = amount * price;
+        if (type === 'buy' && user.balance < totalCost) {
+          throw new Error('Insufficient balance');
+        }
+
+        // Update user balance
+        const balanceUpdate = type === 'buy' 
+          ? { $inc: { balance: -totalCost } }
+          : { $inc: { balance: totalCost } };
+
+        await db.collection('users').updateOne(
+          { _id: new ObjectId(req.user.id) },
+          balanceUpdate,
+          { session }
+        );
+
+        // Record the trade
+        const trade = {
+          userId: new ObjectId(req.user.id),
           coinId,
           amount,
-          avgPrice: price
-        });
-      }
-    } else {
-      // Sell logic would go here
-    }
+          price,
+          type,
+          total: totalCost,
+          status: 'completed',
+          timestamp: new Date()
+        };
 
-    await user.save();
+        const tradeResult = await db.collection('trades').insertOne(trade, { session });
+        
+        // Update portfolio if buy
+        if (type === 'buy') {
+          await db.collection('portfolios').updateOne(
+            { userId: new ObjectId(req.user.id), coinId },
+            { $inc: { amount } },
+            { upsert: true, session }
+          );
+        }
+
+        result = {
+          newBalance: type === 'buy' ? user.balance - totalCost : user.balance + totalCost,
+          tradeId: tradeResult.insertedId
+        };
+
+        // Invalidate balance cache
+        await redis.del(`user:${req.user.id}:balance`);
+      });
+    } finally {
+      await session.endSession();
+    }
 
     res.json({
       success: true,
-      newBalance: user.balance,
-      portfolio: user.portfolio
+      newBalance: result.newBalance,
+      tradeId: result.tradeId
     });
-
-  } catch (error) {
-    console.error('Error executing trade:', error);
-    res.status(500).json({ error: 'Trade execution failed' });
+  } catch (err) {
+    console.error('Trade execution error:', err);
+    const status = err.message === 'Insufficient balance' ? 400 : 500;
+    res.status(status).json({ 
+      error: err.message || 'Trade execution failed' 
+    });
   }
 });
 
-// Authentication middleware
-function authenticateUser(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ 
-      error: 'You must be logged in to perform this action' 
-    });
-  }
+// Error handling middleware (should be at the end)
+router.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
+});
 
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
-    next();
-  } catch (error) {
-    res.status(401).json({ 
-      error: 'Invalid or expired token' 
-    });
-  }
-}
+module.exports = router;
+
 
 // Other API Routes
 
