@@ -1103,7 +1103,6 @@ let db;
 })();
 
 // JWT configuration
-const JWT_SECRET = process.env.JWT_SECRET || '17581758Na.%';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
 
 // Middleware to verify JWT and attach user to request
