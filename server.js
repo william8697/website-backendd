@@ -3,256 +3,411 @@ const express = require('express');
 const mongoose = require('mongoose');
 const Redis = require('ioredis');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const mongoSanitize = require('express-mongo-sanitize');
-const xss = require('xss-clean');
-const hpp = require('hpp');
-const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
+const { body, validationResult } = require('express-validator');
 const nodemailer = require('nodemailer');
 const { OAuth2Client } = require('google-auth-library');
-const speakeasy = require('speakeasy');
-const QRCode = require('qrcode');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const { v4: uuidv4 } = require('uuid');
-const moment = require('moment');
-const socketio = require('socket.io');
-const http = require('http');
+const morgan = require('morgan');
+const cluster = require('cluster');
+const os = require('os');
+const crypto = require('crypto');
 
-// Initialize Express app
-const app = express();
-const server = http.createServer(app);
-const io = socketio(server, {
-  cors: {
-    origin: ['https://bithhash.vercel.app'],
-    methods: ['GET', 'POST']
-  }
-});
+// Environment configuration
+const config = {
+  PORT: process.env.PORT || 3000,
+  MONGODB_URI: 'mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0',
+  JWT_SECRET: '17581758Na.%',
+  JWT_EXPIRES_IN: '30d',
+  REDIS_CONFIG: {
+    host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+    port: 14450,
+    password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
+  },
+  SMTP_CONFIG: {
+    host: 'sandbox.smtp.mailtrap.io',
+    port: 2525,
+    auth: {
+      user: '7c707ac161af1c',
+      pass: '6c08aa4f2c679a'
+    }
+  },
+  FRONTEND_URL: 'https://bithhash.vercel.app',
+  GOOGLE_CLIENT_ID: '634814462335-9o4t8q95c4orcsd9sijjl52374g6vm85.apps.googleusercontent.com',
+  BTC_DEPOSIT_ADDRESS: 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k',
+  ADMIN_EMAIL: 'admin@bithash.com',
+  ADMIN_PASSWORD: 'BithashAdmin@2023!'
+};
 
-// Environment variables
-const PORT = process.env.PORT || 5000;
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
-const JWT_SECRET = process.env.JWT_SECRET || '17581758Na.%';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://bithhash.vercel.app';
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '634814462335-9o4t8q95c4orcsd9sijjl52374g6vm85.apps.googleusercontent.com';
-const MAILTRAP_USER = process.env.MAILTRAP_USER || '7c707ac161af1c';
-const MAILTRAP_PASS = process.env.MAILTRAP_PASS || '6c08aa4f2c679a';
-const BTC_DEPOSIT_ADDRESS = process.env.BTC_DEPOSIT_ADDRESS || 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
+// Initialize Redis client
+const redis = new Redis(config.REDIS_CONFIG);
 
-// Redis configuration
-const redisClient = new Redis({
-  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-  port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
-});
+// Initialize SMTP transporter
+const transporter = nodemailer.createTransport(config.SMTP_CONFIG);
 
-// Connect to MongoDB with connection pooling
-mongoose.connect(MONGODB_URI, {
+// Initialize Google OAuth client
+const googleClient = new OAuth2Client(config.GOOGLE_CLIENT_ID);
+
+// MongoDB connection
+mongoose.connect(config.MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-  poolSize: 50, // Increased connection pool size
-  socketTimeoutMS: 30000,
-  connectTimeoutMS: 30000,
-  serverSelectionTimeoutMS: 50000
+  connectTimeoutMS: 10000,
+  socketTimeoutMS: 45000,
+  serverSelectionTimeoutMS: 5000,
+  maxPoolSize: 50
 })
 .then(() => console.log('MongoDB connected successfully'))
-.catch(err => console.error('MongoDB connection error:', err));
+.catch(err => {
+  console.error('MongoDB connection error:', err);
+  process.exit(1);
+});
 
 // MongoDB models
-const User = require('./models/User');
-const Transaction = require('./models/Transaction');
-const Investment = require('./models/Investment');
-const Plan = require('./models/Plan');
-const KYC = require('./models/KYC');
-const Referral = require('./models/Referral');
-const ActivityLog = require('./models/ActivityLog');
-const APIKey = require('./models/APIKey');
-const SupportTicket = require('./models/SupportTicket');
-const Loan = require('./models/Loan');
-const Savings = require('./models/Savings');
-const Admin = require('./models/Admin');
+const UserSchema = new mongoose.Schema({
+  firstName: { type: String, required: true },
+  lastName: { type: String, required: true },
+  email: { type: String, required: true, unique: true },
+  password: { type: String, select: false },
+  googleId: { type: String, unique: true, sparse: true },
+  city: { type: String },
+  balance: {
+    main: { type: Number, default: 0 },
+    active: { type: Number, default: 0 },
+    matured: { type: Number, default: 0 },
+    savings: { type: Number, default: 0 }
+  },
+  isVerified: { type: Boolean, default: false },
+  isAdmin: { type: Boolean, default: false },
+  twoFactorEnabled: { type: Boolean, default: false },
+  kycStatus: { type: String, enum: ['none', 'pending', 'verified', 'rejected'], default: 'none' },
+  referralCode: { type: String, unique: true },
+  referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  createdAt: { type: Date, default: Date.now },
+  lastLogin: { type: Date }
+}, { timestamps: true });
 
-// Middleware
-app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+const TransactionSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  type: { type: String, enum: ['deposit', 'withdrawal', 'investment', 'earning', 'bonus', 'loan'], required: true },
+  amount: { type: Number, required: true },
+  currency: { type: String, default: 'BTC' },
+  status: { type: String, enum: ['pending', 'completed', 'failed', 'cancelled'], default: 'pending' },
+  method: { type: String },
+  address: { type: String },
+  txHash: { type: String },
+  notes: { type: String },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const InvestmentSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  planId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plan', required: true },
+  amount: { type: Number, required: true },
+  startDate: { type: Date, default: Date.now },
+  endDate: { type: Date, required: true },
+  status: { type: String, enum: ['active', 'completed', 'cancelled'], default: 'active' },
+  expectedReturn: { type: Number, required: true }
+});
+
+const PlanSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  description: { type: String, required: true },
+  returnRate: { type: Number, required: true },
+  duration: { type: Number, required: true }, // in days
+  minAmount: { type: Number, required: true },
+  maxAmount: { type: Number },
+  isActive: { type: Boolean, default: true }
+});
+
+const KYCSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  documentType: { type: String, required: true },
+  documentFront: { type: String, required: true },
+  documentBack: { type: String },
+  selfie: { type: String, required: true },
+  status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  reviewNotes: { type: String },
+  submittedAt: { type: Date, default: Date.now },
+  reviewedAt: { type: Date }
+});
+
+const AdminLogSchema = new mongoose.Schema({
+  adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  action: { type: String, required: true },
+  targetUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  details: { type: Object },
+  ipAddress: { type: String },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const User = mongoose.model('User', UserSchema);
+const Transaction = mongoose.model('Transaction', TransactionSchema);
+const Investment = mongoose.model('Investment', InvestmentSchema);
+const Plan = mongoose.model('Plan', PlanSchema);
+const KYC = mongoose.model('KYC', KYCSchema);
+const AdminLog = mongoose.model('AdminLog', AdminLogSchema);
+
+// Initialize default admin
+async function initializeAdmin() {
+  try {
+    const adminExists = await User.findOne({ email: config.ADMIN_EMAIL });
+    if (!adminExists) {
+      const hashedPassword = await bcrypt.hash(config.ADMIN_PASSWORD, 12);
+      const admin = new User({
+        firstName: 'Admin',
+        lastName: 'Bithash',
+        email: config.ADMIN_EMAIL,
+        password: hashedPassword,
+        isAdmin: true,
+        isVerified: true,
+        referralCode: crypto.randomBytes(4).toString('hex').toUpperCase(),
+        balance: {
+          main: 1000,
+          active: 0,
+          matured: 0,
+          savings: 0
+        }
+      });
+      await admin.save();
+      console.log('Default admin account created');
+    }
+  } catch (err) {
+    console.error('Error initializing admin:', err);
+  }
+}
+
+// Initialize default plans
+async function initializePlans() {
+  try {
+    const plans = await Plan.countDocuments();
+    if (plans === 0) {
+      const defaultPlans = [
+        {
+          name: 'Starter Plan',
+          description: 'Perfect for beginners in crypto mining',
+          returnRate: 5,
+          duration: 7,
+          minAmount: 0.01,
+          maxAmount: 0.5
+        },
+        {
+          name: 'Advanced Plan',
+          description: 'For experienced investors with higher returns',
+          returnRate: 8,
+          duration: 14,
+          minAmount: 0.5,
+          maxAmount: 2
+        },
+        {
+          name: 'Professional Plan',
+          description: 'Maximum returns for serious investors',
+          returnRate: 12,
+          duration: 30,
+          minAmount: 2,
+          maxAmount: 10
+        }
+      ];
+      await Plan.insertMany(defaultPlans);
+      console.log('Default investment plans created');
+    }
+  } catch (err) {
+    console.error('Error initializing plans:', err);
+  }
+}
+
+// Express app setup
+const app = express();
+
+// Security middleware
+app.use(helmet());
 app.use(cors({
-  origin: FRONTEND_URL,
+  origin: config.FRONTEND_URL,
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
-app.use(helmet());
-app.use(mongoSanitize());
-app.use(xss());
-app.use(hpp());
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
 // Rate limiting
-const limiter = rateLimit({
+const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later'
-});
-app.use('/api', limiter);
-
-// Email transporter
-const transporter = nodemailer.createTransport({
-  host: 'sandbox.smtp.mailtrap.io',
-  port: 2525,
-  auth: {
-    user: MAILTRAP_USER,
-    pass: MAILTRAP_PASS
+  handler: (req, res) => {
+    res.status(429).json({
+      status: 'error',
+      message: 'Too many requests, please try again later.'
+    });
   }
 });
 
-// Google OAuth client
-const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+// Apply rate limiting to API routes
+app.use('/api/', apiLimiter);
 
-// Utility functions
-const generateJWT = (userId) => {
-  return jwt.sign({ id: userId }, JWT_SECRET, {
-    expiresIn: JWT_EXPIRES_IN
-  });
-};
+// Logging
+app.use(morgan('combined'));
 
-const createAndSendToken = (user, statusCode, res) => {
-  const token = generateJWT(user._id);
-  
-  // Remove password from output
-  user.password = undefined;
-  
-  res.status(statusCode).json({
-    status: 'success',
-    token,
-    data: {
-      user
-    }
-  });
-};
-
-const filterObj = (obj, ...allowedFields) => {
-  const newObj = {};
-  Object.keys(obj).forEach(el => {
-    if (allowedFields.includes(el)) newObj[el] = obj[el];
-  });
-  return newObj;
-};
-
-const sendEmail = async (options) => {
+// Authentication middleware
+const authenticate = async (req, res, next) => {
   try {
-    await transporter.sendMail(options);
+    let token;
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
+    if (!token) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'You are not logged in. Please log in to get access.'
+      });
+    }
+
+    // Check Redis for blacklisted tokens
+    const isBlacklisted = await redis.get(`blacklist:${token}`);
+    if (isBlacklisted) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Invalid token. Please log in again.'
+      });
+    }
+
+    const decoded = jwt.verify(token, config.JWT_SECRET);
+    const currentUser = await User.findById(decoded.id).select('+lastLogin');
+
+    if (!currentUser) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'The user belonging to this token no longer exists.'
+      });
+    }
+
+    req.user = currentUser;
+    next();
+  } catch (err) {
+    return res.status(401).json({
+      status: 'error',
+      message: 'Invalid token. Please log in again.'
+    });
+  }
+};
+
+const adminOnly = (req, res, next) => {
+  if (!req.user || !req.user.isAdmin) {
+    return res.status(403).json({
+      status: 'error',
+      message: 'You do not have permission to perform this action.'
+    });
+  }
+  next();
+};
+
+// Helper functions
+const signToken = (id) => {
+  return jwt.sign({ id }, config.JWT_SECRET, {
+    expiresIn: config.JWT_EXPIRES_IN
+  });
+};
+
+const sendEmail = async (to, subject, text, html) => {
+  try {
+    await transporter.sendMail({
+      from: '"Bithash Support" <support@bithash.com>',
+      to,
+      subject,
+      text,
+      html
+    });
   } catch (err) {
     console.error('Error sending email:', err);
   }
 };
 
-const cacheResponse = async (key, data, ttl = 3600) => {
-  await redisClient.setex(key, ttl, JSON.stringify(data));
-};
+// Routes
 
-const getCachedData = async (key) => {
-  const cachedData = await redisClient.get(key);
-  return cachedData ? JSON.parse(cachedData) : null;
-};
-
-// Socket.io connection
-io.on('connection', (socket) => {
-  console.log('New client connected');
-  
-  socket.on('join', (userId) => {
-    socket.join(userId);
-    console.log(`User ${userId} joined their room`);
-  });
-  
-  socket.on('adminJoin', (adminId) => {
-    socket.join(`admin-${adminId}`);
-    console.log(`Admin ${adminId} joined their room`);
-  });
-  
-  socket.on('sendMessage', async ({ senderId, receiverId, message }) => {
-    try {
-      const newMessage = await SupportTicket.create({
-        sender: senderId,
-        receiver: receiverId,
-        message
-      });
-      
-      io.to(receiverId).emit('receiveMessage', newMessage);
-      socket.emit('messageSent', newMessage);
-    } catch (err) {
-      console.error('Error sending message:', err);
-    }
-  });
-  
-  socket.on('disconnect', () => {
-    console.log('Client disconnected');
+// Health check
+app.get('/api/health', (req, res) => {
+  res.status(200).json({
+    status: 'success',
+    message: 'Bithash API is running'
   });
 });
 
-// Routes
+// Auth routes
+app.post('/api/auth/signup', [
+  body('firstName').trim().notEmpty().withMessage('First name is required'),
+  body('lastName').trim().notEmpty().withMessage('Last name is required'),
+  body('email').isEmail().withMessage('Please provide a valid email'),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'error',
+      errors: errors.array()
+    });
+  }
 
-// 1. Authentication Routes
-app.post('/api/auth/signup', async (req, res) => {
   try {
-    const { firstName, lastName, email, password, city, referralCode } = req.body;
-    
+    const { firstName, lastName, email, password, city, referredBy } = req.body;
+
     // Check if user exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({
-        status: 'fail',
+        status: 'error',
         message: 'Email already in use'
       });
     }
-    
+
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
-    
+
+    // Generate referral code
+    const referralCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+
     // Create user
-    const newUser = await User.create({
+    const newUser = new User({
       firstName,
       lastName,
       email,
       password: hashedPassword,
       city,
-      referralCode: referralCode || undefined
+      referralCode,
+      referredBy: referredBy || null
     });
-    
-    // Handle referral if code exists
-    if (referralCode) {
-      const referrer = await User.findOne({ referralCode });
-      if (referrer) {
-        await Referral.create({
-          referrer: referrer._id,
-          referee: newUser._id
-        });
-        
-        // Update referrer's balance or give bonus
-        referrer.referralBonus += 10; // Example bonus
-        await referrer.save();
-      }
-    }
-    
-    // Generate referral code for new user if not exists
-    if (!newUser.referralCode) {
-      newUser.referralCode = crypto.randomBytes(4).toString('hex').toUpperCase();
-      await newUser.save();
-    }
-    
+
+    await newUser.save();
+
     // Send welcome email
-    const mailOptions = {
-      from: 'Bithash <no-reply@bithash.com>',
-      to: newUser.email,
-      subject: 'Welcome to Bithash!',
-      html: `<p>Hi ${newUser.firstName}, welcome to Bithash! Your account has been successfully created.</p>`
-    };
-    
-    await sendEmail(mailOptions);
-    
-    // Create token and send response
-    createAndSendToken(newUser, 201, res);
+    const welcomeEmail = `
+      <h1>Welcome to Bithash, ${firstName}!</h1>
+      <p>Your account has been successfully created.</p>
+      <p>Start investing in our Bitcoin mining plans today!</p>
+      <p>Your referral code: <strong>${referralCode}</strong></p>
+    `;
+    await sendEmail(email, 'Welcome to Bithash', `Welcome to Bithash, ${firstName}!`, welcomeEmail);
+
+    // Sign token
+    const token = signToken(newUser._id);
+
+    res.status(201).json({
+      status: 'success',
+      token,
+      data: {
+        user: {
+          id: newUser._id,
+          firstName: newUser.firstName,
+          lastName: newUser.lastName,
+          email: newUser.email,
+          isVerified: newUser.isVerified,
+          balance: newUser.balance
+        }
+      }
+    });
   } catch (err) {
     console.error('Signup error:', err);
     res.status(500).json({
@@ -262,39 +417,61 @@ app.post('/api/auth/signup', async (req, res) => {
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', [
+  body('email').isEmail().withMessage('Please provide a valid email'),
+  body('password').notEmpty().withMessage('Password is required')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'error',
+      errors: errors.array()
+    });
+  }
+
   try {
     const { email, password } = req.body;
-    
-    // 1) Check if email and password exist
-    if (!email || !password) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Please provide email and password'
-      });
-    }
-    
-    // 2) Check if user exists && password is correct
+
+    // Check if user exists
     const user = await User.findOne({ email }).select('+password');
-    
-    if (!user || !(await bcrypt.compare(password, user.password))) {
+    if (!user) {
       return res.status(401).json({
-        status: 'fail',
+        status: 'error',
         message: 'Incorrect email or password'
       });
     }
-    
-    // 3) Check if 2FA is enabled
-    if (user.twoFactorEnabled) {
-      return res.status(202).json({
-        status: 'success',
-        twoFactorRequired: true,
-        tempToken: generateJWT(user._id, '5m')
+
+    // Check if password is correct
+    const isCorrect = await bcrypt.compare(password, user.password);
+    if (!isCorrect) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Incorrect email or password'
       });
     }
-    
-    // 4) If everything ok, send token to client
-    createAndSendToken(user, 200, res);
+
+    // Update last login
+    user.lastLogin = new Date();
+    await user.save();
+
+    // Sign token
+    const token = signToken(user._id);
+
+    res.status(200).json({
+      status: 'success',
+      token,
+      data: {
+        user: {
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          isAdmin: user.isAdmin,
+          isVerified: user.isVerified,
+          balance: user.balance
+        }
+      }
+    });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({
@@ -306,50 +483,64 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.post('/api/auth/google', async (req, res) => {
   try {
-    const { tokenId } = req.body;
-    
+    const { token } = req.body;
     const ticket = await googleClient.verifyIdToken({
-      idToken: tokenId,
-      audience: GOOGLE_CLIENT_ID
+      idToken: token,
+      audience: config.GOOGLE_CLIENT_ID
     });
-    
     const payload = ticket.getPayload();
-    const { email, given_name, family_name, picture } = payload;
-    
+
     // Check if user exists
-    let user = await User.findOne({ email });
-    
+    let user = await User.findOne({ email: payload.email });
+
     if (!user) {
       // Create new user
-      const randomPassword = crypto.randomBytes(16).toString('hex');
-      const hashedPassword = await bcrypt.hash(randomPassword, 12);
-      
-      user = await User.create({
-        firstName: given_name,
-        lastName: family_name,
-        email,
-        password: hashedPassword,
-        photo: picture,
-        isVerified: true
+      const referralCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+      user = new User({
+        firstName: payload.given_name,
+        lastName: payload.family_name,
+        email: payload.email,
+        googleId: payload.sub,
+        isVerified: true,
+        referralCode
       });
-      
-      // Generate referral code
-      user.referralCode = crypto.randomBytes(4).toString('hex').toUpperCase();
       await user.save();
-      
+
       // Send welcome email
-      const mailOptions = {
-        from: 'Bithash <no-reply@bithash.com>',
-        to: user.email,
-        subject: 'Welcome to Bithash!',
-        html: `<p>Hi ${user.firstName}, welcome to Bithash! Your account has been successfully created via Google.</p>`
-      };
-      
-      await sendEmail(mailOptions);
+      const welcomeEmail = `
+        <h1>Welcome to Bithash, ${payload.given_name}!</h1>
+        <p>Your account has been successfully created with Google.</p>
+        <p>Start investing in our Bitcoin mining plans today!</p>
+        <p>Your referral code: <strong>${referralCode}</strong></p>
+      `;
+      await sendEmail(payload.email, 'Welcome to Bithash', `Welcome to Bithash, ${payload.given_name}!`, welcomeEmail);
+    } else if (!user.googleId) {
+      // Update existing user with Google ID
+      user.googleId = payload.sub;
+      await user.save();
     }
-    
-    // Create token and send response
-    createAndSendToken(user, 200, res);
+
+    // Update last login
+    user.lastLogin = new Date();
+    await user.save();
+
+    // Sign token
+    const jwtToken = signToken(user._id);
+
+    res.status(200).json({
+      status: 'success',
+      token: jwtToken,
+      data: {
+        user: {
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          isVerified: user.isVerified,
+          balance: user.balance
+        }
+      }
+    });
   } catch (err) {
     console.error('Google auth error:', err);
     res.status(500).json({
@@ -359,47 +550,68 @@ app.post('/api/auth/google', async (req, res) => {
   }
 });
 
-app.post('/api/auth/forgot-password', async (req, res) => {
+app.post('/api/auth/logout', authenticate, async (req, res) => {
   try {
-    const { email } = req.body;
-    
-    // 1) Get user based on POSTed email
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(200).json({
-        status: 'success',
-        message: 'If the email exists, a reset token will be sent'
-      });
-    }
-    
-    // 2) Generate the random reset token
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    user.passwordResetToken = crypto
-      .createHash('sha256')
-      .update(resetToken)
-      .digest('hex');
-    
-    user.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
-    await user.save();
-    
-    // 3) Send it to user's email
-    const resetURL = `${FRONTEND_URL}/reset-password?token=${resetToken}`;
-    
-    const mailOptions = {
-      from: 'Bithash <no-reply@bithash.com>',
-      to: user.email,
-      subject: 'Your password reset token (valid for 10 min)',
-      html: `<p>Hi ${user.firstName},</p>
-      <p>You requested a password reset. Click the link below to reset your password:</p>
-      <a href="${resetURL}">${resetURL}</a>
-      <p>If you didn't request this, please ignore this email.</p>`
-    };
-    
-    await sendEmail(mailOptions);
-    
+    // Add token to Redis blacklist
+    const token = req.headers.authorization.split(' ')[1];
+    await redis.set(`blacklist:${token}`, 'logged out', 'EX', 3600); // Expire in 1 hour
+
     res.status(200).json({
       status: 'success',
-      message: 'Token sent to email!'
+      message: 'Logged out successfully'
+    });
+  } catch (err) {
+    console.error('Logout error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred during logout'
+    });
+  }
+});
+
+app.post('/api/auth/forgot-password', [
+  body('email').isEmail().withMessage('Please provide a valid email')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'error',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { email } = req.body;
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'No user found with that email'
+      });
+    }
+
+    // Generate reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenExpires = Date.now() + 3600000; // 1 hour from now
+
+    // Store token in Redis
+    await redis.set(`reset:${resetToken}`, user._id.toString(), 'EX', 3600);
+
+    // Send email with reset link
+    const resetUrl = `${config.FRONTEND_URL}/reset-password?token=${resetToken}`;
+    const emailContent = `
+      <h1>Password Reset Request</h1>
+      <p>You requested a password reset for your Bithash account.</p>
+      <p>Click the link below to reset your password:</p>
+      <a href="${resetUrl}">${resetUrl}</a>
+      <p>This link will expire in 1 hour.</p>
+    `;
+    await sendEmail(email, 'Password Reset Request', `Password Reset Link: ${resetUrl}`, emailContent);
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Password reset link sent to email'
     });
   } catch (err) {
     console.error('Forgot password error:', err);
@@ -410,35 +622,57 @@ app.post('/api/auth/forgot-password', async (req, res) => {
   }
 });
 
-app.patch('/api/auth/reset-password/:token', async (req, res) => {
-  try {
-    // 1) Get user based on the token
-    const hashedToken = crypto
-      .createHash('sha256')
-      .update(req.params.token)
-      .digest('hex');
-    
-    const user = await User.findOne({
-      passwordResetToken: hashedToken,
-      passwordResetExpires: { $gt: Date.now() }
+app.post('/api/auth/reset-password', [
+  body('token').notEmpty().withMessage('Token is required'),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'error',
+      errors: errors.array()
     });
-    
-    // 2) If token has not expired, and there is user, set the new password
-    if (!user) {
+  }
+
+  try {
+    const { token, password } = req.body;
+
+    // Verify token
+    const userId = await redis.get(`reset:${token}`);
+    if (!userId) {
       return res.status(400).json({
-        status: 'fail',
-        message: 'Token is invalid or has expired'
+        status: 'error',
+        message: 'Invalid or expired token'
       });
     }
-    
-    // 3) Update password and reset token fields
-    user.password = await bcrypt.hash(req.body.password, 12);
-    user.passwordResetToken = undefined;
-    user.passwordResetExpires = undefined;
+
+    // Update password
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    user.password = await bcrypt.hash(password, 12);
     await user.save();
-    
-    // 4) Log the user in, send JWT
-    createAndSendToken(user, 200, res);
+
+    // Delete token from Redis
+    await redis.del(`reset:${token}`);
+
+    // Send confirmation email
+    const emailContent = `
+      <h1>Password Updated</h1>
+      <p>Your Bithash account password has been successfully updated.</p>
+      <p>If you did not make this change, please contact support immediately.</p>
+    `;
+    await sendEmail(user.email, 'Password Updated', 'Your password has been updated', emailContent);
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Password updated successfully'
+    });
   } catch (err) {
     console.error('Reset password error:', err);
     res.status(500).json({
@@ -448,34 +682,15 @@ app.patch('/api/auth/reset-password/:token', async (req, res) => {
   }
 });
 
-// 2. User Routes
-app.get('/api/users/me', async (req, res) => {
+// User routes
+app.get('/api/users/me', authenticate, async (req, res) => {
   try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Check if user still exists
-    const currentUser = await User.findById(decoded.id);
-    if (!currentUser) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'The user belonging to this token no longer exists.'
-      });
-    }
-    
+    const user = await User.findById(req.user._id).select('-password -__v');
+
     res.status(200).json({
       status: 'success',
       data: {
-        user: currentUser
+        user
       }
     });
   } catch (err) {
@@ -487,33 +702,39 @@ app.get('/api/users/me', async (req, res) => {
   }
 });
 
-app.put('/api/users/profile', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Filter out unwanted fields names that are not allowed to be updated
-    const filteredBody = filterObj(req.body, 'firstName', 'lastName', 'email', 'city', 'country', 'phone');
-    
-    // Update user document
-    const updatedUser = await User.findByIdAndUpdate(decoded.id, filteredBody, {
-      new: true,
-      runValidators: true
+app.put('/api/users/profile', authenticate, [
+  body('firstName').optional().trim().notEmpty().withMessage('First name cannot be empty'),
+  body('lastName').optional().trim().notEmpty().withMessage('Last name cannot be empty'),
+  body('city').optional().trim()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'error',
+      errors: errors.array()
     });
-    
+  }
+
+  try {
+    const { firstName, lastName, city } = req.body;
+    const user = await User.findById(req.user._id);
+
+    if (firstName) user.firstName = firstName;
+    if (lastName) user.lastName = lastName;
+    if (city) user.city = city;
+
+    await user.save();
+
     res.status(200).json({
       status: 'success',
       data: {
-        user: updatedUser
+        user: {
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          city: user.city
+        }
       }
     });
   } catch (err) {
@@ -525,100 +746,65 @@ app.put('/api/users/profile', async (req, res) => {
   }
 });
 
-app.put('/api/users/password', async (req, res) => {
-  try {
-    // 1) Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // 2) Get user from collection
-    const user = await User.findById(decoded.id).select('+password');
-    
-    // 3) Check if POSTed current password is correct
-    if (!(await bcrypt.compare(req.body.currentPassword, user.password))) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Your current password is wrong.'
-      });
-    }
-    
-    // 4) If so, update password
-    user.password = await bcrypt.hash(req.body.newPassword, 12);
-    await user.save();
-    
-    // 5) Log user in, send JWT
-    createAndSendToken(user, 200, res);
-  } catch (err) {
-    console.error('Update password error:', err);
-    res.status(500).json({
+app.put('/api/users/password', authenticate, [
+  body('currentPassword').notEmpty().withMessage('Current password is required'),
+  body('newPassword').isLength({ min: 8 }).withMessage('New password must be at least 8 characters')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
       status: 'error',
-      message: 'An error occurred while updating your password'
+      errors: errors.array()
     });
   }
-});
 
-app.put('/api/users/theme', async (req, res) => {
   try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
+    const { currentPassword, newPassword } = req.body;
+    const user = await User.findById(req.user._id).select('+password');
+
+    // Verify current password
+    const isCorrect = await bcrypt.compare(currentPassword, user.password);
+    if (!isCorrect) {
       return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
+        status: 'error',
+        message: 'Current password is incorrect'
       });
     }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Update theme preference
-    await User.findByIdAndUpdate(decoded.id, { theme: req.body.theme });
-    
+
+    // Update password
+    user.password = await bcrypt.hash(newPassword, 12);
+    await user.save();
+
+    // Send email notification
+    const emailContent = `
+      <h1>Password Changed</h1>
+      <p>Your Bithash account password was successfully changed.</p>
+      <p>If you did not make this change, please contact support immediately.</p>
+    `;
+    await sendEmail(user.email, 'Password Changed', 'Your password has been changed', emailContent);
+
     res.status(200).json({
       status: 'success',
-      message: 'Theme preference updated'
+      message: 'Password updated successfully'
     });
   } catch (err) {
-    console.error('Update theme error:', err);
+    console.error('Change password error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while updating your theme preference'
+      message: 'An error occurred while changing your password'
     });
   }
 });
 
-app.get('/api/users/balance', async (req, res) => {
+// Balance and transaction routes
+app.get('/api/users/balance', authenticate, async (req, res) => {
   try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get user with balance
-    const user = await User.findById(decoded.id).select('balance activeBalance maturedBalance savingsBalance');
-    
+    const user = await User.findById(req.user._id).select('balance');
+
     res.status(200).json({
       status: 'success',
       data: {
-        balance: user.balance,
-        activeBalance: user.activeBalance,
-        maturedBalance: user.maturedBalance,
-        savingsBalance: user.savingsBalance
+        balance: user.balance
       }
     });
   } catch (err) {
@@ -630,625 +816,153 @@ app.get('/api/users/balance', async (req, res) => {
   }
 });
 
-app.get('/api/users/activity', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get activity logs
-    const activities = await ActivityLog.find({ user: decoded.id })
-      .sort('-createdAt')
-      .limit(50);
-    
-    res.status(200).json({
-      status: 'success',
-      results: activities.length,
-      data: {
-        activities
-      }
-    });
-  } catch (err) {
-    console.error('Get activity error:', err);
-    res.status(500).json({
+app.post('/api/transactions/deposit', authenticate, [
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
+  body('method').isIn(['btc', 'card']).withMessage('Invalid deposit method')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
       status: 'error',
-      message: 'An error occurred while fetching your activity'
+      errors: errors.array()
     });
   }
-});
 
-app.get('/api/users/notifications', async (req, res) => {
   try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get user with notifications
-    const user = await User.findById(decoded.id).select('notificationPreferences');
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        notifications: user.notificationPreferences
-      }
-    });
-  } catch (err) {
-    console.error('Get notifications error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching your notifications'
-    });
-  }
-});
+    const { amount, method } = req.body;
+    const user = req.user;
 
-app.put('/api/users/notifications', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Update notification preferences
-    await User.findByIdAndUpdate(decoded.id, { notificationPreferences: req.body });
-    
-    res.status(200).json({
-      status: 'success',
-      message: 'Notification preferences updated'
+    // Create transaction
+    const transaction = new Transaction({
+      userId: user._id,
+      type: 'deposit',
+      amount,
+      method,
+      status: method === 'btc' ? 'pending' : 'completed',
+      address: method === 'btc' ? config.BTC_DEPOSIT_ADDRESS : null
     });
-  } catch (err) {
-    console.error('Update notifications error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while updating your notification preferences'
-    });
-  }
-});
 
-app.post('/api/users/deactivate', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Deactivate account
-    await User.findByIdAndUpdate(decoded.id, { active: false });
-    
-    res.status(200).json({
-      status: 'success',
-      message: 'Your account has been deactivated'
-    });
-  } catch (err) {
-    console.error('Deactivate account error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while deactivating your account'
-    });
-  }
-});
+    await transaction.save();
 
-// 3. Two-Factor Authentication Routes
-app.get('/api/auth/2fa', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
+    // If card payment, update balance immediately
+    if (method === 'card') {
+      user.balance.main += amount;
+      await user.save();
     }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get user
-    const user = await User.findById(decoded.id).select('twoFactorEnabled twoFactorMethod');
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        twoFactorEnabled: user.twoFactorEnabled,
-        twoFactorMethod: user.twoFactorMethod
-      }
-    });
-  } catch (err) {
-    console.error('Get 2FA status error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching 2FA status'
-    });
-  }
-});
 
-app.post('/api/auth/2fa/email', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Generate 6-digit code
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    
-    // Save code to user
-    await User.findByIdAndUpdate(decoded.id, {
-      twoFactorCode: code,
-      twoFactorCodeExpires: Date.now() + 10 * 60 * 1000 // 10 minutes
-    });
-    
-    // Get user email
-    const user = await User.findById(decoded.id).select('email firstName');
-    
-    // Send email with code
-    const mailOptions = {
-      from: 'Bithash <no-reply@bithash.com>',
-      to: user.email,
-      subject: 'Your Two-Factor Authentication Code',
-      html: `<p>Hi ${user.firstName},</p>
-      <p>Your two-factor authentication code is: <strong>${code}</strong></p>
-      <p>This code will expire in 10 minutes.</p>`
-    };
-    
-    await sendEmail(mailOptions);
-    
-    res.status(200).json({
-      status: 'success',
-      message: '2FA code sent to your email'
-    });
-  } catch (err) {
-    console.error('Send 2FA email error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while sending the 2FA code'
-    });
-  }
-});
+    // Send email notification
+    const emailContent = `
+      <h1>Deposit Initiated</h1>
+      <p>Your deposit of ${amount} BTC has been initiated.</p>
+      ${method === 'btc' ? `<p>Please send the funds to: <strong>${config.BTC_DEPOSIT_ADDRESS}</strong></p>` : ''}
+      <p>Transaction ID: ${transaction._id}</p>
+    `;
+    await sendEmail(user.email, 'Deposit Initiated', `Deposit of ${amount} BTC initiated`, emailContent);
 
-app.post('/api/auth/2fa/email/verify', async (req, res) => {
-  try {
-    const { code } = req.body;
-    
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get user with 2FA code
-    const user = await User.findOne({
-      _id: decoded.id,
-      twoFactorCode: code,
-      twoFactorCodeExpires: { $gt: Date.now() }
-    });
-    
-    if (!user) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Invalid or expired code'
-      });
-    }
-    
-    // Clear the code
-    user.twoFactorCode = undefined;
-    user.twoFactorCodeExpires = undefined;
-    user.twoFactorEnabled = true;
-    user.twoFactorMethod = 'email';
-    await user.save();
-    
-    // Generate new token
-    const newToken = generateJWT(user._id);
-    
-    res.status(200).json({
-      status: 'success',
-      token: newToken,
-      data: {
-        user
-      }
-    });
-  } catch (err) {
-    console.error('Verify 2FA email error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while verifying the 2FA code'
-    });
-  }
-});
-
-app.get('/api/auth/2fa/totp/setup', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get user email
-    const user = await User.findById(decoded.id).select('email firstName');
-    
-    // Generate secret
-    const secret = speakeasy.generateSecret({
-      name: `Bithash (${user.email})`
-    });
-    
-    // Generate QR code
-    const qrCode = await QRCode.toDataURL(secret.otpauth_url);
-    
-    // Save secret temporarily (not enabling 2FA yet)
-    await User.findByIdAndUpdate(decoded.id, {
-      twoFactorTempSecret: secret.base32
-    });
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        secret: secret.base32,
-        qrCode
-      }
-    });
-  } catch (err) {
-    console.error('Setup TOTP error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while setting up TOTP'
-    });
-  }
-});
-
-app.post('/api/auth/2fa/totp/verify', async (req, res) => {
-  try {
-    const { code } = req.body;
-    
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get user with temp secret
-    const user = await User.findById(decoded.id).select('twoFactorTempSecret');
-    
-    if (!user.twoFactorTempSecret) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'No TOTP setup in progress'
-      });
-    }
-    
-    // Verify code
-    const verified = speakeasy.totp.verify({
-      secret: user.twoFactorTempSecret,
-      encoding: 'base32',
-      token: code,
-      window: 1
-    });
-    
-    if (!verified) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Invalid code'
-      });
-    }
-    
-    // Enable TOTP
-    user.twoFactorSecret = user.twoFactorTempSecret;
-    user.twoFactorTempSecret = undefined;
-    user.twoFactorEnabled = true;
-    user.twoFactorMethod = 'totp';
-    await user.save();
-    
-    // Generate recovery codes
-    const recoveryCodes = Array.from({ length: 8 }, () => 
-      crypto.randomBytes(5).toString('hex').toUpperCase()
-    );
-    
-    // Hash and save recovery codes
-    user.twoFactorRecoveryCodes = recoveryCodes.map(code => 
-      crypto.createHash('sha256').update(code).digest('hex')
-    );
-    await user.save();
-    
-    // Generate new token
-    const newToken = generateJWT(user._id);
-    
-    res.status(200).json({
-      status: 'success',
-      token: newToken,
-      data: {
-        recoveryCodes
-      }
-    });
-  } catch (err) {
-    console.error('Verify TOTP error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while verifying TOTP'
-    });
-  }
-});
-
-app.post('/api/auth/2fa/disable', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Disable 2FA
-    await User.findByIdAndUpdate(decoded.id, {
-      twoFactorEnabled: false,
-      twoFactorMethod: undefined,
-      twoFactorSecret: undefined,
-      twoFactorRecoveryCodes: undefined
-    });
-    
-    res.status(200).json({
-      status: 'success',
-      message: 'Two-factor authentication disabled'
-    });
-  } catch (err) {
-    console.error('Disable 2FA error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while disabling 2FA'
-    });
-  }
-});
-
-// 4. KYC Routes
-app.get('/api/kyc', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get KYC status
-    const kyc = await KYC.findOne({ user: decoded.id })
-      .sort('-createdAt')
-      .limit(1);
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        kyc: kyc || null
-      }
-    });
-  } catch (err) {
-    console.error('Get KYC error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching KYC status'
-    });
-  }
-});
-
-// Configure multer for file uploads
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => {
-      const dir = './uploads/kyc';
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      cb(null, dir);
-    },
-    filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname);
-      const filename = `${uuidv4()}${ext}`;
-      cb(null, filename);
-    }
-  }),
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
-      cb(null, true);
-    } else {
-      cb(new Error('Only images and PDFs are allowed'), false);
-    }
-  },
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB
-  }
-});
-
-app.post('/api/kyc', upload.fields([
-  { name: 'idFront', maxCount: 1 },
-  { name: 'idBack', maxCount: 1 },
-  { name: 'selfie', maxCount: 1 },
-  { name: 'proofOfAddress', maxCount: 1 }
-]), async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get files
-    const files = req.files;
-    if (!files || !files.idFront || !files.selfie) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'ID front and selfie are required'
-      });
-    }
-    
-    // Create KYC submission
-    const kycData = {
-      user: decoded.id,
-      firstName: req.body.firstName,
-      lastName: req.body.lastName,
-      dob: req.body.dob,
-      address: req.body.address,
-      city: req.body.city,
-      country: req.body.country,
-      postalCode: req.body.postalCode,
-      idType: req.body.idType,
-      idNumber: req.body.idNumber,
-      idFront: files.idFront[0].path,
-      idBack: files.idBack ? files.idBack[0].path : undefined,
-      selfie: files.selfie[0].path,
-      proofOfAddress: files.proofOfAddress ? files.proofOfAddress[0].path : undefined,
-      status: 'pending'
-    };
-    
-    const kyc = await KYC.create(kycData);
-    
     res.status(201).json({
       status: 'success',
       data: {
-        kyc
+        transaction,
+        depositAddress: method === 'btc' ? config.BTC_DEPOSIT_ADDRESS : null
       }
     });
   } catch (err) {
-    console.error('Submit KYC error:', err);
+    console.error('Deposit error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while submitting KYC'
+      message: 'An error occurred while processing your deposit'
     });
   }
 });
 
-// 5. Referral Routes
-app.get('/api/referrals', async (req, res) => {
+app.post('/api/transactions/withdraw', authenticate, [
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
+  body('address').notEmpty().withMessage('Withdrawal address is required')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'error',
+      errors: errors.array()
+    });
+  }
+
   try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
+    const { amount, address, notes } = req.body;
+    const user = await User.findById(req.user._id);
+
+    // Check sufficient balance
+    if (user.balance.main < amount) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Insufficient balance for withdrawal'
       });
     }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get referral stats
-    const referrals = await Referral.find({ referrer: decoded.id })
-      .populate('referee', 'firstName lastName email createdAt');
-    
-    // Get user's referral code
-    const user = await User.findById(decoded.id).select('referralCode referralBonus');
-    
-    res.status(200).json({
+
+    // Create transaction
+    const transaction = new Transaction({
+      userId: user._id,
+      type: 'withdrawal',
+      amount,
+      method: 'btc',
+      status: 'pending',
+      address,
+      notes
+    });
+
+    await transaction.save();
+
+    // Deduct from balance
+    user.balance.main -= amount;
+    await user.save();
+
+    // Send email notification
+    const emailContent = `
+      <h1>Withdrawal Requested</h1>
+      <p>Your withdrawal of ${amount} BTC has been requested.</p>
+      <p>Destination address: <strong>${address}</strong></p>
+      <p>Transaction ID: ${transaction._id}</p>
+      <p>Note: Withdrawals may take up to 24 hours to process.</p>
+    `;
+    await sendEmail(user.email, 'Withdrawal Requested', `Withdrawal of ${amount} BTC requested`, emailContent);
+
+    res.status(201).json({
       status: 'success',
       data: {
-        referralCode: user.referralCode,
-        referralBonus: user.referralBonus,
-        referrals,
-        referralLink: `${FRONTEND_URL}/signup?ref=${user.referralCode}`
+        transaction
       }
     });
   } catch (err) {
-    console.error('Get referrals error:', err);
+    console.error('Withdrawal error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching referral data'
+      message: 'An error occurred while processing your withdrawal'
     });
   }
 });
 
-// 6. Transaction Routes
-app.get('/api/transactions', async (req, res) => {
+app.get('/api/transactions', authenticate, async (req, res) => {
   try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get transactions
-    const transactions = await Transaction.find({ user: decoded.id })
-      .sort('-createdAt')
-      .limit(50);
-    
+    const { type, limit = 10, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const query = { userId: req.user._id };
+    if (type) query.type = type;
+
+    const transactions = await Transaction.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Transaction.countDocuments(query);
+
     res.status(200).json({
       status: 'success',
-      results: transactions.length,
       data: {
-        transactions
+        transactions,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
       }
     });
   } catch (err) {
@@ -1260,232 +974,11 @@ app.get('/api/transactions', async (req, res) => {
   }
 });
 
-app.get('/api/transactions/deposits', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get deposit transactions
-    const deposits = await Transaction.find({
-      user: decoded.id,
-      type: 'deposit'
-    })
-    .sort('-createdAt')
-    .limit(50);
-    
-    res.status(200).json({
-      status: 'success',
-      results: deposits.length,
-      data: {
-        deposits
-      }
-    });
-  } catch (err) {
-    console.error('Get deposits error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching deposits'
-    });
-  }
-});
-
-app.get('/api/transactions/withdrawals', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get withdrawal transactions
-    const withdrawals = await Transaction.find({
-      user: decoded.id,
-      type: 'withdrawal'
-    })
-    .sort('-createdAt')
-    .limit(50);
-    
-    res.status(200).json({
-      status: 'success',
-      results: withdrawals.length,
-      data: {
-        withdrawals
-      }
-    });
-  } catch (err) {
-    console.error('Get withdrawals error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching withdrawals'
-    });
-  }
-});
-
-app.post('/api/transactions/deposit', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    const { amount, method } = req.body;
-    
-    // Create deposit transaction
-    const transaction = await Transaction.create({
-      user: decoded.id,
-      type: 'deposit',
-      amount,
-      method,
-      status: 'pending',
-      btcAddress: method === 'bitcoin' ? BTC_DEPOSIT_ADDRESS : undefined
-    });
-    
-    // If method is card, simulate instant approval (in production, this would wait for payment processor)
-    if (method === 'card') {
-      setTimeout(async () => {
-        transaction.status = 'completed';
-        await transaction.save();
-        
-        // Update user balance
-        await User.findByIdAndUpdate(decoded.id, {
-          $inc: { balance: amount }
-        });
-        
-        // Notify user via socket
-        io.to(decoded.id).emit('transactionUpdate', {
-          type: 'deposit',
-          amount,
-          status: 'completed'
-        });
-      }, 3000);
-    }
-    
-    res.status(201).json({
-      status: 'success',
-      data: {
-        transaction
-      }
-    });
-  } catch (err) {
-    console.error('Create deposit error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while creating deposit'
-    });
-  }
-});
-
-app.post('/api/transactions/withdraw', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    const { amount, method, address, notes } = req.body;
-    
-    // Check user balance
-    const user = await User.findById(decoded.id);
-    if (user.balance < amount) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Insufficient balance'
-      });
-    }
-    
-    // Create withdrawal transaction
-    const transaction = await Transaction.create({
-      user: decoded.id,
-      type: 'withdrawal',
-      amount,
-      method,
-      address,
-      notes,
-      status: 'pending'
-    });
-    
-    // Deduct from user balance immediately
-    user.balance -= amount;
-    await user.save();
-    
-    // In production, this would be processed by admin approval
-    // Here we simulate approval after 5 seconds
-    setTimeout(async () => {
-      transaction.status = 'completed';
-      await transaction.save();
-      
-      // Notify user via socket
-      io.to(decoded.id).emit('transactionUpdate', {
-        type: 'withdrawal',
-        amount,
-        status: 'completed'
-      });
-    }, 5000);
-    
-    res.status(201).json({
-      status: 'success',
-      data: {
-        transaction
-      }
-    });
-  } catch (err) {
-    console.error('Create withdrawal error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while creating withdrawal'
-    });
-  }
-});
-
-// 7. Investment Routes
+// Investment routes
 app.get('/api/plans', async (req, res) => {
   try {
-    // Check cache first
-    const cachedPlans = await getCachedData('investmentPlans');
-    if (cachedPlans) {
-      return res.status(200).json({
-        status: 'success',
-        data: {
-          plans: cachedPlans
-        }
-      });
-    }
-    
-    // Get plans from DB
-    const plans = await Plan.find({ active: true });
-    
-    // Cache plans
-    await cacheResponse('investmentPlans', plans);
-    
+    const plans = await Plan.find({ isActive: true });
+
     res.status(200).json({
       status: 'success',
       data: {
@@ -1501,30 +994,132 @@ app.get('/api/plans', async (req, res) => {
   }
 });
 
-app.get('/api/investments', async (req, res) => {
+app.post('/api/investments', authenticate, [
+  body('planId').notEmpty().withMessage('Plan ID is required'),
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'error',
+      errors: errors.array()
+    });
+  }
+
   try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
+    const { planId, amount } = req.body;
+    const user = await User.findById(req.user._id);
+
+    // Get plan
+    const plan = await Plan.findById(planId);
+    if (!plan || !plan.isActive) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Investment plan not found'
       });
     }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get investments with plan details
-    const investments = await Investment.find({ user: decoded.id })
-      .populate('plan')
-      .sort('-createdAt');
-    
+
+    // Check minimum amount
+    if (amount < plan.minAmount) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Minimum investment amount is ${plan.minAmount} BTC`
+      });
+    }
+
+    // Check maximum amount if defined
+    if (plan.maxAmount && amount > plan.maxAmount) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Maximum investment amount is ${plan.maxAmount} BTC`
+      });
+    }
+
+    // Check sufficient balance
+    if (user.balance.main < amount) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Insufficient balance for investment'
+      });
+    }
+
+    // Calculate end date and expected return
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + plan.duration);
+    const expectedReturn = amount * (1 + plan.returnRate / 100);
+
+    // Create investment
+    const investment = new Investment({
+      userId: user._id,
+      planId: plan._id,
+      amount,
+      endDate,
+      expectedReturn
+    });
+
+    // Deduct from main balance and add to active balance
+    user.balance.main -= amount;
+    user.balance.active += amount;
+    await user.save();
+
+    await investment.save();
+
+    // Create transaction
+    const transaction = new Transaction({
+      userId: user._id,
+      type: 'investment',
+      amount,
+      status: 'completed'
+    });
+    await transaction.save();
+
+    // Send email notification
+    const emailContent = `
+      <h1>Investment Created</h1>
+      <p>You have successfully invested ${amount} BTC in the ${plan.name} plan.</p>
+      <p>Expected return: ${expectedReturn.toFixed(8)} BTC in ${plan.duration} days.</p>
+      <p>Investment ID: ${investment._id}</p>
+    `;
+    await sendEmail(user.email, 'Investment Created', `Investment of ${amount} BTC created`, emailContent);
+
+    res.status(201).json({
+      status: 'success',
+      data: {
+        investment
+      }
+    });
+  } catch (err) {
+    console.error('Create investment error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while creating your investment'
+    });
+  }
+});
+
+app.get('/api/investments', authenticate, async (req, res) => {
+  try {
+    const { status, limit = 10, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const query = { userId: req.user._id };
+    if (status) query.status = status;
+
+    const investments = await Investment.find(query)
+      .populate('planId', 'name returnRate duration')
+      .sort({ startDate: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Investment.countDocuments(query);
+
     res.status(200).json({
       status: 'success',
-      results: investments.length,
       data: {
-        investments
+        investments,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
       }
     });
   } catch (err) {
@@ -1536,631 +1131,151 @@ app.get('/api/investments', async (req, res) => {
   }
 });
 
-app.post('/api/investments', async (req, res) => {
+// KYC routes
+app.post('/api/kyc', authenticate, [
+  body('documentType').isIn(['passport', 'id_card', 'drivers_license']).withMessage('Invalid document type'),
+  body('documentFront').notEmpty().withMessage('Document front image is required'),
+  body('selfie').notEmpty().withMessage('Selfie image is required')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'error',
+      errors: errors.array()
+    });
+  }
+
   try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    const { planId, amount } = req.body;
-    
-    // Get plan
-    const plan = await Plan.findById(planId);
-    if (!plan || !plan.active) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Plan not found'
-      });
-    }
-    
-    // Check minimum investment
-    if (amount < plan.minInvestment) {
+    const { documentType, documentFront, documentBack, selfie } = req.body;
+    const user = req.user;
+
+    // Check if user already has pending or approved KYC
+    const existingKYC = await KYC.findOne({ userId: user._id, status: { $in: ['pending', 'approved'] } });
+    if (existingKYC) {
       return res.status(400).json({
-        status: 'fail',
-        message: `Minimum investment is ${plan.minInvestment}`
+        status: 'error',
+        message: existingKYC.status === 'pending' 
+          ? 'You already have a pending KYC submission' 
+          : 'Your KYC is already approved'
       });
     }
-    
-    // Check user balance
-    const user = await User.findById(decoded.id);
-    if (user.balance < amount) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Insufficient balance'
-      });
-    }
-    
-    // Deduct from balance
-    user.balance -= amount;
-    user.activeBalance += amount;
+
+    // Create KYC submission
+    const kyc = new KYC({
+      userId: user._id,
+      documentType,
+      documentFront,
+      documentBack,
+      selfie
+    });
+
+    await kyc.save();
+
+    // Update user KYC status
+    user.kycStatus = 'pending';
     await user.save();
-    
-    // Create investment
-    const investment = await Investment.create({
-      user: decoded.id,
-      plan: planId,
-      amount,
-      startDate: new Date(),
-      endDate: moment().add(plan.duration, 'days').toDate(),
-      status: 'active'
-    });
-    
-    // Create transaction
-    await Transaction.create({
-      user: decoded.id,
-      type: 'investment',
-      amount,
-      status: 'completed'
-    });
-    
-    // Schedule daily earnings
-    const dailyEarning = (amount * plan.dailyReturn) / 100;
-    const interval = setInterval(async () => {
-      try {
-        // Check if investment is still active
-        const currentInvestment = await Investment.findById(investment._id);
-        if (!currentInvestment || currentInvestment.status !== 'active') {
-          clearInterval(interval);
-          return;
-        }
-        
-        // Check if investment period has ended
-        if (new Date() > currentInvestment.endDate) {
-          // Finalize investment
-          currentInvestment.status = 'completed';
-          await currentInvestment.save();
-          
-          // Move funds from active to matured balance
-          await User.findByIdAndUpdate(decoded.id, {
-            $inc: {
-              activeBalance: -currentInvestment.amount,
-              maturedBalance: currentInvestment.amount
-            }
-          });
-          
-          clearInterval(interval);
-          return;
-        }
-        
-        // Add daily earnings
-        await User.findByIdAndUpdate(decoded.id, {
-          $inc: { balance: dailyEarning }
-        });
-        
-        // Record earning transaction
-        await Transaction.create({
-          user: decoded.id,
-          type: 'earning',
-          amount: dailyEarning,
-          status: 'completed'
-        });
-        
-        // Notify user
-        io.to(decoded.id).emit('newEarning', {
-          amount: dailyEarning,
-          investmentId: investment._id
-        });
-      } catch (err) {
-        console.error('Investment earning error:', err);
-        clearInterval(interval);
-      }
-    }, 24 * 60 * 60 * 1000); // 24 hours
-    
+
+    // Send email notification
+    const emailContent = `
+      <h1>KYC Submitted</h1>
+      <p>Your KYC documents have been successfully submitted for verification.</p>
+      <p>This process may take up to 48 hours. You will be notified once your verification is complete.</p>
+    `;
+    await sendEmail(user.email, 'KYC Submitted', 'Your KYC has been submitted', emailContent);
+
     res.status(201).json({
       status: 'success',
       data: {
-        investment
+        kyc
       }
     });
   } catch (err) {
-    console.error('Create investment error:', err);
+    console.error('KYC submission error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while creating investment'
+      message: 'An error occurred while submitting your KYC'
     });
   }
 });
 
-// 8. Savings & Loans Routes
-app.get('/api/savings', async (req, res) => {
+app.get('/api/kyc', authenticate, async (req, res) => {
   try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get savings
-    const savings = await Savings.find({ user: decoded.id })
-      .sort('-createdAt');
-    
+    const kyc = await KYC.findOne({ userId: req.user._id });
+
     res.status(200).json({
       status: 'success',
-      results: savings.length,
       data: {
-        savings
+        kyc
       }
     });
   } catch (err) {
-    console.error('Get savings error:', err);
+    console.error('Get KYC error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching savings'
+      message: 'An error occurred while fetching your KYC status'
     });
   }
 });
 
-app.post('/api/savings', async (req, res) => {
+// Referral routes
+app.get('/api/referrals', authenticate, async (req, res) => {
   try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    const { amount, duration } = req.body;
-    
-    // Check user balance
-    const user = await User.findById(decoded.id);
-    if (user.balance < amount) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Insufficient balance'
-      });
-    }
-    
-    // Deduct from balance and add to savings
-    user.balance -= amount;
-    user.savingsBalance += amount;
-    await user.save();
-    
-    // Create savings
-    const savings = await Savings.create({
-      user: decoded.id,
-      amount,
-      startDate: new Date(),
-      endDate: moment().add(duration, 'days').toDate(),
-      interestRate: 5, // 5% annual interest
-      status: 'active'
-    });
-    
-    // Create transaction
-    await Transaction.create({
-      user: decoded.id,
-      type: 'savings',
-      amount,
-      status: 'completed'
-    });
-    
-    res.status(201).json({
-      status: 'success',
-      data: {
-        savings
-      }
-    });
-  } catch (err) {
-    console.error('Create savings error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while creating savings'
-    });
-  }
-});
-
-app.get('/api/loans', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get loans
-    const loans = await Loan.find({ user: decoded.id })
-      .sort('-createdAt');
-    
-    res.status(200).json({
-      status: 'success',
-      results: loans.length,
-      data: {
-        loans
-      }
-    });
-  } catch (err) {
-    console.error('Get loans error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching loans'
-    });
-  }
-});
-
-app.post('/api/loans', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    const { amount, duration, purpose } = req.body;
-    
-    // Check savings balance (loan limit is 50% of savings)
-    const user = await User.findById(decoded.id);
-    const loanLimit = user.savingsBalance * 0.5;
-    
-    if (amount > loanLimit) {
-      return res.status(400).json({
-        status: 'fail',
-        message: `Loan amount exceeds limit of ${loanLimit}`
-      });
-    }
-    
-    // Create loan (pending admin approval)
-    const loan = await Loan.create({
-      user: decoded.id,
-      amount,
-      duration,
-      purpose,
-      status: 'pending',
-      interestRate: 10 // 10% interest
-    });
-    
-    res.status(201).json({
-      status: 'success',
-      data: {
-        loan
-      }
-    });
-  } catch (err) {
-    console.error('Create loan error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while creating loan'
-    });
-  }
-});
-
-// 9. API Key Routes
-app.get('/api/users/apikeys', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get API keys
-    const apiKeys = await APIKey.find({ user: decoded.id })
-      .sort('-createdAt');
-    
-    res.status(200).json({
-      status: 'success',
-      results: apiKeys.length,
-      data: {
-        apiKeys
-      }
-    });
-  } catch (err) {
-    console.error('Get API keys error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching API keys'
-    });
-  }
-});
-
-app.post('/api/users/apikeys', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    const { name, permissions } = req.body;
-    
-    // Generate API key
-    const apiKey = crypto.randomBytes(32).toString('hex');
-    const apiSecret = crypto.randomBytes(64).toString('hex');
-    
-    // Hash secrets before storing
-    const hashedApiKey = crypto.createHash('sha256').update(apiKey).digest('hex');
-    const hashedApiSecret = crypto.createHash('sha256').update(apiSecret).digest('hex');
-    
-    // Create API key record
-    const newApiKey = await APIKey.create({
-      user: decoded.id,
-      name,
-      permissions,
-      apiKey: hashedApiKey,
-      apiSecret: hashedApiSecret,
-      lastUsed: null
-    });
-    
-    // Return the unhashed keys only once
-    res.status(201).json({
-      status: 'success',
-      data: {
-        apiKey: {
-          id: newApiKey._id,
-          name: newApiKey.name,
-          key: apiKey,
-          secret: apiSecret,
-          createdAt: newApiKey.createdAt
-        }
-      }
-    });
-  } catch (err) {
-    console.error('Create API key error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while creating API key'
-    });
-  }
-});
-
-app.delete('/api/users/apikeys/:id', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Delete API key
-    await APIKey.findOneAndDelete({
-      _id: req.params.id,
-      user: decoded.id
-    });
-    
-    res.status(204).json({
-      status: 'success',
-      data: null
-    });
-  } catch (err) {
-    console.error('Delete API key error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while deleting API key'
-    });
-  }
-});
-
-// 10. Admin Routes
-app.post('/api/admin/auth/login', async (req, res) => {
-  try {
-    const { email, password, code } = req.body;
-    
-    // 1) Check if email and password exist
-    if (!email || !password) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Please provide email and password'
-      });
-    }
-    
-    // 2) Check if admin exists && password is correct
-    const admin = await Admin.findOne({ email }).select('+password');
-    
-    if (!admin || !(await bcrypt.compare(password, admin.password))) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Incorrect email or password'
-      });
-    }
-    
-    // 3) Check if 2FA is enabled and code provided
-    if (admin.twoFactorEnabled && !code) {
-      return res.status(202).json({
-        status: 'success',
-        twoFactorRequired: true,
-        tempToken: generateJWT(admin._id, '5m')
-      });
-    }
-    
-    // 4) Verify 2FA code if required
-    if (admin.twoFactorEnabled && code) {
-      const verified = speakeasy.totp.verify({
-        secret: admin.twoFactorSecret,
-        encoding: 'base32',
-        token: code,
-        window: 1
-      });
-      
-      if (!verified) {
-        return res.status(401).json({
-          status: 'fail',
-          message: 'Invalid 2FA code'
-        });
-      }
-    }
-    
-    // 5) If everything ok, send token to client
-    const token = generateJWT(admin._id);
-    
-    // Remove password from output
-    admin.password = undefined;
-    
-    res.status(200).json({
-      status: 'success',
-      token,
-      data: {
-        admin
-      }
-    });
-  } catch (err) {
-    console.error('Admin login error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred during login'
-    });
-  }
-});
-
-app.get('/api/admin/dashboard', async (req, res) => {
-  try {
-    // Verify admin token
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Check if user is admin
-    const admin = await Admin.findById(decoded.id);
-    if (!admin) {
-      return res.status(403).json({
-        status: 'fail',
-        message: 'You do not have permission to perform this action'
-      });
-    }
-    
-    // Get dashboard stats
-    const totalUsers = await User.countDocuments();
-    const activeUsers = await User.countDocuments({ active: true });
-    const pendingKYC = await KYC.countDocuments({ status: 'pending' });
-    const pendingWithdrawals = await Transaction.countDocuments({ 
-      type: 'withdrawal',
-      status: 'pending'
-    });
-    const totalDeposits = await Transaction.aggregate([
-      { $match: { type: 'deposit', status: 'completed' } },
+    const referrals = await User.find({ referredBy: req.user._id }).select('firstName lastName email createdAt');
+    const referralEarnings = await Transaction.aggregate([
+      { $match: { userId: req.user._id, type: 'bonus' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
-    const totalWithdrawals = await Transaction.aggregate([
-      { $match: { type: 'withdrawal', status: 'completed' } },
-      { $group: { _id: null, total: { $sum: '$amount' } } }
-    ]);
-    const activeInvestments = await Investment.countDocuments({ status: 'active' });
-    
+
     res.status(200).json({
       status: 'success',
       data: {
-        stats: {
-          totalUsers,
-          activeUsers,
-          pendingKYC,
-          pendingWithdrawals,
-          totalDeposits: totalDeposits[0]?.total || 0,
-          totalWithdrawals: totalWithdrawals[0]?.total || 0,
-          activeInvestments
-        }
+        referrals,
+        referralEarnings: referralEarnings.length ? referralEarnings[0].total : 0,
+        referralCode: req.user.referralCode,
+        referralLink: `${config.FRONTEND_URL}/signup?ref=${req.user.referralCode}`
       }
     });
   } catch (err) {
-    console.error('Admin dashboard error:', err);
+    console.error('Get referrals error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching dashboard data'
+      message: 'An error occurred while fetching referral data'
     });
   }
 });
 
-app.get('/api/admin/users', async (req, res) => {
+// Admin routes
+app.get('/api/admin/users', authenticate, adminOnly, async (req, res) => {
   try {
-    // Verify admin token
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Check if user is admin
-    const admin = await Admin.findById(decoded.id);
-    if (!admin) {
-      return res.status(403).json({
-        status: 'fail',
-        message: 'You do not have permission to perform this action'
-      });
-    }
-    
-    // Pagination
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const { search, status, limit = 10, page = 1 } = req.query;
     const skip = (page - 1) * limit;
-    
-    // Query
-    let query = User.find();
-    
-    // Sorting
-    if (req.query.sort) {
-      const sortBy = req.query.sort.split(',').join(' ');
-      query = query.sort(sortBy);
-    } else {
-      query = query.sort('-createdAt');
+
+    const query = {};
+    if (search) {
+      query.$or = [
+        { email: { $regex: search, $options: 'i' } },
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } }
+      ];
     }
-    
-    // Execute query
-    const users = await query.skip(skip).limit(limit);
-    const total = await User.countDocuments();
-    
+    if (status === 'active') query.isVerified = true;
+    if (status === 'pending') query.isVerified = false;
+
+    const users = await User.find(query)
+      .select('-password -__v')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await User.countDocuments(query);
+
     res.status(200).json({
       status: 'success',
-      results: users.length,
-      total,
       data: {
-        users
+        users,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
       }
     });
   } catch (err) {
@@ -2172,39 +1287,16 @@ app.get('/api/admin/users', async (req, res) => {
   }
 });
 
-app.get('/api/admin/users/:id', async (req, res) => {
+app.get('/api/admin/users/:id', authenticate, adminOnly, async (req, res) => {
   try {
-    // Verify admin token
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Check if user is admin
-    const admin = await Admin.findById(decoded.id);
-    if (!admin) {
-      return res.status(403).json({
-        status: 'fail',
-        message: 'You do not have permission to perform this action'
-      });
-    }
-    
-    // Get user
-    const user = await User.findById(req.params.id);
-    
+    const user = await User.findById(req.params.id).select('-password -__v');
     if (!user) {
       return res.status(404).json({
-        status: 'fail',
+        status: 'error',
         message: 'User not found'
       });
     }
-    
+
     res.status(200).json({
       status: 'success',
       data: {
@@ -2220,159 +1312,373 @@ app.get('/api/admin/users/:id', async (req, res) => {
   }
 });
 
-app.patch('/api/admin/users/:id', async (req, res) => {
-  try {
-    // Verify admin token
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Check if user is admin
-    const admin = await Admin.findById(decoded.id);
-    if (!admin) {
-      return res.status(403).json({
-        status: 'fail',
-        message: 'You do not have permission to perform this action'
-      });
-    }
-    
-    // Filter out unwanted fields
-    const filteredBody = filterObj(
-      req.body,
-      'firstName',
-      'lastName',
-      'email',
-      'balance',
-      'activeBalance',
-      'maturedBalance',
-      'savingsBalance',
-      'referralBonus',
-      'active',
-      'role'
-    );
-    
-    // Update user
-    const updatedUser = await User.findByIdAndUpdate(req.params.id, filteredBody, {
-      new: true,
-      runValidators: true
+app.put('/api/admin/users/:id/balance', authenticate, adminOnly, [
+  body('balanceType').isIn(['main', 'active', 'matured', 'savings']).withMessage('Invalid balance type'),
+  body('amount').isFloat().withMessage('Amount must be a number'),
+  body('action').isIn(['add', 'subtract', 'set']).withMessage('Invalid action'),
+  body('reason').notEmpty().withMessage('Reason is required')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'error',
+      errors: errors.array()
     });
-    
+  }
+
+  try {
+    const { balanceType, amount, action, reason } = req.body;
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    // Perform balance operation
+    let newBalance = user.balance[balanceType];
+    if (action === 'add') {
+      newBalance += amount;
+    } else if (action === 'subtract') {
+      if (newBalance < amount) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Insufficient balance to subtract'
+        });
+      }
+      newBalance -= amount;
+    } else if (action === 'set') {
+      newBalance = amount;
+    }
+
+    // Update balance
+    user.balance[balanceType] = newBalance;
+    await user.save();
+
+    // Create admin log
+    const adminLog = new AdminLog({
+      adminId: req.user._id,
+      action: 'balance_update',
+      targetUserId: user._id,
+      details: {
+        balanceType,
+        amount,
+        action,
+        reason,
+        newBalance
+      },
+      ipAddress: req.ip
+    });
+    await adminLog.save();
+
+    // Create transaction for the user
+    const transaction = new Transaction({
+      userId: user._id,
+      type: action === 'add' ? 'bonus' : 'adjustment',
+      amount,
+      status: 'completed',
+      notes: `Admin adjustment: ${reason}`
+    });
+    await transaction.save();
+
+    // Send email notification to user
+    const emailContent = `
+      <h1>Account Balance Updated</h1>
+      <p>Your ${balanceType} balance has been updated by an administrator.</p>
+      <p>Action: ${action === 'add' ? 'Added' : action === 'subtract' ? 'Subtracted' : 'Set to'} ${amount} BTC</p>
+      <p>New ${balanceType} balance: ${newBalance} BTC</p>
+      <p>Reason: ${reason}</p>
+    `;
+    await sendEmail(user.email, 'Balance Updated', 'Your account balance has been updated', emailContent);
+
     res.status(200).json({
       status: 'success',
       data: {
-        user: updatedUser
+        user: {
+          id: user._id,
+          email: user.email,
+          balance: user.balance
+        }
       }
     });
   } catch (err) {
-    console.error('Admin update user error:', err);
+    console.error('Admin update balance error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while updating user'
+      message: 'An error occurred while updating user balance'
     });
   }
 });
 
-app.get('/api/admin/kyc/pending', async (req, res) => {
+app.put('/api/admin/users/:id/status', authenticate, adminOnly, [
+  body('status').isIn(['active', 'suspended']).withMessage('Invalid status'),
+  body('reason').notEmpty().withMessage('Reason is required')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'error',
+      errors: errors.array()
+    });
+  }
+
   try {
-    // Verify admin token
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
+    const { status, reason } = req.body;
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
       });
     }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Check if user is admin
-    const admin = await Admin.findById(decoded.id);
-    if (!admin) {
-      return res.status(403).json({
-        status: 'fail',
-        message: 'You do not have permission to perform this action'
-      });
-    }
-    
-    // Get pending KYC
-    const pendingKYC = await KYC.find({ status: 'pending' })
-      .populate('user', 'firstName lastName email')
-      .sort('-createdAt');
-    
+
+    // Update status
+    user.status = status;
+    await user.save();
+
+    // Create admin log
+    const adminLog = new AdminLog({
+      adminId: req.user._id,
+      action: 'status_update',
+      targetUserId: user._id,
+      details: {
+        status,
+        reason
+      },
+      ipAddress: req.ip
+    });
+    await adminLog.save();
+
+    // Send email notification to user
+    const emailContent = `
+      <h1>Account Status Updated</h1>
+      <p>Your account status has been updated to: <strong>${status}</strong></p>
+      <p>Reason: ${reason}</p>
+      ${status === 'suspended' ? '<p>Please contact support if you believe this is an error.</p>' : ''}
+    `;
+    await sendEmail(user.email, 'Account Status Updated', `Your account has been ${status}`, emailContent);
+
     res.status(200).json({
       status: 'success',
-      results: pendingKYC.length,
       data: {
-        kyc: pendingKYC
+        user: {
+          id: user._id,
+          email: user.email,
+          status: user.status
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Admin update status error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while updating user status'
+    });
+  }
+});
+
+app.get('/api/admin/transactions', authenticate, adminOnly, async (req, res) => {
+  try {
+    const { type, status, userId, limit = 10, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const query = {};
+    if (type) query.type = type;
+    if (status) query.status = status;
+    if (userId) query.userId = userId;
+
+    const transactions = await Transaction.find(query)
+      .populate('userId', 'firstName lastName email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Transaction.countDocuments(query);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        transactions,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (err) {
+    console.error('Admin get transactions error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching transactions'
+    });
+  }
+});
+
+app.put('/api/admin/transactions/:id/status', authenticate, adminOnly, [
+  body('status').isIn(['pending', 'completed', 'failed', 'cancelled']).withMessage('Invalid status'),
+  body('notes').optional()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'error',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { status, notes } = req.body;
+    const transaction = await Transaction.findById(req.params.id).populate('userId', 'email firstName');
+    if (!transaction) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Transaction not found'
+      });
+    }
+
+    // Update transaction status
+    transaction.status = status;
+    if (notes) transaction.notes = notes;
+    await transaction.save();
+
+    // If deposit is completed, update user balance
+    if (transaction.type === 'deposit' && status === 'completed') {
+      const user = await User.findById(transaction.userId);
+      user.balance.main += transaction.amount;
+      await user.save();
+    }
+
+    // Create admin log
+    const adminLog = new AdminLog({
+      adminId: req.user._id,
+      action: 'transaction_update',
+      targetUserId: transaction.userId._id,
+      details: {
+        transactionId: transaction._id,
+        status,
+        notes
+      },
+      ipAddress: req.ip
+    });
+    await adminLog.save();
+
+    // Send email notification to user
+    const emailContent = `
+      <h1>Transaction Status Updated</h1>
+      <p>Your ${transaction.type} transaction (ID: ${transaction._id}) has been updated to: <strong>${status}</strong></p>
+      ${notes ? `<p>Notes: ${notes}</p>` : ''}
+    `;
+    await sendEmail(transaction.userId.email, 'Transaction Status Updated', `Your transaction is now ${status}`, emailContent);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        transaction
+      }
+    });
+  } catch (err) {
+    console.error('Admin update transaction error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while updating transaction'
+    });
+  }
+});
+
+app.get('/api/admin/kyc/pending', authenticate, adminOnly, async (req, res) => {
+  try {
+    const { limit = 10, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const kycSubmissions = await KYC.find({ status: 'pending' })
+      .populate('userId', 'firstName lastName email')
+      .sort({ submittedAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await KYC.countDocuments({ status: 'pending' });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        kycSubmissions,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
       }
     });
   } catch (err) {
     console.error('Admin get pending KYC error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching pending KYC'
+      message: 'An error occurred while fetching pending KYC submissions'
     });
   }
 });
 
-app.post('/api/admin/kyc/:id/review', async (req, res) => {
+app.post('/api/admin/kyc/:id/review', authenticate, adminOnly, [
+  body('decision').isIn(['approved', 'rejected']).withMessage('Invalid decision'),
+  body('notes').optional()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'error',
+      errors: errors.array()
+    });
+  }
+
   try {
-    // Verify admin token
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Check if user is admin
-    const admin = await Admin.findById(decoded.id);
-    if (!admin) {
-      return res.status(403).json({
-        status: 'fail',
-        message: 'You do not have permission to perform this action'
-      });
-    }
-    
-    const { status, reason } = req.body;
-    
-    // Update KYC status
-    const kyc = await KYC.findByIdAndUpdate(
-      req.params.id,
-      { status, reason, reviewedBy: decoded.id, reviewedAt: new Date() },
-      { new: true }
-    ).populate('user', 'firstName lastName email');
-    
+    const { decision, notes } = req.body;
+    const kyc = await KYC.findById(req.params.id).populate('userId', 'email firstName lastName');
     if (!kyc) {
       return res.status(404).json({
-        status: 'fail',
+        status: 'error',
         message: 'KYC submission not found'
       });
     }
-    
-    // Update user verification status
-    if (status === 'approved') {
-      await User.findByIdAndUpdate(kyc.user._id, { isVerified: true });
+
+    if (kyc.status !== 'pending') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'KYC submission has already been reviewed'
+      });
     }
-    
-    // Notify user
-    io.to(kyc.user._id.toString()).emit('kycUpdate', {
-      status,
-      reason
+
+    // Update KYC status
+    kyc.status = decision;
+    kyc.reviewedBy = req.user._id;
+    kyc.reviewNotes = notes;
+    kyc.reviewedAt = new Date();
+    await kyc.save();
+
+    // Update user KYC status
+    const user = await User.findById(kyc.userId._id);
+    user.kycStatus = decision === 'approved' ? 'verified' : 'rejected';
+    await user.save();
+
+    // Create admin log
+    const adminLog = new AdminLog({
+      adminId: req.user._id,
+      action: 'kyc_review',
+      targetUserId: kyc.userId._id,
+      details: {
+        decision,
+        notes
+      },
+      ipAddress: req.ip
     });
-    
+    await adminLog.save();
+
+    // Send email notification to user
+    const emailContent = `
+      <h1>KYC Verification ${decision === 'approved' ? 'Approved' : 'Rejected'}</h1>
+      <p>Your KYC submission has been ${decision}.</p>
+      ${notes ? `<p>Notes: ${notes}</p>` : ''}
+      ${decision === 'rejected' ? '<p>You may submit new documents for verification.</p>' : ''}
+    `;
+    await sendEmail(kyc.userId.email, `KYC ${decision === 'approved' ? 'Approved' : 'Rejected'}`, `Your KYC has been ${decision}`, emailContent);
+
     res.status(200).json({
       status: 'success',
       data: {
@@ -2388,507 +1694,106 @@ app.post('/api/admin/kyc/:id/review', async (req, res) => {
   }
 });
 
-app.get('/api/admin/withdrawals/pending', async (req, res) => {
+// Stats routes
+app.get('/api/stats', authenticate, adminOnly, async (req, res) => {
   try {
-    // Verify admin token
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Check if user is admin
-    const admin = await Admin.findById(decoded.id);
-    if (!admin) {
-      return res.status(403).json({
-        status: 'fail',
-        message: 'You do not have permission to perform this action'
-      });
-    }
-    
-    // Get pending withdrawals
-    const pendingWithdrawals = await Transaction.find({ 
-      type: 'withdrawal',
-      status: 'pending'
-    })
-    .populate('user', 'firstName lastName email')
-    .sort('-createdAt');
-    
-    res.status(200).json({
-      status: 'success',
-      results: pendingWithdrawals.length,
-      data: {
-        withdrawals: pendingWithdrawals
-      }
-    });
-  } catch (err) {
-    console.error('Admin get pending withdrawals error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching pending withdrawals'
-    });
-  }
-});
-
-app.post('/api/admin/withdrawals/:id/process', async (req, res) => {
-  try {
-    // Verify admin token
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Check if user is admin
-    const admin = await Admin.findById(decoded.id);
-    if (!admin) {
-      return res.status(403).json({
-        status: 'fail',
-        message: 'You do not have permission to perform this action'
-      });
-    }
-    
-    const { status, transactionHash, notes } = req.body;
-    
-    // Update withdrawal status
-    const withdrawal = await Transaction.findByIdAndUpdate(
-      req.params.id,
-      { 
-        status,
-        transactionHash: status === 'completed' ? transactionHash : undefined,
-        notes,
-        processedBy: decoded.id,
-        processedAt: new Date()
-      },
-      { new: true }
-    ).populate('user', 'firstName lastName email');
-    
-    if (!withdrawal) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Withdrawal not found'
-      });
-    }
-    
-    // If rejected, return funds to user
-    if (status === 'rejected') {
-      await User.findByIdAndUpdate(withdrawal.user._id, {
-        $inc: { balance: withdrawal.amount }
-      });
-    }
-    
-    // Notify user
-    io.to(withdrawal.user._id.toString()).emit('withdrawalUpdate', {
-      id: withdrawal._id,
-      status,
-      amount: withdrawal.amount
-    });
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        withdrawal
-      }
-    });
-  } catch (err) {
-    console.error('Admin process withdrawal error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while processing withdrawal'
-    });
-  }
-});
-
-app.post('/api/admin/loans/:id/approve', async (req, res) => {
-  try {
-    // Verify admin token
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Check if user is admin
-    const admin = await Admin.findById(decoded.id);
-    if (!admin) {
-      return res.status(403).json({
-        status: 'fail',
-        message: 'You do not have permission to perform this action'
-      });
-    }
-    
-    // Approve loan
-    const loan = await Loan.findByIdAndUpdate(
-      req.params.id,
-      { 
-        status: 'active',
-        startDate: new Date(),
-        endDate: moment().add(req.body.duration, 'days').toDate(),
-        approvedBy: decoded.id,
-        approvedAt: new Date()
-      },
-      { new: true }
-    ).populate('user', 'firstName lastName email');
-    
-    if (!loan) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Loan not found'
-      });
-    }
-    
-    // Add funds to user balance
-    await User.findByIdAndUpdate(loan.user._id, {
-      $inc: { balance: loan.amount }
-    });
-    
-    // Create transaction
-    await Transaction.create({
-      user: loan.user._id,
-      type: 'loan',
-      amount: loan.amount,
-      status: 'completed'
-    });
-    
-    // Schedule loan repayment
-    const dailyPayment = (loan.amount * (loan.interestRate / 100)) / loan.duration;
-    const interval = setInterval(async () => {
-      try {
-        // Check if loan is still active
-        const currentLoan = await Loan.findById(loan._id);
-        if (!currentLoan || currentLoan.status !== 'active') {
-          clearInterval(interval);
-          return;
-        }
-        
-        // Check if loan period has ended
-        if (new Date() > currentLoan.endDate) {
-          // Finalize loan
-          currentLoan.status = 'completed';
-          await currentLoan.save();
-          
-          clearInterval(interval);
-          return;
-        }
-        
-        // Deduct daily payment from user balance
-        const user = await User.findById(currentLoan.user._id);
-        if (user.balance >= dailyPayment) {
-          user.balance -= dailyPayment;
-          await user.save();
-          
-          // Record payment transaction
-          await Transaction.create({
-            user: currentLoan.user._id,
-            type: 'loan_payment',
-            amount: dailyPayment,
-            status: 'completed'
-          });
-        } else {
-          // Mark loan as defaulted if payment fails
-          currentLoan.status = 'defaulted';
-          await currentLoan.save();
-          clearInterval(interval);
-        }
-      } catch (err) {
-        console.error('Loan payment error:', err);
-        clearInterval(interval);
-      }
-    }, 24 * 60 * 60 * 1000); // 24 hours
-    
-    // Notify user
-    io.to(loan.user._id.toString()).emit('loanUpdate', {
-      id: loan._id,
-      status: 'active',
-      amount: loan.amount
-    });
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        loan
-      }
-    });
-  } catch (err) {
-    console.error('Admin approve loan error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while approving loan'
-    });
-  }
-});
-
-// 11. Mining Data Routes
-app.get('/api/mining/metrics', async (req, res) => {
-  try {
-    // Check cache first
-    const cachedMetrics = await getCachedData('miningMetrics');
-    if (cachedMetrics) {
-      return res.status(200).json({
-        status: 'success',
-        data: {
-          metrics: cachedMetrics
-        }
-      });
-    }
-    
-    // Simulate mining metrics (in production, this would come from mining software API)
-    const metrics = {
-      hashRate: Math.floor(Math.random() * 100) + 50, // TH/s
-      uptime: Math.floor(Math.random() * 100), // %
-      activeRigs: Math.floor(Math.random() * 50) + 10,
-      btcMined: (Math.random() * 0.5).toFixed(8),
-      powerConsumption: Math.floor(Math.random() * 500) + 1000, // kW
-      difficulty: Math.floor(Math.random() * 10) + 20 // T
-    };
-    
-    // Cache metrics
-    await cacheResponse('miningMetrics', metrics, 300); // 5 minutes
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        metrics
-      }
-    });
-  } catch (err) {
-    console.error('Get mining metrics error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching mining metrics'
-    });
-  }
-});
-
-// 12. Platform Stats Routes
-app.get('/api/stats', async (req, res) => {
-  try {
-    // Check cache first
-    const cachedStats = await getCachedData('platformStats');
-    if (cachedStats) {
-      return res.status(200).json({
-        status: 'success',
-        data: {
-          stats: cachedStats
-        }
-      });
-    }
-    
-    // Get platform stats
+    // Get total users
     const totalUsers = await User.countDocuments();
-    const activeUsers = await User.countDocuments({ active: true });
-    const totalDeposits = await Transaction.aggregate([
+
+    // Get active users (logged in last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const activeUsers = await User.countDocuments({ lastLogin: { $gte: thirtyDaysAgo } });
+
+    // Get total deposits
+    const depositsResult = await Transaction.aggregate([
       { $match: { type: 'deposit', status: 'completed' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
-    const totalWithdrawals = await Transaction.aggregate([
+    const totalDeposits = depositsResult.length ? depositsResult[0].total : 0;
+
+    // Get total withdrawals
+    const withdrawalsResult = await Transaction.aggregate([
       { $match: { type: 'withdrawal', status: 'completed' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
-    const activeInvestments = await Investment.countDocuments({ status: 'active' });
-    
-    const stats = {
-      totalUsers,
-      activeUsers,
-      totalDeposits: totalDeposits[0]?.total || 0,
-      totalWithdrawals: totalWithdrawals[0]?.total || 0,
-      activeInvestments,
-      btcPrice: await getBTCPrice() // Get current BTC price
-    };
-    
-    // Cache stats
-    await cacheResponse('platformStats', stats, 60); // 1 minute
-    
+    const totalWithdrawals = withdrawalsResult.length ? withdrawalsResult[0].total : 0;
+
+    // Get total investments
+    const investmentsResult = await Investment.aggregate([
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    const totalInvestments = investmentsResult.length ? investmentsResult[0].total : 0;
+
+    // Get recent signups (last 7 days)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const recentSignups = await User.countDocuments({ createdAt: { $gte: sevenDaysAgo } });
+
     res.status(200).json({
       status: 'success',
       data: {
-        stats
+        totalUsers,
+        activeUsers,
+        totalDeposits,
+        totalWithdrawals,
+        totalInvestments,
+        recentSignups
       }
     });
   } catch (err) {
-    console.error('Get platform stats error:', err);
+    console.error('Get stats error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching platform stats'
-    });
-  }
-});
-
-// Utility function to get BTC price
-async function getBTCPrice() {
-  try {
-    // In production, this would fetch from CoinGecko API
-    // For demo purposes, we'll return a random value
-    return Math.random() * 10000 + 30000; // Between 30k and 40k
-  } catch (err) {
-    console.error('Get BTC price error:', err);
-    return 35000; // Fallback value
-  }
-}
-
-// 13. Support Routes
-app.post('/api/support', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    const { subject, message } = req.body;
-    
-    // Create support ticket
-    const ticket = await SupportTicket.create({
-      user: decoded.id,
-      subject,
-      message,
-      status: 'open'
-    });
-    
-    // Notify admins
-    io.emit('newSupportTicket', ticket);
-    
-    res.status(201).json({
-      status: 'success',
-      data: {
-        ticket
-      }
-    });
-  } catch (err) {
-    console.error('Create support ticket error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while creating support ticket'
-    });
-  }
-});
-
-app.get('/api/support', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get support tickets
-    const tickets = await SupportTicket.find({ user: decoded.id })
-      .sort('-createdAt');
-    
-    res.status(200).json({
-      status: 'success',
-      results: tickets.length,
-      data: {
-        tickets
-      }
-    });
-  } catch (err) {
-    console.error('Get support tickets error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching support tickets'
-    });
-  }
-});
-
-// 14. Chat Routes
-app.get('/api/chat/history', async (req, res) => {
-  try {
-    // Get user from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'You are not logged in! Please log in to get access.'
-      });
-    }
-    
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get chat history
-    const messages = await SupportTicket.find({
-      $or: [
-        { sender: decoded.id, receiver: { $exists: true } },
-        { receiver: decoded.id }
-      ]
-    })
-    .sort('createdAt')
-    .limit(100);
-    
-    res.status(200).json({
-      status: 'success',
-      results: messages.length,
-      data: {
-        messages
-      }
-    });
-  } catch (err) {
-    console.error('Get chat history error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching chat history'
+      message: 'An error occurred while fetching stats'
     });
   }
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Global error handler:', err);
-  
-  err.statusCode = err.statusCode || 500;
-  err.status = err.status || 'error';
-  
-  res.status(err.statusCode).json({
-    status: err.status,
-    message: err.message
+  console.error('Unhandled error:', err);
+  res.status(500).json({
+    status: 'error',
+    message: 'Internal server error'
   });
 });
 
-// Start server
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', err => {
-  console.error('Unhandled Rejection:', err);
-  server.close(() => {
-    process.exit(1);
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    status: 'error',
+    message: 'Endpoint not found'
   });
 });
 
-// Handle uncaught exceptions
-process.on('uncaughtException', err => {
-  console.error('Uncaught Exception:', err);
-  server.close(() => {
-    process.exit(1);
+// Cluster mode for production
+if (cluster.isMaster && process.env.NODE_ENV === 'production') {
+  console.log(`Master ${process.pid} is running`);
+
+  // Fork workers
+  const numCPUs = os.cpus().length;
+  for (let i = 0; i < numCPUs; i++) {
+    cluster.fork();
+  }
+
+  cluster.on('exit', (worker, code, signal) => {
+    console.log(`Worker ${worker.process.pid} died`);
+    cluster.fork(); // Create a new worker
   });
-});
+} else {
+  // Initialize data and start server
+  const startServer = async () => {
+    await initializeAdmin();
+    await initializePlans();
+
+    app.listen(config.PORT, () => {
+      console.log(`Server running on port ${config.PORT}`);
+      if (cluster.worker) {
+        console.log(`Worker ${process.pid} started`);
+      }
+    });
+  };
+
+  startServer();
+}
