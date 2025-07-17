@@ -1248,217 +1248,211 @@ app.get('/api/referrals', authenticate, async (req, res) => {
 
 
 // ======================
-// Admin API Routes
+// Admin Authentication Routes
 // ======================
 
-// Admin CSRF Protection Middleware
-const adminCsrfProtection = (req, res, next) => {
-    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
-        return next();
-    }
-
-    const csrfToken = req.headers['x-csrf-token'] || req.body._csrf;
-    if (!csrfToken || !req.session.csrfToken || csrfToken !== req.session.csrfToken) {
-        return res.status(403).json({
-            success: false,
-            message: 'Invalid CSRF token'
-        });
-    }
-    next();
-};
-
-// Admin Authentication Middleware
-const adminAuth = async (req, res, next) => {
-    try {
-        const token = req.cookies.admin_jwt;
-        if (!token) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized, no token'
-            });
-        }
-
-        const decoded = jwt.verify(token, process.env.ADMIN_JWT_SECRET || '17581758Na.%');
-        req.admin = decoded;
-
-        // Verify admin exists in database
-        const admin = await Admin.findById(decoded.id);
-        if (!admin) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized, admin not found'
-            });
-        }
-
-        next();
-    } catch (err) {
-        console.error('Admin auth error:', err);
-        return res.status(401).json({
-            success: false,
-            message: 'Not authorized, token failed'
-        });
-    }
-};
+// CSRF Protection Middleware
+const csrf = require('csurf');
+const csrfProtection = csrf({ cookie: true });
 
 // Generate CSRF Token
-router.get('/api/csrf-token', (req, res) => {
-    try {
-        // Generate a CSRF token and store in session
-        const csrfToken = crypto.randomBytes(32).toString('hex');
-        req.session.csrfToken = csrfToken;
-        
-        res.json({
-            success: true,
-            csrfToken
-        });
-    } catch (err) {
-        console.error('CSRF token generation error:', err);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to generate CSRF token'
-        });
-    }
+router.get('/api/csrf-token', csrfProtection, (req, res) => {
+  try {
+    res.json({
+      success: true,
+      csrfToken: req.csrfToken()
+    });
+  } catch (error) {
+    console.error('CSRF token generation error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to generate CSRF token'
+    });
+  }
 });
 
 // Admin Login
 router.post('/api/admin/auth/login', async (req, res) => {
-    try {
-        const { email, password, two_factor_code } = req.body;
-        
-        // Validate input
-        if (!email || !password) {
-            return res.status(400).json({
-                success: false,
-                message: 'Please provide email and password'
-            });
-        }
-
-        // Check for admin
-        const admin = await Admin.findOne({ email }).select('+password +twoFactorSecret');
-        if (!admin) {
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid credentials'
-            });
-        }
-
-        // Check password
-        const isMatch = await bcrypt.compare(password, admin.password);
-        if (!isMatch) {
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid credentials'
-            });
-        }
-
-        // Check 2FA if enabled
-        if (admin.twoFactorEnabled && two_factor_code) {
-            const verified = speakeasy.totp.verify({
-                secret: admin.twoFactorSecret,
-                encoding: 'base32',
-                token: two_factor_code,
-                window: 1
-            });
-            
-            if (!verified) {
-                return res.status(401).json({
-                    success: false,
-                    message: 'Invalid 2FA code'
-                });
-            }
-        } else if (admin.twoFactorEnabled) {
-            return res.status(400).json({
-                success: false,
-                message: '2FA code required'
-            });
-        }
-
-        // Create JWT token
-        const token = jwt.sign(
-            { id: admin._id, email: admin.email, role: 'admin' },
-            process.env.ADMIN_JWT_SECRET || '17581758Na.%',
-            { expiresIn: process.env.ADMIN_JWT_EXPIRE || '30d' }
-        );
-
-        // Set cookie options
-        const cookieOptions = {
-            expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict'
-        };
-
-        // Generate new CSRF token for session
-        const csrfToken = crypto.randomBytes(32).toString('hex');
-        req.session.csrfToken = csrfToken;
-
-        res.cookie('admin_jwt', token, cookieOptions).json({
-            success: true,
-            token,
-            csrfToken,
-            user: {
-                id: admin._id,
-                name: admin.name,
-                email: admin.email,
-                avatar: admin.avatar,
-                twoFactorEnabled: admin.twoFactorEnabled
-            }
-        });
-    } catch (err) {
-        console.error('Admin login error:', err);
-        res.status(500).json({
-            success: false,
-            message: 'Server error during login'
-        });
+  try {
+    const { email, password, two_factor_code } = req.body;
+    
+    // Validate input
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and password are required'
+      });
     }
+
+    // 1. Verify admin credentials
+    const admin = await Admin.findOne({ email });
+    if (!admin) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+
+    // 2. Verify password
+    const isMatch = await bcrypt.compare(password, admin.password);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+
+    // 3. Check if 2FA is enabled and verify code if provided
+    if (admin.two_factor_enabled) {
+      if (!two_factor_code) {
+        return res.status(400).json({
+          success: false,
+          message: '2FA code is required'
+        });
+      }
+
+      const verified = speakeasy.totp.verify({
+        secret: admin.two_factor_secret,
+        encoding: 'base32',
+        token: two_factor_code,
+        window: 2
+      });
+
+      if (!verified) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid 2FA code'
+        });
+      }
+    }
+
+    // 4. Generate JWT token
+    const token = jwt.sign(
+      { 
+        id: admin._id,
+        role: 'admin',
+        email: admin.email 
+      },
+      process.env.JWT_SECRET || '17581758Na.%',
+      { expiresIn: process.env.JWT_EXPIRES_IN || '30d' }
+    );
+
+    // 5. Set secure HTTP-only cookie
+    res.cookie('admin_jwt', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+    });
+
+    // 6. Generate new CSRF token for session
+    const csrfToken = req.csrfToken();
+
+    // 7. Respond with success
+    res.json({
+      success: true,
+      token,
+      csrfToken,
+      user: {
+        id: admin._id,
+        name: admin.name,
+        email: admin.email,
+        avatar: admin.avatar,
+        two_factor_enabled: admin.two_factor_enabled,
+        role: admin.role
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin login error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
 });
 
 // Admin Logout
-router.post('/api/admin/auth/logout', adminAuth, (req, res) => {
-    try {
-        // Clear cookie and session
-        res.clearCookie('admin_jwt');
-        req.session.csrfToken = null;
-        
-        res.json({
-            success: true,
-            message: 'Logged out successfully'
-        });
-    } catch (err) {
-        console.error('Admin logout error:', err);
-        res.status(500).json({
-            success: false,
-            message: 'Server error during logout'
-        });
-    }
+router.post('/api/admin/auth/logout', csrfProtection, (req, res) => {
+  try {
+    // Clear the JWT cookie
+    res.clearCookie('admin_jwt');
+    
+    res.json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+  } catch (error) {
+    console.error('Admin logout error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
 });
 
-// Verify Admin Token (for persistent sessions)
-router.get('/api/admin/auth/verify', adminAuth, (req, res) => {
-    try {
-        // Generate new CSRF token for session
-        const csrfToken = crypto.randomBytes(32).toString('hex');
-        req.session.csrfToken = csrfToken;
-        
-        res.json({
-            success: true,
-            csrfToken,
-            user: {
-                id: req.admin.id,
-                name: req.admin.name,
-                email: req.admin.email,
-                avatar: req.admin.avatar,
-                twoFactorEnabled: req.admin.twoFactorEnabled
-            }
-        });
-    } catch (err) {
-        console.error('Admin token verify error:', err);
-        res.status(500).json({
-            success: false,
-            message: 'Server error during token verification'
-        });
+// Verify Admin Token
+router.get('/api/admin/auth/verify', csrfProtection, async (req, res) => {
+  try {
+    const token = req.cookies.admin_jwt;
+    
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: 'No token provided'
+      });
     }
+
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || '17581758Na.%');
+    
+    // Check if admin still exists
+    const admin = await Admin.findById(decoded.id);
+    if (!admin) {
+      return res.status(401).json({
+        success: false,
+        message: 'Admin not found'
+      });
+    }
+
+    // Generate new CSRF token
+    const csrfToken = req.csrfToken();
+
+    res.json({
+      success: true,
+      csrfToken,
+      user: {
+        id: admin._id,
+        name: admin.name,
+        email: admin.email,
+        avatar: admin.avatar,
+        two_factor_enabled: admin.two_factor_enabled,
+        role: admin.role
+      }
+    });
+
+  } catch (error) {
+    console.error('Token verification error:', error);
+    res.status(401).json({
+      success: false,
+      message: 'Invalid or expired token'
+    });
+  }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 app.get('/api/admin/users', authenticate, adminOnly, async (req, res) => {
