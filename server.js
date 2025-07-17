@@ -1245,8 +1245,6 @@ app.get('/api/referrals', authenticate, async (req, res) => {
 });
 
 // Admin routes
-
-
 app.get('/api/admin/users', authenticate, adminOnly, async (req, res) => {
   try {
     const { search, status, limit = 10, page = 1 } = req.query;
