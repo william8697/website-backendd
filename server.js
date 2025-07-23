@@ -50,7 +50,7 @@ const redis = new Redis({
 });
 
 // MongoDB connection
-mongoose.connect('mongodb+srv://rachellenjerii:kBwYRMKzTdaeLhEM@cluster0.dp3pxjy.mongodb.net/myDatabase?retryWrites=true&w=majority&appName=Cluster0
+mongoose.connect('mongodb+srv://rachellenjerii:kBwYRMKzTdaeLhEM@cluster0.dp3pxjy.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
 ', {
  
 })
