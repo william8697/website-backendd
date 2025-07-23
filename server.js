@@ -41,15 +41,7 @@ app.use(mongoSanitize());
 app.use(xss());
 app.use(hpp());
 
-// Add this near your other security middleware (around line 1189)
-app.use((req, res, next) => {
-  res.cookie('XSRF-TOKEN', req.csrfToken(), {
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    httpOnly: false // This is important for the frontend to access it
-  });
-  next();
-});
+app.use(csrfProtection);
 
 // Rate limiting
 const limiter = rateLimit({
