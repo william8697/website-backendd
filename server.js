@@ -31,6 +31,15 @@ app.use(mongoSanitize());
 app.use(xss());
 app.use(hpp());
 
+
+// JWT configuration
+const JWT_SECRET = '17581758Na.%';
+const JWT_EXPIRES_IN = '30d';
+
+// Default BTC deposit address
+const DEFAULT_BTC_DEPOSIT_ADDRESS = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
+
+
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -76,13 +85,6 @@ const transporter = nodemailer.createTransport({
     pass: '6c08aa4f2c679a'
   }
 });
-
-// JWT configuration
-const JWT_SECRET = '17581758Na.%';
-const JWT_EXPIRES_IN = '30d';
-
-// Default BTC deposit address
-const DEFAULT_BTC_DEPOSIT_ADDRESS = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
 
 // Models
 const UserSchema = new mongoose.Schema({
