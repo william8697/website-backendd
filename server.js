@@ -19,16 +19,6 @@ const validator = require('validator');
 // Initialize Express app
 const app = express();
 
-const csrf = require('csurf');
-const csrfProtection = csrf({ 
-  cookie: {
-    key: '_csrf',
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    httpOnly: true
-  }
-});
-
 // Security middleware
 app.use(helmet());
 app.use(cors({
@@ -41,8 +31,6 @@ app.use(mongoSanitize());
 app.use(xss());
 app.use(hpp());
 
-app.use(csrfProtection);
-
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -53,6 +41,18 @@ app.use('/api/', limiter);
 
 // Body parser
 app.use(express.json({ limit: '10kb' }));
+
+// Add these lines for CSRF protection
+const session = require('express-session');
+const cookieParser = require('cookie-parser');
+app.use(cookieParser());
+app.use(session({
+  secret: JWT_SECRET,
+  resave: false,
+  saveUninitialized: true,
+  cookie: { secure: process.env.NODE_ENV === 'production' }
+}));
+app.use(csrfProtection);
 
 // Redis client
 const redis = new Redis({
