@@ -15,7 +15,6 @@ const nodemailer = require('nodemailer');
 const Redis = require('ioredis');
 const { v4: uuidv4 } = require('uuid');
 const moment = require('moment');
-const axios = require('axios');
 
 // Initialize Express app
 const app = express();
@@ -72,19 +71,498 @@ const transporter = nodemailer.createTransport({
 const JWT_SECRET = '17581758Na.%';
 const JWT_EXPIRES_IN = '30d';
 
-// Models
-const User = require('./models/User');
-const Admin = require('./models/Admin');
-const Plan = require('./models/Plan');
-const Investment = require('./models/Investment');
-const Transaction = require('./models/Transaction');
-const KYCDocument = require('./models/KYCDocument');
-const Withdrawal = require('./models/Withdrawal');
-const Loan = require('./models/Loan');
-const ActivityLog = require('./models/ActivityLog');
-const ApiKey = require('./models/ApiKey');
+// ================ MODELS ================ //
 
-// Utility functions
+// User Schema
+const userSchema = new mongoose.Schema({
+  firstName: {
+    type: String,
+    required: [true, 'Please provide your first name'],
+    trim: true,
+    maxlength: [50, 'First name cannot be more than 50 characters']
+  },
+  lastName: {
+    type: String,
+    required: [true, 'Please provide your last name'],
+    trim: true,
+    maxlength: [50, 'Last name cannot be more than 50 characters']
+  },
+  email: {
+    type: String,
+    required: [true, 'Please provide your email'],
+    unique: true,
+    lowercase: true,
+    validate: [validator.isEmail, 'Please provide a valid email']
+  },
+  phone: {
+    type: String,
+    trim: true
+  },
+  password: {
+    type: String,
+    required: [true, 'Please provide a password'],
+    minlength: [8, 'Password must be at least 8 characters'],
+    select: false
+  },
+  passwordChangedAt: Date,
+  passwordResetToken: String,
+  passwordResetExpires: Date,
+  address: {
+    street: String,
+    city: String,
+    state: String,
+    postalCode: String,
+    country: String
+  },
+  balance: {
+    type: Number,
+    default: 0,
+    min: [0, 'Balance cannot be negative']
+  },
+  referralBonus: {
+    type: Number,
+    default: 0,
+    min: [0, 'Referral bonus cannot be negative']
+  },
+  kycStatus: {
+    type: String,
+    enum: ['unverified', 'pending', 'approved', 'rejected'],
+    default: 'unverified'
+  },
+  kycVerifiedAt: Date,
+  status: {
+    type: String,
+    enum: ['active', 'suspended', 'banned'],
+    default: 'active'
+  },
+  lastLogin: Date,
+  devices: [{
+    deviceId: String,
+    ipAddress: String,
+    userAgent: String,
+    lastUsed: Date
+  }],
+  twoFactorAuth: {
+    type: Boolean,
+    default: false
+  },
+  notificationPreferences: {
+    email: { type: Boolean, default: true },
+    sms: { type: Boolean, default: false },
+    push: { type: Boolean, default: true }
+  },
+  referralCode: {
+    type: String,
+    unique: true
+  },
+  referredBy: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'User'
+  }
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+// Indexes
+userSchema.index({ email: 1 }, { unique: true });
+userSchema.index({ referralCode: 1 }, { unique: true });
+userSchema.index({ status: 1 });
+userSchema.index({ kycStatus: 1 });
+
+// Document middleware
+userSchema.pre('save', async function(next) {
+  // Generate referral code if new user
+  if (this.isNew && !this.referralCode) {
+    this.referralCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+  }
+
+  // Hash password if modified
+  if (this.isModified('password')) {
+    this.password = await bcrypt.hash(this.password, 12);
+    if (!this.isNew) this.passwordChangedAt = Date.now() - 1000;
+  }
+  next();
+});
+
+// Instance methods
+userSchema.methods.correctPassword = async function(candidatePassword, userPassword) {
+  return await bcrypt.compare(candidatePassword, userPassword);
+};
+
+userSchema.methods.changedPasswordAfter = function(JWTTimestamp) {
+  if (this.passwordChangedAt) {
+    const changedTimestamp = parseInt(this.passwordChangedAt.getTime() / 1000, 10);
+    return JWTTimestamp < changedTimestamp;
+  }
+  return false;
+};
+
+userSchema.methods.createPasswordResetToken = function() {
+  const resetToken = crypto.randomBytes(32).toString('hex');
+  this.passwordResetToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+  this.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+  return resetToken;
+};
+
+const User = mongoose.model('User', userSchema);
+
+// Admin Schema
+const adminSchema = new mongoose.Schema({
+  firstName: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  lastName: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  email: {
+    type: String,
+    required: true,
+    unique: true,
+    lowercase: true,
+    validate: [validator.isEmail, 'Please provide a valid email']
+  },
+  password: {
+    type: String,
+    required: true,
+    minlength: 8,
+    select: false
+  },
+  role: {
+    type: String,
+    enum: ['admin', 'super-admin', 'support'],
+    default: 'admin'
+  },
+  lastLogin: Date,
+  active: {
+    type: Boolean,
+    default: true
+  }
+}, {
+  timestamps: true
+});
+
+adminSchema.methods.correctPassword = async function(candidatePassword, adminPassword) {
+  return await bcrypt.compare(candidatePassword, adminPassword);
+};
+
+const Admin = mongoose.model('Admin', adminSchema);
+
+// Plan Schema
+const planSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    unique: true
+  },
+  minAmount: {
+    type: Number,
+    required: true
+  },
+  maxAmount: Number,
+  duration: {
+    type: Number, // in hours
+    required: true
+  },
+  interestRate: {
+    type: Number,
+    required: true
+  },
+  referralBonus: {
+    type: Number,
+    required: true
+  },
+  contractType: {
+    type: String,
+    required: true
+  },
+  active: {
+    type: Boolean,
+    default: true
+  }
+}, {
+  timestamps: true
+});
+
+const Plan = mongoose.model('Plan', planSchema);
+
+// Investment Schema
+const investmentSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  plan: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'Plan',
+    required: true
+  },
+  amount: {
+    type: Number,
+    required: true,
+    min: [0, 'Amount cannot be negative']
+  },
+  expectedEarnings: {
+    type: Number,
+    required: true
+  },
+  earnings: {
+    type: Number,
+    default: 0
+  },
+  startDate: {
+    type: Date,
+    default: Date.now
+  },
+  maturityDate: {
+    type: Date,
+    required: true
+  },
+  status: {
+    type: String,
+    enum: ['active', 'completed', 'cancelled'],
+    default: 'active'
+  }
+}, {
+  timestamps: true
+});
+
+investmentSchema.index({ user: 1 });
+investmentSchema.index({ plan: 1 });
+investmentSchema.index({ status: 1 });
+investmentSchema.index({ maturityDate: 1 });
+
+const Investment = mongoose.model('Investment', investmentSchema);
+
+// Transaction Schema
+const transactionSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  amount: {
+    type: Number,
+    required: true
+  },
+  type: {
+    type: String,
+    enum: ['deposit', 'withdrawal', 'investment', 'transfer', 'referral', 'interest'],
+    required: true
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'completed', 'failed', 'cancelled'],
+    default: 'pending'
+  },
+  paymentMethod: {
+    type: String,
+    enum: ['btc', 'bank', 'card', 'internal']
+  },
+  walletAddress: String,
+  description: String,
+  reference: {
+    type: String,
+    unique: true
+  }
+}, {
+  timestamps: true
+});
+
+transactionSchema.index({ user: 1 });
+transactionSchema.index({ type: 1 });
+transactionSchema.index({ status: 1 });
+transactionSchema.index({ createdAt: -1 });
+
+const Transaction = mongoose.model('Transaction', transactionSchema);
+
+// KYC Document Schema
+const kycDocumentSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  documentType: {
+    type: String,
+    enum: ['passport', 'id-card', 'driver-license'],
+    required: true
+  },
+  documentNumber: {
+    type: String,
+    required: true
+  },
+  frontImage: {
+    type: String,
+    required: true
+  },
+  backImage: String,
+  selfieImage: String,
+  status: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending'
+  },
+  rejectionReason: String,
+  reviewedBy: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'Admin'
+  },
+  reviewedAt: Date
+}, {
+  timestamps: true
+});
+
+kycDocumentSchema.index({ user: 1 });
+kycDocumentSchema.index({ status: 1 });
+
+const KYCDocument = mongoose.model('KYCDocument', kycDocumentSchema);
+
+// Withdrawal Schema
+const withdrawalSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  amount: {
+    type: Number,
+    required: true,
+    min: [0, 'Amount cannot be negative']
+  },
+  walletAddress: {
+    type: String,
+    required: true
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'processing', 'completed', 'rejected'],
+    default: 'pending'
+  },
+  transaction: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'Transaction'
+  },
+  processedBy: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'Admin'
+  },
+  processedAt: Date,
+  rejectionReason: String
+}, {
+  timestamps: true
+});
+
+withdrawalSchema.index({ user: 1 });
+withdrawalSchema.index({ status: 1 });
+
+const Withdrawal = mongoose.model('Withdrawal', withdrawalSchema);
+
+// Loan Schema
+const loanSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  amount: {
+    type: Number,
+    required: true,
+    min: [0, 'Amount cannot be negative']
+  },
+  interestRate: {
+    type: Number,
+    required: true
+  },
+  duration: {
+    type: Number, // in days
+    required: true
+  },
+  purpose: String,
+  status: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected', 'paid'],
+    default: 'pending'
+  },
+  approvedBy: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'Admin'
+  },
+  approvedAt: Date,
+  dueDate: Date
+}, {
+  timestamps: true
+});
+
+loanSchema.index({ user: 1 });
+loanSchema.index({ status: 1 });
+
+const Loan = mongoose.model('Loan', loanSchema);
+
+// Activity Log Schema
+const activityLogSchema = new mongoose.Schema({
+  admin: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'Admin',
+    required: true
+  },
+  action: {
+    type: String,
+    required: true
+  },
+  entityType: String,
+  entityId: mongoose.Schema.Types.ObjectId,
+  ipAddress: String,
+  userAgent: String
+}, {
+  timestamps: true
+});
+
+activityLogSchema.index({ admin: 1 });
+activityLogSchema.index({ createdAt: -1 });
+
+const ActivityLog = mongoose.model('ActivityLog', activityLogSchema);
+
+// API Key Schema
+const apiKeySchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  name: {
+    type: String,
+    required: true
+  },
+  key: {
+    type: String,
+    required: true,
+    select: false
+  },
+  permissions: [String],
+  expiresAt: Date,
+  lastUsed: Date,
+  active: {
+    type: Boolean,
+    default: true
+  }
+}, {
+  timestamps: true
+});
+
+apiKeySchema.index({ user: 1 });
+apiKeySchema.index({ key: 1 }, { unique: true });
+
+const ApiKey = mongoose.model('ApiKey', apiKeySchema);
+
+// ================ UTILITY FUNCTIONS ================ //
+
 const catchAsync = fn => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
 };
@@ -122,7 +600,8 @@ const filterObj = (obj, ...allowedFields) => {
   return newObj;
 };
 
-// Middleware
+// ================ MIDDLEWARE ================ //
+
 const protect = catchAsync(async (req, res, next) => {
   let token;
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
@@ -200,7 +679,8 @@ const restrictTo = (...roles) => {
   };
 };
 
-// Initialize default admin
+// ================ INITIALIZATION ================ //
+
 const initializeAdmin = async () => {
   const adminExists = await Admin.findOne({ email: 'admin@bithash.com' });
   if (!adminExists) {
@@ -215,9 +695,6 @@ const initializeAdmin = async () => {
   }
 };
 
-initializeAdmin();
-
-// Initialize investment plans
 const initializePlans = async () => {
   const plans = await Plan.countDocuments();
   if (plans === 0) {
@@ -272,7 +749,15 @@ const initializePlans = async () => {
   }
 };
 
-initializePlans();
+// Initialize database
+const initializeDB = async () => {
+  await initializeAdmin();
+  await initializePlans();
+};
+
+initializeDB();
+
+// ================ ROUTES ================ //
 
 // USER ENDPOINTS
 
