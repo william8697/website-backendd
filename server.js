@@ -67,8 +67,6 @@ const logger = winston.createLogger({
 
 // MongoDB connection
 mongoose.connect('mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
 })
 .then(() => logger.info('MongoDB connected successfully'))
 .catch(err => logger.error('MongoDB connection error:', err));
