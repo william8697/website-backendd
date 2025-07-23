@@ -50,7 +50,7 @@ const redis = new Redis({
 });
 
 // MongoDB connection
-mongoose.connect('mongodb+srv://rachellenjerii:kBwYRMKzTdaeLhEM@cluster0.dp3pxjy.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', { 
+mongoose.connect('mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', { 
 })
 .then(() => console.log('MongoDB connected successfully'))
 .catch(err => console.error('MongoDB connection error:', err));
