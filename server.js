@@ -446,6 +446,11 @@ const logAdminActivity = async (adminId, action, target, targetId = null, detail
 };
 
 // Middleware
+
+const csrf = require('csurf');
+const csrfProtection = csrf({ cookie: true });
+app.use(csrfProtection);
+
 const protect = async (req, res, next) => {
   try {
     let token;
@@ -509,6 +514,12 @@ const restrictTo = (...roles) => {
 };
 
 // Routes
+
+// Add this route before your other routes
+app.get('/api/csrf-token', (req, res) => {
+  res.json({ csrfToken: req.csrfToken() });
+});
+
 
 // User Endpoints
 app.get('/api/users/me', protect, async (req, res) => {
