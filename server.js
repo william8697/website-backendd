@@ -466,8 +466,6 @@ const logAdminActivity = async (adminId, action, target, targetId = null, detail
 };
 
 // Middleware
-
-
 const protect = async (req, res, next) => {
   try {
     let token;
@@ -685,7 +683,7 @@ app.post('/api/users/api-keys', protect, async (req, res) => {
 });
 
 // Admin Endpoints
-app.post('/api/admin/auth/login', async (req, res) => {
+app.post('/api/admin/auth/login', csrfProtection, async (req, res) => {
   try {
     const { email, password } = req.body;
     
