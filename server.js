@@ -13,59 +13,25 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const Redis = require('ioredis');
-const WebSocket = require('ws');
-const cluster = require('cluster');
-const os = require('os');
 const { v4: uuidv4 } = require('uuid');
-const moment = require('moment');
-const axios = require('axios');
+const WebSocket = require('ws');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
 
 // Initialize Express app
 const app = express();
 
-// Environment variables
-const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET || '17581758Na.%';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://bithhash.vercel.app';
-const DEFAULT_BTC_ADDRESS = process.env.DEFAULT_BTC_ADDRESS || 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@bithash.com';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'SecureAdminPassword123!';
-const NODE_ENV = process.env.NODE_ENV || 'production';
-
-// Redis configuration
-const redis = new Redis({
-  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-  port: 14450,
-  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR',
-  enableOfflineQueue: false,
-  retryStrategy: (times) => {
-    const delay = Math.min(times * 50, 2000);
-    return delay;
-  },
-});
-
-// Email transporter
-const transporter = nodemailer.createTransport({
-  host: 'sandbox.smtp.mailtrap.io',
-  port: 2525,
-  auth: {
-    user: '7c707ac161af1c',
-    pass: '6c08aa4f2c679a'
-  }
-});
+// Enable trust proxy for rate limiting behind reverse proxy
+app.set('trust proxy', 1);
 
 // Security middleware
 app.use(helmet());
 app.use(cors({
-  origin: FRONTEND_URL,
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: 'https://bithhash.vercel.app',
+  credentials: true
 }));
 app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(cookieParser());
 app.use(mongoSanitize());
 app.use(xss());
@@ -77,590 +43,312 @@ const limiter = rateLimit({
   max: 100, // limit each IP to 100 requests per windowMs
   message: 'Too many requests from this IP, please try again later'
 });
-app.use('/api', limiter);
+app.use('/api/', limiter);
 
-// Database connection
-mongoose.connect(MONGODB_URI, {
+// Redis client
+const redis = new Redis({
+  host: 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+  port: 14450,
+  password: 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR'
+});
+
+// MongoDB connection
+mongoose.connect('mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-  autoIndex: true
-}).then(() => console.log('MongoDB connected successfully'))
-  .catch(err => console.error('MongoDB connection error:', err));
+  useCreateIndex: true,
+  useFindAndModify: false
+})
+.then(() => console.log('MongoDB connected successfully'))
+.catch(err => console.error('MongoDB connection error:', err));
 
-// MongoDB models
-const userSchema = new mongoose.Schema({
-  firstName: { type: String, required: true, trim: true },
-  lastName: { type: String, required: true, trim: true },
-  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-  phone: { type: String, trim: true },
-  country: { type: String, trim: true },
-  password: { type: String, required: true, select: false },
-  passwordChangedAt: Date,
-  passwordResetToken: String,
-  passwordResetExpires: Date,
-  twoFactorSecret: String,
-  twoFactorEnabled: { type: Boolean, default: false },
-  address: {
-    street: String,
-    city: String,
-    state: String,
-    postalCode: String,
-    country: String
-  },
-  balances: {
-    main: { type: Number, default: 0 },
-    active: { type: Number, default: 0 },
-    matured: { type: Number, default: 0 },
-    btc: { type: Number, default: 0 }
-  },
-  kyc: {
-    status: { type: String, enum: ['pending', 'verified', 'rejected', 'not-submitted'], default: 'not-submitted' },
-    documents: [{
-      type: { type: String, enum: ['id', 'passport', 'driver-license', 'proof-of-address', 'selfie'] },
-      url: String,
-      status: { type: String, enum: ['pending', 'verified', 'rejected'], default: 'pending' },
-      reviewedBy: mongoose.Schema.Types.ObjectId,
-      reviewedAt: Date,
-      rejectionReason: String
-    }]
-  },
-  notifications: {
-    email: { type: Boolean, default: true },
-    sms: { type: Boolean, default: true },
-    push: { type: Boolean, default: true }
-  },
-  apiKeys: [{
-    key: String,
-    secret: String,
-    permissions: [String],
-    expiresAt: Date,
-    createdAt: { type: Date, default: Date.now }
-  }],
-  devices: [{
-    deviceId: String,
-    name: String,
-    ip: String,
-    lastActive: Date,
-    os: String,
-    browser: String
-  }],
-  activity: [{
-    action: String,
-    ip: String,
-    device: String,
-    timestamp: { type: Date, default: Date.now }
-  }],
-  status: { type: String, enum: ['active', 'suspended', 'banned'], default: 'active' },
-  referralCode: String,
-  referredBy: mongoose.Schema.Types.ObjectId,
-  lastLogin: Date,
-  btcDepositAddress: { type: String, default: DEFAULT_BTC_ADDRESS },
-  createdAt: { type: Date, default: Date.now }
-}, { timestamps: true });
-
-userSchema.index({ email: 1 }, { unique: true });
-userSchema.index({ referralCode: 1 }, { unique: true, sparse: true });
-userSchema.index({ 'kyc.status': 1 });
-userSchema.index({ status: 1 });
-userSchema.index({ createdAt: 1 });
-
-const User = mongoose.model('User', userSchema);
-
-const adminSchema = new mongoose.Schema({
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true, select: false },
-  name: { type: String, required: true },
-  role: { type: String, enum: ['super-admin', 'admin', 'support', 'financial'], default: 'admin' },
-  permissions: [String],
-  lastLogin: Date,
-  twoFactorSecret: String,
-  twoFactorEnabled: { type: Boolean, default: false },
-  activity: [{
-    action: String,
-    ip: String,
-    timestamp: { type: Date, default: Date.now }
-  }]
-}, { timestamps: true });
-
-const Admin = mongoose.model('Admin', adminSchema);
-
-const transactionSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['deposit', 'withdrawal', 'transfer', 'investment', 'interest', 'bonus', 'fee', 'loan'], required: true },
-  amount: { type: Number, required: true },
-  currency: { type: String, default: 'USD' },
-  status: { type: String, enum: ['pending', 'completed', 'failed', 'cancelled'], default: 'pending' },
-  method: { type: String, enum: ['btc', 'bank', 'card', 'internal'], required: true },
-  details: mongoose.Schema.Types.Mixed,
-  reference: { type: String, unique: true },
-  processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
-  processedAt: Date,
-  notes: String
-}, { timestamps: true });
-
-transactionSchema.index({ userId: 1 });
-transactionSchema.index({ type: 1 });
-transactionSchema.index({ status: 1 });
-transactionSchema.index({ createdAt: 1 });
-
-const Transaction = mongoose.model('Transaction', transactionSchema);
-
-const investmentSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  planId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plan', required: true },
-  amount: { type: Number, required: true },
-  startDate: { type: Date, required: true },
-  endDate: { type: Date, required: true },
-  status: { type: String, enum: ['active', 'completed', 'cancelled'], default: 'active' },
-  returns: { type: Number, default: 0 },
-  transactions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' }],
-  autoRenew: { type: Boolean, default: false }
-}, { timestamps: true });
-
-investmentSchema.index({ userId: 1 });
-investmentSchema.index({ status: 1 });
-investmentSchema.index({ endDate: 1 });
-
-const Investment = mongoose.model('Investment', investmentSchema);
-
-const planSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  description: { type: String, required: true },
-  minAmount: { type: Number, required: true },
-  maxAmount: { type: Number },
-  duration: { type: Number, required: true }, // in days
-  interestRate: { type: Number, required: true },
-  compounding: { type: Boolean, default: false },
-  status: { type: String, enum: ['active', 'inactive'], default: 'active' },
-  features: [String]
-}, { timestamps: true });
-
-const Plan = mongoose.model('Plan', planSchema);
-
-const messageSchema = new mongoose.Schema({
-  from: { type: mongoose.Schema.Types.ObjectId, refPath: 'fromModel', required: true },
-  fromModel: { type: String, required: true, enum: ['User', 'Admin'] },
-  to: { type: mongoose.Schema.Types.ObjectId, refPath: 'toModel', required: true },
-  toModel: { type: String, required: true, enum: ['User', 'Admin'] },
-  message: { type: String, required: true },
-  read: { type: Boolean, default: false },
-  attachments: [{
-    url: String,
-    type: String,
-    name: String
-  }]
-}, { timestamps: true });
-
-messageSchema.index({ from: 1, to: 1 });
-messageSchema.index({ createdAt: -1 });
-
-const Message = mongoose.model('Message', messageSchema);
-
-const systemLogSchema = new mongoose.Schema({
-  action: { type: String, required: true },
-  entity: { type: String, required: true },
-  entityId: mongoose.Schema.Types.ObjectId,
-  performedBy: { type: mongoose.Schema.Types.ObjectId, refPath: 'performedByModel', required: true },
-  performedByModel: { type: String, required: true, enum: ['User', 'Admin'] },
-  ip: String,
-  userAgent: String,
-  details: mongoose.Schema.Types.Mixed
-}, { timestamps: true });
-
-systemLogSchema.index({ action: 1 });
-systemLogSchema.index({ entity: 1 });
-systemLogSchema.index({ createdAt: -1 });
-
-const SystemLog = mongoose.model('SystemLog', systemLogSchema);
-
-// Initialize default admin
-async function initializeDefaultAdmin() {
-  const existingAdmin = await Admin.findOne({ email: ADMIN_EMAIL });
-  if (!existingAdmin) {
-    const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, 12);
-    await Admin.create({
-      email: ADMIN_EMAIL,
-      password: hashedPassword,
-      name: 'Super Admin',
-      role: 'super-admin',
-      permissions: ['all']
-    });
-    console.log('Default admin account created');
+// Email transporter
+const transporter = nodemailer.createTransport({
+  host: 'sandbox.smtp.mailtrap.io',
+  port: 2525,
+  auth: {
+    user: '7c707ac161af1c',
+    pass: '6c08aa4f2c679a'
   }
-}
+});
+
+// JWT configuration
+const JWT_SECRET = '17581758Na.%';
+const JWT_EXPIRES_IN = '30d';
+
+// Models
+const User = require('./models/User');
+const Admin = require('./models/Admin');
+const Transaction = require('./models/Transaction');
+const Investment = require('./models/Investment');
+const Plan = require('./models/Plan');
+const KYCDocument = require('./models/KYCDocument');
+const Withdrawal = require('./models/Withdrawal');
+const Loan = require('./models/Loan');
+const ActivityLog = require('./models/ActivityLog');
+const ApiKey = require('./models/ApiKey');
+const Device = require('./models/Device');
+const Notification = require('./models/Notification');
 
 // Utility functions
-const createSendToken = (user, statusCode, res) => {
-  const token = jwt.sign({ id: user._id }, JWT_SECRET, {
-    expiresIn: JWT_EXPIRES_IN
+const generateApiKey = () => crypto.randomBytes(32).toString('hex');
+const generateSecurePassword = () => crypto.randomBytes(16).toString('hex');
+const logActivity = async (userId, action, details) => {
+  await ActivityLog.create({ user: userId, action, details });
+};
+
+// Default BTC deposit address
+const DEFAULT_BTC_DEPOSIT_ADDRESS = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
+
+// WebSocket server for real-time updates
+const wss = new WebSocket.Server({ noServer: true });
+
+wss.on('connection', (ws) => {
+  ws.on('message', (message) => {
+    // Handle WebSocket messages
+    console.log('Received WebSocket message:', message);
   });
+});
 
-  const cookieOptions = {
-    expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-    httpOnly: true,
-    secure: NODE_ENV === 'production',
-    sameSite: 'strict'
-  };
+// Create HTTPS server
+const server = https.createServer({
+  key: fs.readFileSync(path.join(__dirname, 'ssl', 'private.key')),
+  cert: fs.readFileSync(path.join(__dirname, 'ssl', 'certificate.crt'))
+}, app);
 
-  res.cookie('jwt', token, cookieOptions);
-
-  // Remove password from output
-  user.password = undefined;
-
-  res.status(statusCode).json({
-    status: 'success',
-    token,
-    data: {
-      user
-    }
+server.on('upgrade', (request, socket, head) => {
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit('connection', ws, request);
   });
-};
+});
 
-const filterObj = (obj, ...allowedFields) => {
-  const newObj = {};
-  Object.keys(obj).forEach(el => {
-    if (allowedFields.includes(el)) newObj[el] = obj[el];
-  });
-  return newObj;
-};
-
-const generateApiKey = () => {
-  return {
-    key: `BH-${crypto.randomBytes(16).toString('hex').toUpperCase()}`,
-    secret: `bh_sec_${crypto.randomBytes(32).toString('hex')}`
-  };
-};
-
-// Error handling middleware
-class AppError extends Error {
-  constructor(message, statusCode) {
-    super(message);
-    this.statusCode = statusCode;
-    this.status = `${statusCode}`.startsWith('4') ? 'fail' : 'error';
-    this.isOperational = true;
-    Error.captureStackTrace(this, this.constructor);
-  }
-}
-
-const globalErrorHandler = (err, req, res, next) => {
-  err.statusCode = err.statusCode || 500;
-  err.status = err.status || 'error';
-
-  if (NODE_ENV === 'development') {
-    res.status(err.statusCode).json({
-      status: err.status,
-      error: err,
-      message: err.message,
-      stack: err.stack
-    });
-  } else {
-    // Operational, trusted error: send message to client
-    if (err.isOperational) {
-      res.status(err.statusCode).json({
-        status: err.status,
-        message: err.message
-      });
-    } else {
-      // Programming or other unknown error: don't leak error details
-      console.error('ERROR 💥', err);
-      res.status(500).json({
-        status: 'error',
-        message: 'Something went very wrong!'
-      });
-    }
-  }
-};
-
-// Authentication middleware
+// Middleware to protect routes
 const protect = async (req, res, next) => {
+  let token;
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    token = req.headers.authorization.split(' ')[1];
+  } else if (req.cookies.jwt) {
+    token = req.cookies.jwt;
+  }
+
+  if (!token) {
+    return res.status(401).json({
+      status: 'error',
+      message: 'You are not logged in! Please log in to get access.'
+    });
+  }
+
   try {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    } else if (req.cookies.jwt) {
-      token = req.cookies.jwt;
-    }
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const currentUser = await User.findById(decoded.id).select('+active +lastActivity');
 
-    if (!token) {
-      return next(new AppError('You are not logged in! Please log in to get access.', 401));
-    }
-
-    // Verify token
-    const decoded = await jwt.verify(token, JWT_SECRET);
-
-    // Check if user still exists
-    const currentUser = await User.findById(decoded.id);
     if (!currentUser) {
-      return next(new AppError('The user belonging to this token does no longer exist.', 401));
+      return res.status(401).json({
+        status: 'error',
+        message: 'The user belonging to this token no longer exists.'
+      });
+    }
+
+    if (!currentUser.active) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Your account has been deactivated. Please contact support.'
+      });
     }
 
     // Check if user changed password after the token was issued
-    if (currentUser.passwordChangedAt) {
-      const changedTimestamp = parseInt(currentUser.passwordChangedAt.getTime() / 1000, 10);
-      if (decoded.iat < changedTimestamp) {
-        return next(new AppError('User recently changed password! Please log in again.', 401));
-      }
+    if (currentUser.changedPasswordAfter(decoded.iat)) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'User recently changed password! Please log in again.'
+      });
     }
 
-    // GRANT ACCESS TO PROTECTED ROUTE
     req.user = currentUser;
-    res.locals.user = currentUser;
     next();
   } catch (err) {
-    next(err);
+    return res.status(401).json({
+      status: 'error',
+      message: 'Invalid token. Please log in again.'
+    });
   }
 };
 
 const adminProtect = async (req, res, next) => {
+  let token;
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    token = req.headers.authorization.split(' ')[1];
+  } else if (req.cookies.jwtAdmin) {
+    token = req.cookies.jwtAdmin;
+  }
+
+  if (!token) {
+    return res.status(401).json({
+      status: 'error',
+      message: 'You are not logged in! Please log in to get access.'
+    });
+  }
+
   try {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    } else if (req.cookies.jwtAdmin) {
-      token = req.cookies.jwtAdmin;
-    }
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const currentAdmin = await Admin.findById(decoded.id).select('+active +lastActivity +role');
 
-    if (!token) {
-      return next(new AppError('You are not logged in! Please log in to get access.', 401));
-    }
-
-    // Verify token
-    const decoded = await jwt.verify(token, JWT_SECRET);
-
-    // Check if admin still exists
-    const currentAdmin = await Admin.findById(decoded.id);
     if (!currentAdmin) {
-      return next(new AppError('The admin belonging to this token does no longer exist.', 401));
+      return res.status(401).json({
+        status: 'error',
+        message: 'The admin belonging to this token no longer exists.'
+      });
     }
 
-    // GRANT ACCESS TO PROTECTED ROUTE
+    if (!currentAdmin.active) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Your account has been deactivated. Please contact administrator.'
+      });
+    }
+
     req.admin = currentAdmin;
-    res.locals.admin = currentAdmin;
     next();
   } catch (err) {
-    next(err);
+    return res.status(401).json({
+      status: 'error',
+      message: 'Invalid token. Please log in again.'
+    });
   }
 };
 
 const restrictTo = (...roles) => {
   return (req, res, next) => {
     if (!roles.includes(req.admin.role)) {
-      return next(new AppError('You do not have permission to perform this action', 403));
+      return res.status(403).json({
+        status: 'error',
+        message: 'You do not have permission to perform this action'
+      });
     }
     next();
   };
 };
 
-// API Routes
-
-// User routes
-app.post('/api/users/signup', async (req, res, next) => {
-  try {
-    const { firstName, lastName, email, password, passwordConfirm, referralCode } = req.body;
-
-    // Check if passwords match
-    if (password !== passwordConfirm) {
-      return next(new AppError('Passwords do not match', 400));
-    }
-
-    // Check if user exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return next(new AppError('Email already in use', 400));
-    }
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 12);
-
-    // Create referral code
-    const userReferralCode = crypto.randomBytes(4).toString('hex').toUpperCase();
-
-    // Create new user
-    const newUser = await User.create({
-      firstName,
-      lastName,
-      email,
-      password: hashedPassword,
-      referralCode: userReferralCode,
-      referredBy: referralCode ? await User.findOne({ referralCode }).select('_id') : undefined
+// Initialize default admin
+const initializeDefaultAdmin = async () => {
+  const adminCount = await Admin.countDocuments();
+  if (adminCount === 0) {
+    const defaultAdmin = new Admin({
+      name: 'Super Admin',
+      email: 'admin@bithash.com',
+      password: 'Admin@1234',
+      role: 'super-admin',
+      active: true
     });
-
-    // Log activity
-    await SystemLog.create({
-      action: 'signup',
-      entity: 'user',
-      entityId: newUser._id,
-      performedBy: newUser._id,
-      performedByModel: 'User',
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-      details: { referralCode }
-    });
-
-    // Send welcome email
-    const mailOptions = {
-      from: 'BitHash <no-reply@bithash.com>',
-      to: newUser.email,
-      subject: 'Welcome to BitHash',
-      html: `<p>Hello ${newUser.firstName},</p>
-             <p>Welcome to BitHash! Your account has been successfully created.</p>
-             <p>Your referral code is: <strong>${userReferralCode}</strong></p>
-             <p>Start investing today and grow your Bitcoin holdings.</p>`
-    };
-
-    await transporter.sendMail(mailOptions);
-
-    createSendToken(newUser, 201, res);
-  } catch (err) {
-    next(err);
+    await defaultAdmin.save();
+    console.log('Default admin created:', defaultAdmin.email);
   }
-});
+};
 
-app.post('/api/users/login', async (req, res, next) => {
-  try {
-    const { email, password } = req.body;
-
-    // 1) Check if email and password exist
-    if (!email || !password) {
-      return next(new AppError('Please provide email and password!', 400));
-    }
-
-    // 2) Check if user exists && password is correct
-    const user = await User.findOne({ email }).select('+password');
-
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      return next(new AppError('Incorrect email or password', 401));
-    }
-
-    // 3) Check if account is active
-    if (user.status !== 'active') {
-      return next(new AppError('Your account has been suspended. Please contact support.', 403));
-    }
-
-    // 4) Update last login
-    user.lastLogin = new Date();
-    await user.save();
-
-    // 5) Log activity
-    await SystemLog.create({
-      action: 'login',
-      entity: 'user',
-      entityId: user._id,
-      performedBy: user._id,
-      performedByModel: 'User',
-      ip: req.ip,
-      userAgent: req.headers['user-agent']
-    });
-
-    // 6) If everything ok, send token to client
-    createSendToken(user, 200, res);
-  } catch (err) {
-    next(err);
+// Initialize investment plans
+const initializePlans = async () => {
+  const plansCount = await Plan.countDocuments();
+  if (plansCount === 0) {
+    const defaultPlans = [
+      {
+        name: 'Starter Plan',
+        minAmount: 100,
+        maxAmount: 999,
+        duration: 30,
+        dailyProfit: 1.5,
+        description: 'Perfect for beginners'
+      },
+      {
+        name: 'Advanced Plan',
+        minAmount: 1000,
+        maxAmount: 4999,
+        duration: 60,
+        dailyProfit: 2.0,
+        description: 'For experienced investors'
+      },
+      {
+        name: 'Professional Plan',
+        minAmount: 5000,
+        maxAmount: 20000,
+        duration: 90,
+        dailyProfit: 2.5,
+        description: 'Maximum returns for professionals'
+      }
+    ];
+    await Plan.insertMany(defaultPlans);
+    console.log('Default investment plans created');
   }
-});
+};
 
-app.get('/api/users/me', protect, async (req, res, next) => {
+// Initialize the system
+const initializeSystem = async () => {
+  await initializeDefaultAdmin();
+  await initializePlans();
+};
+
+initializeSystem().catch(err => console.error('Initialization error:', err));
+
+// Routes
+
+// User Endpoints
+// GET /api/users/me - Get current user profile
+app.get('/api/users/me', protect, async (req, res) => {
   try {
-    // Get user from database including balances
-    const user = await User.findById(req.user.id).select('-password -twoFactorSecret -apiKeys.secret');
+    const user = await User.findById(req.user.id)
+      .select('-password -__v -twoFactorSecret')
+      .populate('activeInvestments')
+      .populate('transactions');
 
     if (!user) {
-      return next(new AppError('User not found', 404));
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
     }
-
-    // Get BTC price from cache or API
-    let btcPrice;
-    const cachedPrice = await redis.get('btc_price');
-    if (cachedPrice) {
-      btcPrice = JSON.parse(cachedPrice);
-    } else {
-      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
-      btcPrice = response.data.bitcoin.usd;
-      await redis.set('btc_price', JSON.stringify(btcPrice), 'EX', 60); // Cache for 60 seconds
-    }
-
-    // Calculate BTC equivalent of balances
-    const btcBalances = {
-      main: user.balances.main / btcPrice,
-      active: user.balances.active / btcPrice,
-      matured: user.balances.matured / btcPrice
-    };
 
     res.status(200).json({
       status: 'success',
       data: {
-        user,
-        btcPrice,
-        btcBalances
+        user
       }
     });
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
   }
 });
 
-app.put('/api/users/profile', protect, async (req, res, next) => {
+// PUT /api/users/profile - Update user profile
+app.put('/api/users/profile', protect, async (req, res) => {
   try {
-    // 1) Filter out unwanted fields that are not allowed to be updated
-    const filteredBody = filterObj(
-      req.body,
-      'firstName',
-      'lastName',
-      'email',
-      'phone',
-      'country'
-    );
+    const { firstName, lastName, email, phone, country } = req.body;
 
-    // 2) Update user document
-    const updatedUser = await User.findByIdAndUpdate(req.user.id, filteredBody, {
-      new: true,
-      runValidators: true
-    }).select('-password -twoFactorSecret -apiKeys.secret');
+    // Validate input
+    if (!firstName || !lastName || !email || !country) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide all required fields'
+      });
+    }
 
-    // 3) Log activity
-    await SystemLog.create({
-      action: 'update-profile',
-      entity: 'user',
-      entityId: req.user.id,
-      performedBy: req.user.id,
-      performedByModel: 'User',
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-      details: filteredBody
-    });
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        user: updatedUser
-      }
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.put('/api/users/address', protect, async (req, res, next) => {
-  try {
-    const { street, city, state, postalCode, country } = req.body;
+    // Check if email is already taken by another user
+    const existingUser = await User.findOne({ email, _id: { $ne: req.user.id } });
+    if (existingUser) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Email is already in use'
+      });
+    }
 
     const updatedUser = await User.findByIdAndUpdate(
       req.user.id,
-      { address: { street, city, state, postalCode, country } },
+      { firstName, lastName, email, phone, country },
       { new: true, runValidators: true }
-    ).select('-password -twoFactorSecret -apiKeys.secret');
+    ).select('-password -__v -twoFactorSecret');
 
-    // Log activity
-    await SystemLog.create({
-      action: 'update-address',
-      entity: 'user',
-      entityId: req.user.id,
-      performedBy: req.user.id,
-      performedByModel: 'User',
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-      details: { street, city, state, postalCode, country }
-    });
+    await logActivity(req.user.id, 'PROFILE_UPDATE', 'Updated profile information');
 
     res.status(200).json({
       status: 'success',
@@ -669,203 +357,205 @@ app.put('/api/users/address', protect, async (req, res, next) => {
       }
     });
   } catch (err) {
-    next(err);
-  }
-});
-
-app.put('/api/users/password', protect, async (req, res, next) => {
-  try {
-    const { currentPassword, newPassword, newPasswordConfirm } = req.body;
-
-    // 1) Get user from collection
-    const user = await User.findById(req.user.id).select('+password');
-
-    // 2) Check if POSTed current password is correct
-    if (!(await bcrypt.compare(currentPassword, user.password))) {
-      return next(new AppError('Your current password is wrong.', 401));
-    }
-
-    // 3) Check if new passwords match
-    if (newPassword !== newPasswordConfirm) {
-      return next(new AppError('New passwords do not match', 400));
-    }
-
-    // 4) Update password
-    user.password = await bcrypt.hash(newPassword, 12);
-    user.passwordChangedAt = Date.now() - 1000;
-    await user.save();
-
-    // 5) Log activity
-    await SystemLog.create({
-      action: 'change-password',
-      entity: 'user',
-      entityId: req.user.id,
-      performedBy: req.user.id,
-      performedByModel: 'User',
-      ip: req.ip,
-      userAgent: req.headers['user-agent']
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
     });
-
-    // 6) Log user in, send JWT
-    createSendToken(user, 200, res);
-  } catch (err) {
-    next(err);
   }
 });
 
-app.post('/api/users/api-keys', protect, async (req, res, next) => {
+// PUT /api/users/address - Update user address
+app.put('/api/users/address', protect, async (req, res) => {
   try {
-    const { permissions, expiresInDays } = req.body;
+    const { street, city, state, postalCode, country } = req.body;
 
-    // Validate permissions
-    const validPermissions = ['read', 'trade', 'withdraw', 'transfer'];
-    if (!permissions.every(p => validPermissions.includes(p))) {
-      return next(new AppError('Invalid permissions specified', 400));
+    // Validate input
+    if (!street || !city || !state || !postalCode || !country) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide all address fields'
+      });
     }
 
-    // Generate API key
-    const apiKey = generateApiKey();
-    const expiresAt = expiresInDays ? 
-      moment().add(expiresInDays, 'days').toDate() : 
-      moment().add(30, 'days').toDate();
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.id,
+      { 
+        address: { street, city, state, postalCode, country },
+        addressVerified: false // Reset verification status when address changes
+      },
+      { new: true, runValidators: true }
+    ).select('-password -__v -twoFactorSecret');
 
-    // Add to user's API keys
-    await User.findByIdAndUpdate(req.user.id, {
-      $push: {
-        apiKeys: {
-          key: apiKey.key,
-          secret: apiKey.secret,
-          permissions,
-          expiresAt
-        }
+    await logActivity(req.user.id, 'ADDRESS_UPDATE', 'Updated address information');
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        user: updatedUser
       }
     });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
 
-    // Log activity
-    await SystemLog.create({
-      action: 'generate-api-key',
-      entity: 'user',
-      entityId: req.user.id,
-      performedBy: req.user.id,
-      performedByModel: 'User',
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-      details: { permissions, expiresAt }
+// PUT /api/users/password - Change user password
+app.put('/api/users/password', protect, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide both current and new password'
+      });
+    }
+
+    // Get user from collection
+    const user = await User.findById(req.user.id).select('+password');
+
+    // Check if current password is correct
+    if (!(await user.correctPassword(currentPassword, user.password))) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Your current password is wrong'
+      });
+    }
+
+    // Update password
+    user.password = newPassword;
+    await user.save();
+
+    // Log user out of all devices by changing the passwordChangedAt field
+    user.passwordChangedAt = Date.now();
+    await user.save({ validateBeforeSave: false });
+
+    // Invalidate all existing sessions in Redis
+    const sessionKey = `user:${user.id}:sessions`;
+    await redis.del(sessionKey);
+
+    await logActivity(user.id, 'PASSWORD_CHANGE', 'Changed account password');
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Password changed successfully'
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// POST /api/users/api-keys - Generate new API key
+app.post('/api/users/api-keys', protect, async (req, res) => {
+  try {
+    const { name, permissions, expiresAt } = req.body;
+
+    if (!name || !permissions || !Array.isArray(permissions)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide API key name and permissions'
+      });
+    }
+
+    const key = generateApiKey();
+    const hashedKey = crypto.createHash('sha256').update(key).digest('hex');
+
+    const apiKey = await ApiKey.create({
+      user: req.user.id,
+      name,
+      key: hashedKey,
+      permissions,
+      expiresAt: expiresAt ? new Date(expiresAt) : null
     });
 
-    // Return the key and secret (only time secret is shown)
+    await logActivity(req.user.id, 'API_KEY_GENERATE', `Generated new API key: ${apiKey.name}`);
+
+    // Send the unhashed key only once
     res.status(201).json({
       status: 'success',
       data: {
         apiKey: {
-          key: apiKey.key,
-          secret: apiKey.secret,
-          permissions,
-          expiresAt
+          ...apiKey.toObject(),
+          key // Send the unhashed key only in the response
         }
       }
     });
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
   }
 });
 
-app.delete('/api/users/api-keys/:keyId', protect, async (req, res, next) => {
-  try {
-    const { keyId } = req.params;
-
-    // Remove the API key
-    await User.findByIdAndUpdate(req.user.id, {
-      $pull: { apiKeys: { key: keyId } }
-    });
-
-    // Log activity
-    await SystemLog.create({
-      action: 'revoke-api-key',
-      entity: 'user',
-      entityId: req.user.id,
-      performedBy: req.user.id,
-      performedByModel: 'User',
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-      details: { keyId }
-    });
-
-    res.status(204).json({
-      status: 'success',
-      data: null
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/api/users/logout', protect, (req, res) => {
-  res.cookie('jwt', 'loggedout', {
-    expires: new Date(Date.now() + 10 * 1000),
-    httpOnly: true
-  });
-  res.status(200).json({ status: 'success' });
-});
-
-// Admin routes
-app.post('/api/admin/auth/login', async (req, res, next) => {
+// Admin Endpoints
+// POST /api/admin/auth/login - Admin login
+app.post('/api/admin/auth/login', async (req, res) => {
   try {
     const { email, password, twoFactorCode } = req.body;
 
-    // 1) Check if email and password exist
     if (!email || !password) {
-      return next(new AppError('Please provide email and password!', 400));
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide email and password'
+      });
     }
 
-    // 2) Check if admin exists && password is correct
     const admin = await Admin.findOne({ email }).select('+password +twoFactorSecret');
 
-    if (!admin || !(await bcrypt.compare(password, admin.password))) {
-      return next(new AppError('Incorrect email or password', 401));
+    if (!admin || !(await admin.correctPassword(password, admin.password))) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Incorrect email or password'
+      });
     }
 
-    // 3) If 2FA is enabled, verify the code
+    // Check if 2FA is enabled and verify code if provided
     if (admin.twoFactorEnabled) {
       if (!twoFactorCode) {
-        return next(new AppError('Two-factor authentication code is required', 401));
+        return res.status(400).json({
+          status: 'error',
+          message: 'Two-factor authentication code is required'
+        });
       }
-      // In a real implementation, you would verify the TOTP here
-      // For now, we'll just check if any code was provided
+
+      const verified = admin.verifyTwoFactorCode(twoFactorCode);
+      if (!verified) {
+        return res.status(401).json({
+          status: 'error',
+          message: 'Invalid two-factor authentication code'
+        });
+      }
     }
 
-    // 4) Update last login
-    admin.lastLogin = new Date();
-    await admin.save();
-
-    // 5) Log activity
-    await SystemLog.create({
-      action: 'admin-login',
-      entity: 'admin',
-      entityId: admin._id,
-      performedBy: admin._id,
-      performedByModel: 'Admin',
-      ip: req.ip,
-      userAgent: req.headers['user-agent']
-    });
-
-    // 6) Create token
+    // Create token
     const token = jwt.sign({ id: admin._id }, JWT_SECRET, {
       expiresIn: JWT_EXPIRES_IN
     });
 
-    const cookieOptions = {
-      expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-      httpOnly: true,
-      secure: NODE_ENV === 'production',
-      sameSite: 'strict'
-    };
-
-    res.cookie('jwtAdmin', token, cookieOptions);
-
-    // Remove password from output
+    // Remove sensitive data from output
     admin.password = undefined;
     admin.twoFactorSecret = undefined;
+
+    // Set cookie
+    res.cookie('jwtAdmin', token, {
+      expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict'
+    });
+
+    // Update last login
+    admin.lastLogin = new Date();
+    await admin.save();
+
+    await logActivity(admin._id, 'ADMIN_LOGIN', 'Logged into admin panel', true);
 
     res.status(200).json({
       status: 'success',
@@ -875,14 +565,40 @@ app.post('/api/admin/auth/login', async (req, res, next) => {
       }
     });
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
   }
 });
 
-app.get('/api/admin/dashboard', adminProtect, async (req, res, next) => {
+// POST /api/admin/auth/logout - Admin logout
+app.post('/api/admin/auth/logout', adminProtect, async (req, res) => {
+  try {
+    await logActivity(req.admin._id, 'ADMIN_LOGOUT', 'Logged out from admin panel', true);
+
+    res.cookie('jwtAdmin', 'loggedout', {
+      expires: new Date(Date.now() + 10 * 1000),
+      httpOnly: true
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Logged out successfully'
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// GET /api/admin/dashboard - Get admin dashboard stats
+app.get('/api/admin/dashboard', adminProtect, async (req, res) => {
   try {
     // Get stats from cache if available
-    const cachedStats = await redis.get('admin_dashboard_stats');
+    const cachedStats = await redis.get('admin:dashboard:stats');
     if (cachedStats) {
       return res.status(200).json({
         status: 'success',
@@ -890,63 +606,124 @@ app.get('/api/admin/dashboard', adminProtect, async (req, res, next) => {
       });
     }
 
-    // Get all stats in parallel
-    const [
-      totalUsers,
-      activeUsers,
-      newUsersToday,
-      totalDeposits,
-      totalWithdrawals,
-      pendingWithdrawals,
-      activeInvestments,
-      kycPending
-    ] = await Promise.all([
-      User.countDocuments(),
-      User.countDocuments({ status: 'active' }),
-      User.countDocuments({ createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } }),
-      Transaction.aggregate([
-        { $match: { type: 'deposit', status: 'completed' } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ]),
-      Transaction.aggregate([
-        { $match: { type: 'withdrawal', status: 'completed' } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ]),
-      Transaction.countDocuments({ type: 'withdrawal', status: 'pending' }),
-      Investment.countDocuments({ status: 'active' }),
-      User.countDocuments({ 'kyc.status': 'pending' })
+    // Calculate stats
+    const totalUsers = await User.countDocuments();
+    const activeUsers = await User.countDocuments({ active: true });
+    const newUsersToday = await User.countDocuments({
+      createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) }
+    });
+    const totalDeposits = await Transaction.aggregate([
+      { $match: { type: 'deposit', status: 'completed' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
+    const totalWithdrawals = await Transaction.aggregate([
+      { $match: { type: 'withdrawal', status: 'completed' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    const pendingWithdrawals = await Withdrawal.countDocuments({ status: 'pending' });
+    const pendingKYC = await KYCDocument.countDocuments({ status: 'pending' });
+    const activeInvestments = await Investment.countDocuments({ status: 'active' });
 
-    // Format the data
     const stats = {
       totalUsers,
       activeUsers,
       newUsersToday,
-      totalDeposits: totalDeposits[0]?.total || 0,
-      totalWithdrawals: totalWithdrawals[0]?.total || 0,
+      totalDeposits: totalDeposits.length > 0 ? totalDeposits[0].total : 0,
+      totalWithdrawals: totalWithdrawals.length > 0 ? totalWithdrawals[0].total : 0,
       pendingWithdrawals,
-      activeInvestments,
-      kycPending
+      pendingKYC,
+      activeInvestments
     };
 
-    // Cache the stats for 5 minutes
-    await redis.set('admin_dashboard_stats', JSON.stringify(stats), 'EX', 300);
+    // Cache stats for 5 minutes
+    await redis.set('admin:dashboard:stats', JSON.stringify(stats), 'EX', 300);
 
     res.status(200).json({
       status: 'success',
       data: stats
     });
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
   }
 });
 
-app.get('/api/admin/users', adminProtect, restrictTo('super-admin', 'admin', 'support'), async (req, res, next) => {
+// GET /api/admin/users/growth - Get user growth data
+app.get('/api/admin/users/growth', adminProtect, async (req, res) => {
+  try {
+    const cachedData = await redis.get('admin:users:growth');
+    if (cachedData) {
+      return res.status(200).json({
+        status: 'success',
+        data: JSON.parse(cachedData)
+      });
+    }
+
+    const today = new Date();
+    const last30Days = new Date(today.setDate(today.getDate() - 30));
+
+    const growthData = await User.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: last30Days }
+        }
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { '_id': 1 }
+      }
+    ]);
+
+    // Cache for 1 hour
+    await redis.set('admin:users:growth', JSON.stringify(growthData), 'EX', 3600);
+
+    res.status(200).json({
+      status: 'success',
+      data: growthData
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// GET /api/admin/activity - Get recent system activity
+app.get('/api/admin/activity', adminProtect, async (req, res) => {
+  try {
+    const activities = await ActivityLog.find()
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .populate('user', 'firstName lastName email')
+      .populate('admin', 'name email');
+
+    res.status(200).json({
+      status: 'success',
+      data: activities
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// GET /api/admin/users - Get all users
+app.get('/api/admin/users', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
   try {
     const { page = 1, limit = 20, search, status, sort } = req.query;
+    const skip = (page - 1) * limit;
 
-    // Build query
-    const query = {};
+    let query = {};
     if (search) {
       query.$or = [
         { firstName: { $regex: search, $options: 'i' } },
@@ -954,584 +731,1160 @@ app.get('/api/admin/users', adminProtect, restrictTo('super-admin', 'admin', 'su
         { email: { $regex: search, $options: 'i' } }
       ];
     }
-    if (status) query.status = status;
+    if (status) {
+      query.active = status === 'active';
+    }
 
-    // Build sort
     let sortOption = { createdAt: -1 };
     if (sort) {
       const [field, order] = sort.split(':');
       sortOption = { [field]: order === 'desc' ? -1 : 1 };
     }
 
-    // Get users with pagination
     const users = await User.find(query)
       .sort(sortOption)
-      .skip((page - 1) * limit)
+      .skip(skip)
       .limit(parseInt(limit))
-      .select('-password -twoFactorSecret -apiKeys.secret');
+      .select('-password -twoFactorSecret -__v');
 
-    // Get total count
     const total = await User.countDocuments(query);
 
     res.status(200).json({
       status: 'success',
       results: users.length,
       total,
-      data: {
-        users
-      }
+      data: users
     });
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
   }
 });
 
-app.get('/api/admin/users/:id', adminProtect, restrictTo('super-admin', 'admin', 'support'), async (req, res, next) => {
+// GET /api/admin/users/{id} - Get user by ID
+app.get('/api/admin/users/:id', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
   try {
     const user = await User.findById(req.params.id)
-      .select('-password -twoFactorSecret -apiKeys.secret')
-      .populate('referredBy', 'firstName lastName email');
+      .select('-password -twoFactorSecret -__v')
+      .populate('transactions')
+      .populate('investments')
+      .populate('kycDocuments')
+      .populate('withdrawals');
 
     if (!user) {
-      return next(new AppError('No user found with that ID', 404));
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
     }
-
-    // Get user transactions
-    const transactions = await Transaction.find({ userId: user._id })
-      .sort({ createdAt: -1 })
-      .limit(10);
-
-    // Get user investments
-    const investments = await Investment.find({ userId: user._id })
-      .populate('planId')
-      .sort({ createdAt: -1 })
-      .limit(5);
 
     res.status(200).json({
       status: 'success',
-      data: {
-        user,
-        transactions,
-        investments
-      }
+      data: user
     });
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
   }
 });
 
-app.put('/api/admin/users/:id', adminProtect, restrictTo('super-admin', 'admin'), async (req, res, next) => {
+// PUT /api/admin/users/{id} - Update user by ID
+app.put('/api/admin/users/:id', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
   try {
-    const { status, balances, kycStatus } = req.body;
+    const { firstName, lastName, email, phone, country, balance, walletAddress } = req.body;
 
-    // Prepare update object
-    const updateObj = {};
-    if (status) updateObj.status = status;
-    if (kycStatus) updateObj['kyc.status'] = kycStatus;
-    if (balances) {
-      if (balances.main !== undefined) updateObj['balances.main'] = balances.main;
-      if (balances.active !== undefined) updateObj['balances.active'] = balances.active;
-      if (balances.matured !== undefined) updateObj['balances.matured'] = balances.matured;
-      if (balances.btc !== undefined) updateObj['balances.btc'] = balances.btc;
+    const updates = {};
+    if (firstName) updates.firstName = firstName;
+    if (lastName) updates.lastName = lastName;
+    if (email) updates.email = email;
+    if (phone) updates.phone = phone;
+    if (country) updates.country = country;
+    if (balance !== undefined) updates.balance = parseFloat(balance);
+    if (walletAddress) updates.walletAddress = walletAddress;
+
+    const user = await User.findByIdAndUpdate(req.params.id, updates, {
+      new: true,
+      runValidators: true
+    }).select('-password -twoFactorSecret -__v');
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
     }
 
-    const updatedUser = await User.findByIdAndUpdate(
+    await logActivity(req.admin._id, 'USER_UPDATE', `Updated user ${user.email}`, true);
+
+    res.status(200).json({
+      status: 'success',
+      data: user
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// DELETE /api/admin/users/{id} - Delete user by ID
+app.delete('/api/admin/users/:id', adminProtect, restrictTo('super-admin'), async (req, res) => {
+  try {
+    const user = await User.findByIdAndDelete(req.params.id);
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    // Log the deletion
+    await logActivity(req.admin._id, 'USER_DELETE', `Deleted user ${user.email}`, true);
+
+    res.status(204).json({
+      status: 'success',
+      data: null
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// PUT /api/admin/users/{id}/status - Update user status
+app.put('/api/admin/users/:id/status', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
+  try {
+    const { active } = req.body;
+
+    if (typeof active !== 'boolean') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide a valid status'
+      });
+    }
+
+    const user = await User.findByIdAndUpdate(
       req.params.id,
-      updateObj,
+      { active },
       { new: true, runValidators: true }
-    ).select('-password -twoFactorSecret -apiKeys.secret');
+    ).select('-password -twoFactorSecret -__v');
 
-    if (!updatedUser) {
-      return next(new AppError('No user found with that ID', 404));
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
     }
 
-    // Log activity
-    await SystemLog.create({
-      action: 'update-user',
-      entity: 'user',
-      entityId: updatedUser._id,
-      performedBy: req.admin._id,
-      performedByModel: 'Admin',
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-      details: updateObj
-    });
+    const action = active ? 'USER_ACTIVATE' : 'USER_DEACTIVATE';
+    await logActivity(req.admin._id, action, `${active ? 'Activated' : 'Deactivated'} user ${user.email}`, true);
 
     res.status(200).json({
       status: 'success',
-      data: {
-        user: updatedUser
-      }
+      data: user
     });
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
   }
 });
 
-app.post('/api/admin/messages', adminProtect, restrictTo('super-admin', 'admin', 'support'), async (req, res, next) => {
+// GET /api/admin/kyc/pending - Get pending KYC documents
+app.get('/api/admin/kyc/pending', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
   try {
-    const { userId, message } = req.body;
+    const pendingKYCs = await KYCDocument.find({ status: 'pending' })
+      .populate('user', 'firstName lastName email');
 
-    // Create message
-    const newMessage = await Message.create({
-      from: req.admin._id,
-      fromModel: 'Admin',
-      to: userId,
-      toModel: 'User',
-      message,
-      read: false
+    res.status(200).json({
+      status: 'success',
+      data: pendingKYCs
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// GET /api/admin/kyc/{id} - Get KYC document by ID
+app.get('/api/admin/kyc/:id', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
+  try {
+    const kycDoc = await KYCDocument.findById(req.params.id)
+      .populate('user', 'firstName lastName email');
+
+    if (!kycDoc) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'KYC document not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: kycDoc
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// POST /api/admin/kyc/{id}/review - Review KYC document
+app.post('/api/admin/kyc/:id/review', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
+  try {
+    const { status, reason } = req.body;
+
+    if (!['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid status. Must be "approved" or "rejected"'
+      });
+    }
+
+    if (status === 'rejected' && !reason) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide a reason for rejection'
+      });
+    }
+
+    const kycDoc = await KYCDocument.findById(req.params.id)
+      .populate('user', 'firstName lastName email');
+
+    if (!kycDoc) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'KYC document not found'
+      });
+    }
+
+    if (kycDoc.status !== 'pending') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'KYC document has already been processed'
+      });
+    }
+
+    kycDoc.status = status;
+    kycDoc.reviewedBy = req.admin._id;
+    kycDoc.reviewedAt = new Date();
+    if (status === 'rejected') {
+      kycDoc.rejectionReason = reason;
+    }
+
+    await kycDoc.save();
+
+    // Update user verification status if approved
+    if (status === 'approved') {
+      await User.findByIdAndUpdate(kycDoc.user._id, {
+        kycVerified: true,
+        kycVerifiedAt: new Date()
+      });
+    }
+
+    // Send notification to user
+    const notification = new Notification({
+      user: kycDoc.user._id,
+      title: 'KYC Verification Update',
+      message: `Your KYC verification has been ${status}. ${status === 'rejected' ? 'Reason: ' + reason : ''}`,
+      type: 'kyc'
+    });
+    await notification.save();
+
+    await logActivity(
+      req.admin._id,
+      'KYC_REVIEW',
+      `${status} KYC for user ${kycDoc.user.email}`,
+      true
+    );
+
+    res.status(200).json({
+      status: 'success',
+      data: kycDoc
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// GET /api/admin/withdrawals/pending - Get pending withdrawals
+app.get('/api/admin/withdrawals/pending', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
+  try {
+    const pendingWithdrawals = await Withdrawal.find({ status: 'pending' })
+      .populate('user', 'firstName lastName email')
+      .sort({ createdAt: 1 });
+
+    res.status(200).json({
+      status: 'success',
+      data: pendingWithdrawals
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// GET /api/admin/withdrawals/{id} - Get withdrawal by ID
+app.get('/api/admin/withdrawals/:id', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
+  try {
+    const withdrawal = await Withdrawal.findById(req.params.id)
+      .populate('user', 'firstName lastName email');
+
+    if (!withdrawal) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Withdrawal not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: withdrawal
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// POST /api/admin/withdrawals/{id}/process - Process withdrawal
+app.post('/api/admin/withdrawals/:id/process', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
+  try {
+    const { status, txHash, adminNote } = req.body;
+
+    if (!['completed', 'rejected'].includes(status)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid status. Must be "completed" or "rejected"'
+      });
+    }
+
+    if (status === 'completed' && !txHash) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide transaction hash for completed withdrawals'
+      });
+    }
+
+    const withdrawal = await Withdrawal.findById(req.params.id)
+      .populate('user', 'firstName lastName email balance');
+
+    if (!withdrawal) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Withdrawal not found'
+      });
+    }
+
+    if (withdrawal.status !== 'pending') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Withdrawal has already been processed'
+      });
+    }
+
+    // If rejecting, return funds to user's balance
+    if (status === 'rejected') {
+      await User.findByIdAndUpdate(withdrawal.user._id, {
+        $inc: { balance: withdrawal.amount }
+      });
+    }
+
+    withdrawal.status = status;
+    withdrawal.processedBy = req.admin._id;
+    withdrawal.processedAt = new Date();
+    if (txHash) withdrawal.txHash = txHash;
+    if (adminNote) withdrawal.adminNote = adminNote;
+
+    await withdrawal.save();
+
+    // Create transaction record
+    const transaction = new Transaction({
+      user: withdrawal.user._id,
+      type: 'withdrawal',
+      amount: withdrawal.amount,
+      status: withdrawal.status,
+      currency: withdrawal.currency,
+      txHash: withdrawal.txHash,
+      adminNote: withdrawal.adminNote
+    });
+    await transaction.save();
+
+    // Send notification to user
+    const notification = new Notification({
+      user: withdrawal.user._id,
+      title: 'Withdrawal Processed',
+      message: `Your withdrawal of ${withdrawal.amount} ${withdrawal.currency} has been ${status}.`,
+      type: 'withdrawal'
+    });
+    await notification.save();
+
+    await logActivity(
+      req.admin._id,
+      'WITHDRAWAL_PROCESS',
+      `${status} withdrawal for user ${withdrawal.user.email}`,
+      true
+    );
+
+    res.status(200).json({
+      status: 'success',
+      data: withdrawal
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// POST /api/admin/withdrawals/process-batch - Process batch withdrawals
+app.post('/api/admin/withdrawals/process-batch', adminProtect, restrictTo('super-admin'), async (req, res) => {
+  try {
+    const { withdrawalIds, txHash } = req.body;
+
+    if (!withdrawalIds || !Array.isArray(withdrawalIds) || withdrawalIds.length === 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide valid withdrawal IDs'
+      });
+    }
+
+    if (!txHash) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide transaction hash'
+      });
+    }
+
+    const withdrawals = await Withdrawal.find({
+      _id: { $in: withdrawalIds },
+      status: 'pending'
+    }).populate('user', 'firstName lastName email');
+
+    if (withdrawals.length === 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'No pending withdrawals found with the provided IDs'
+      });
+    }
+
+    // Process all withdrawals in the batch
+    const processedWithdrawals = [];
+    for (const withdrawal of withdrawals) {
+      withdrawal.status = 'completed';
+      withdrawal.txHash = txHash;
+      withdrawal.processedBy = req.admin._id;
+      withdrawal.processedAt = new Date();
+      await withdrawal.save();
+
+      // Create transaction record
+      const transaction = new Transaction({
+        user: withdrawal.user._id,
+        type: 'withdrawal',
+        amount: withdrawal.amount,
+        status: 'completed',
+        currency: withdrawal.currency,
+        txHash: withdrawal.txHash
+      });
+      await transaction.save();
+
+      // Send notification to user
+      const notification = new Notification({
+        user: withdrawal.user._id,
+        title: 'Withdrawal Processed',
+        message: `Your withdrawal of ${withdrawal.amount} ${withdrawal.currency} has been processed.`,
+        type: 'withdrawal'
+      });
+      await notification.save();
+
+      processedWithdrawals.push(withdrawal);
+    }
+
+    await logActivity(
+      req.admin._id,
+      'WITHDRAWAL_BATCH',
+      `Processed batch of ${processedWithdrawals.length} withdrawals`,
+      true
+    );
+
+    res.status(200).json({
+      status: 'success',
+      data: processedWithdrawals
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// GET /api/admin/loans - Get all loans
+app.get('/api/admin/loans', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
+  try {
+    const { status } = req.query;
+    let query = {};
+    if (status) query.status = status;
+
+    const loans = await Loan.find(query)
+      .populate('user', 'firstName lastName email')
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      status: 'success',
+      data: loans
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// POST /api/admin/loans - Create new loan
+app.post('/api/admin/loans', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
+  try {
+    const { userId, amount, interestRate, duration, collateralAmount, collateralType } = req.body;
+
+    if (!userId || !amount || !interestRate || !duration || !collateralAmount || !collateralType) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide all required fields'
+      });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    const loan = await Loan.create({
+      user: userId,
+      amount: parseFloat(amount),
+      interestRate: parseFloat(interestRate),
+      duration: parseInt(duration),
+      collateralAmount: parseFloat(collateralAmount),
+      collateralType,
+      status: 'active',
+      createdBy: req.admin._id
     });
 
-    // Log activity
-    await SystemLog.create({
-      action: 'send-message',
-      entity: 'user',
-      entityId: userId,
-      performedBy: req.admin._id,
-      performedByModel: 'Admin',
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-      details: { messageId: newMessage._id }
-    });
+    // Add loan amount to user's balance
+    user.balance += parseFloat(amount);
+    await user.save();
 
-    // TODO: Send real-time notification via WebSocket
+    // Create transaction record
+    const transaction = new Transaction({
+      user: userId,
+      type: 'loan',
+      amount: parseFloat(amount),
+      status: 'completed',
+      currency: 'USD',
+      reference: `Loan #${loan._id}`
+    });
+    await transaction.save();
+
+    // Send notification to user
+    const notification = new Notification({
+      user: userId,
+      title: 'Loan Approved',
+      message: `Your loan of $${amount} has been approved and credited to your account.`,
+      type: 'loan'
+    });
+    await notification.save();
+
+    await logActivity(
+      req.admin._id,
+      'LOAN_CREATE',
+      `Created loan for user ${user.email}`,
+      true
+    );
 
     res.status(201).json({
       status: 'success',
-      data: {
-        message: newMessage
-      }
+      data: loan
     });
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
   }
 });
 
-// Transaction routes
-app.get('/api/transactions', protect, async (req, res, next) => {
+// GET /api/admin/loans/{id} - Get loan by ID
+app.get('/api/admin/loans/:id', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
   try {
-    const { page = 1, limit = 10, type, status } = req.query;
+    const loan = await Loan.findById(req.params.id)
+      .populate('user', 'firstName lastName email')
+      .populate('createdBy', 'name email');
 
-    // Build query
-    const query = { userId: req.user.id };
+    if (!loan) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Loan not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: loan
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// PUT /api/admin/loans/{id} - Update loan by ID
+app.put('/api/admin/loans/:id', adminProtect, restrictTo('admin', 'super-admin'), async (req, res) => {
+  try {
+    const { status, interestRate, adminNote } = req.body;
+
+    const loan = await Loan.findById(req.params.id);
+    if (!loan) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Loan not found'
+      });
+    }
+
+    if (status) loan.status = status;
+    if (interestRate) loan.interestRate = interestRate;
+    if (adminNote) loan.adminNote = adminNote;
+
+    await loan.save();
+
+    if (status === 'defaulted') {
+      // Handle defaulted loan (e.g., liquidate collateral)
+      const user = await User.findById(loan.user);
+      if (user) {
+        user.balance -= loan.collateralAmount;
+        await user.save();
+      }
+    }
+
+    await logActivity(
+      req.admin._id,
+      'LOAN_UPDATE',
+      `Updated loan #${loan._id}`,
+      true
+    );
+
+    res.status(200).json({
+      status: 'success',
+      data: loan
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// DELETE /api/admin/loans/{id} - Delete loan by ID
+app.delete('/api/admin/loans/:id', adminProtect, restrictTo('super-admin'), async (req, res) => {
+  try {
+    const loan = await Loan.findByIdAndDelete(req.params.id);
+
+    if (!loan) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Loan not found'
+      });
+    }
+
+    await logActivity(
+      req.admin._id,
+      'LOAN_DELETE',
+      `Deleted loan #${loan._id}`,
+      true
+    );
+
+    res.status(204).json({
+      status: 'success',
+      data: null
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// GET /api/admin/profile - Get admin profile
+app.get('/api/admin/profile', adminProtect, async (req, res) => {
+  try {
+    const admin = await Admin.findById(req.admin._id).select('-password -twoFactorSecret -__v');
+
+    res.status(200).json({
+      status: 'success',
+      data: admin
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Dashboard Endpoints
+// GET /api/plans - Get investment plans
+app.get('/api/plans', protect, async (req, res) => {
+  try {
+    const cachedPlans = await redis.get('investment:plans');
+    if (cachedPlans) {
+      return res.status(200).json({
+        status: 'success',
+        data: JSON.parse(cachedPlans)
+      });
+    }
+
+    const plans = await Plan.find({ active: true }).sort({ minAmount: 1 });
+
+    // Cache plans for 1 day
+    await redis.set('investment:plans', JSON.stringify(plans), 'EX', 86400);
+
+    res.status(200).json({
+      status: 'success',
+      data: plans
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// GET /api/transactions - Get user transactions
+app.get('/api/transactions', protect, async (req, res) => {
+  try {
+    const { type, status, limit = 10, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
+
+    let query = { user: req.user._id };
     if (type) query.type = type;
     if (status) query.status = status;
 
-    // Get transactions with pagination
     const transactions = await Transaction.find(query)
       .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
+      .skip(skip)
       .limit(parseInt(limit));
 
-    // Get total count
     const total = await Transaction.countDocuments(query);
 
     res.status(200).json({
       status: 'success',
       results: transactions.length,
       total,
-      data: {
-        transactions
-      }
+      data: transactions
     });
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
   }
 });
 
-app.post('/api/transactions/deposit', protect, async (req, res, next) => {
+// GET /api/mining/stats - Get mining statistics
+app.get('/api/mining/stats', protect, async (req, res) => {
   try {
-    const { amount, method } = req.body;
-
-    // Validate amount
-    if (amount <= 0) {
-      return next(new AppError('Amount must be greater than zero', 400));
+    const cachedStats = await redis.get(`user:${req.user.id}:mining:stats`);
+    if (cachedStats) {
+      return res.status(200).json({
+        status: 'success',
+        data: JSON.parse(cachedStats)
+      });
     }
 
-    // Create transaction
-    const transaction = await Transaction.create({
-      userId: req.user.id,
-      type: 'deposit',
-      amount,
-      method,
-      status: 'pending',
-      reference: `DEP-${uuidv4().split('-')[0].toUpperCase()}`,
-      details: {
-        btcAddress: req.user.btcDepositAddress,
-        ...(method === 'bank' && { bankDetails: 'Bank transfer details will be provided via email' }),
-        ...(method === 'card' && { cardLast4: '1234' }) // In real app, use actual card details
-      }
-    });
+    const activeInvestments = await Investment.find({
+      user: req.user._id,
+      status: 'active'
+    }).populate('plan');
 
-    // Log activity
-    await SystemLog.create({
-      action: 'create-deposit',
-      entity: 'transaction',
-      entityId: transaction._id,
-      performedBy: req.user.id,
-      performedByModel: 'User',
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-      details: { amount, method }
-    });
+    const totalInvested = activeInvestments.reduce((sum, inv) => sum + inv.amount, 0);
+    const dailyProfit = activeInvestments.reduce((sum, inv) => {
+      return sum + (inv.amount * inv.plan.dailyProfit / 100);
+    }, 0);
 
-    // Send email confirmation
-    const mailOptions = {
-      from: 'BitHash <no-reply@bithash.com>',
-      to: req.user.email,
-      subject: 'Deposit Request Received',
-      html: `<p>Hello ${req.user.firstName},</p>
-             <p>Your deposit request for $${amount} has been received and is being processed.</p>
-             ${method === 'btc' ? `<p>Please send your Bitcoin to: <strong>${req.user.btcDepositAddress}</strong></p>` : ''}
-             <p>Reference: ${transaction.reference}</p>
-             <p>Thank you for choosing BitHash.</p>`
+    const stats = {
+      activeInvestments: activeInvestments.length,
+      totalInvested,
+      dailyProfit,
+      estimatedMonthlyProfit: dailyProfit * 30,
+      estimatedYearlyProfit: dailyProfit * 365
     };
 
-    await transporter.sendMail(mailOptions);
-
-    res.status(201).json({
-      status: 'success',
-      data: {
-        transaction
-      }
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/api/transactions/withdraw', protect, async (req, res, next) => {
-  try {
-    const { amount, method, destination } = req.body;
-
-    // Validate amount
-    if (amount <= 0) {
-      return next(new AppError('Amount must be greater than zero', 400));
-    }
-
-    // Check user balance
-    const user = await User.findById(req.user.id);
-    if (user.balances.main < amount) {
-      return next(new AppError('Insufficient balance for withdrawal', 400));
-    }
-
-    // Create transaction
-    const transaction = await Transaction.create({
-      userId: req.user.id,
-      type: 'withdrawal',
-      amount,
-      method,
-      status: 'pending',
-      reference: `WTH-${uuidv4().split('-')[0].toUpperCase()}`,
-      details: {
-        destination,
-        ...(method === 'btc' && { btcAddress: destination })
-      }
-    });
-
-    // Lock the amount (in real app, you might use a transaction here)
-    user.balances.main -= amount;
-    await user.save();
-
-    // Log activity
-    await SystemLog.create({
-      action: 'create-withdrawal',
-      entity: 'transaction',
-      entityId: transaction._id,
-      performedBy: req.user.id,
-      performedByModel: 'User',
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-      details: { amount, method, destination }
-    });
-
-    // Send email confirmation
-    const mailOptions = {
-      from: 'BitHash <no-reply@bithash.com>',
-      to: req.user.email,
-      subject: 'Withdrawal Request Received',
-      html: `<p>Hello ${req.user.firstName},</p>
-             <p>Your withdrawal request for $${amount} has been received and is being processed.</p>
-             <p>Destination: ${destination}</p>
-             <p>Reference: ${transaction.reference}</p>
-             <p>Thank you for choosing BitHash.</p>`
-    };
-
-    await transporter.sendMail(mailOptions);
-
-    res.status(201).json({
-      status: 'success',
-      data: {
-        transaction
-      }
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Investment routes
-app.get('/api/plans', async (req, res, next) => {
-  try {
-    const plans = await Plan.find({ status: 'active' });
+    // Cache for 1 hour
+    await redis.set(`user:${req.user.id}:mining:stats`, JSON.stringify(stats), 'EX', 3600);
 
     res.status(200).json({
       status: 'success',
-      results: plans.length,
-      data: {
-        plans
-      }
+      data: stats
     });
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
   }
 });
 
-app.post('/api/investments', protect, async (req, res, next) => {
+// POST /api/transactions/deposit - Create deposit transaction
+app.post('/api/transactions/deposit', protect, async (req, res) => {
   try {
-    const { planId, amount, autoRenew } = req.body;
+    const { amount, currency, method } = req.body;
 
-    // Validate amount
+    if (!amount || !currency || !method) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide amount, currency and method'
+      });
+    }
+
     if (amount <= 0) {
-      return next(new AppError('Amount must be greater than zero', 400));
+      return res.status(400).json({
+        status: 'error',
+        message: 'Amount must be greater than 0'
+      });
     }
 
-    // Get plan
-    const plan = await Plan.findById(planId);
-    if (!plan || plan.status !== 'active') {
-      return next(new AppError('Plan not found or inactive', 404));
+    // For BTC deposits, provide the deposit address
+    let depositAddress;
+    if (currency === 'BTC' && method === 'crypto') {
+      depositAddress = DEFAULT_BTC_DEPOSIT_ADDRESS;
     }
 
-    // Check min amount
-    if (amount < plan.minAmount) {
-      return next(new AppError(`Minimum investment amount is $${plan.minAmount}`, 400));
+    const transaction = await Transaction.create({
+      user: req.user._id,
+      type: 'deposit',
+      amount,
+      currency,
+      method,
+      status: 'pending',
+      depositAddress
+    });
+
+    await logActivity(req.user._id, 'DEPOSIT_REQUEST', `Requested deposit of ${amount} ${currency}`);
+
+    res.status(201).json({
+      status: 'success',
+      data: transaction
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// POST /api/transactions/withdraw - Create withdrawal request
+app.post('/api/transactions/withdraw', protect, async (req, res) => {
+  try {
+    const { amount, currency, walletAddress } = req.body;
+
+    if (!amount || !currency || !walletAddress) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide amount, currency and wallet address'
+      });
     }
 
-    // Check max amount if specified
-    if (plan.maxAmount && amount > plan.maxAmount) {
-      return next(new AppError(`Maximum investment amount is $${plan.maxAmount}`, 400));
+    if (amount <= 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Amount must be greater than 0'
+      });
     }
 
     // Check user balance
-    const user = await User.findById(req.user.id);
-    if (user.balances.main < amount) {
-      return next(new AppError('Insufficient balance for investment', 400));
+    const user = await User.findById(req.user._id);
+    if (user.balance < amount) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Insufficient balance'
+      });
     }
 
-    // Calculate end date
-    const startDate = new Date();
-    const endDate = new Date(startDate);
-    endDate.setDate(endDate.getDate() + plan.duration);
+    // Check withdrawal limits
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const withdrawalsToday = await Withdrawal.countDocuments({
+      user: req.user._id,
+      createdAt: { $gte: today }
+    });
+
+    if (withdrawalsToday >= 3) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'You have reached your daily withdrawal limit (3 withdrawals per day)'
+      });
+    }
+
+    // Deduct amount from user balance
+    user.balance -= amount;
+    await user.save();
+
+    // Create withdrawal record
+    const withdrawal = await Withdrawal.create({
+      user: req.user._id,
+      amount,
+      currency,
+      walletAddress,
+      status: 'pending'
+    });
+
+    // Create transaction record
+    const transaction = await Transaction.create({
+      user: req.user._id,
+      type: 'withdrawal',
+      amount,
+      currency,
+      status: 'pending',
+      reference: `Withdrawal #${withdrawal._id}`
+    });
+
+    await logActivity(req.user._id, 'WITHDRAWAL_REQUEST', `Requested withdrawal of ${amount} ${currency}`);
+
+    res.status(201).json({
+      status: 'success',
+      data: withdrawal
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// POST /api/investments - Create new investment
+app.post('/api/investments', protect, async (req, res) => {
+  try {
+    const { planId, amount } = req.body;
+
+    if (!planId || !amount) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide plan ID and amount'
+      });
+    }
+
+    const plan = await Plan.findById(planId);
+    if (!plan || !plan.active) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Plan not found or inactive'
+      });
+    }
+
+    if (amount < plan.minAmount || amount > plan.maxAmount) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Amount must be between ${plan.minAmount} and ${plan.maxAmount}`
+      });
+    }
+
+    // Check user balance
+    const user = await User.findById(req.user._id);
+    if (user.balance < amount) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Insufficient balance'
+      });
+    }
+
+    // Deduct amount from user balance
+    user.balance -= amount;
+    await user.save();
 
     // Create investment
     const investment = await Investment.create({
-      userId: req.user.id,
-      planId,
+      user: req.user._id,
+      plan: planId,
       amount,
-      startDate,
-      endDate,
-      autoRenew: !!autoRenew
+      startDate: new Date(),
+      endDate: new Date(Date.now() + plan.duration * 24 * 60 * 60 * 1000),
+      dailyProfit: plan.dailyProfit,
+      status: 'active'
     });
 
-    // Deduct from main balance and add to active balance
-    user.balances.main -= amount;
-    user.balances.active += amount;
+    // Add to user's active investments
+    user.activeInvestments.push(investment._id);
     await user.save();
 
-    // Create transaction
-    await Transaction.create({
-      userId: req.user.id,
+    // Create transaction record
+    const transaction = await Transaction.create({
+      user: req.user._id,
       type: 'investment',
       amount,
       status: 'completed',
-      reference: `INV-${uuidv4().split('-')[0].toUpperCase()}`,
-      details: {
-        plan: plan.name,
-        duration: plan.duration,
-        interestRate: plan.interestRate
-      }
+      currency: 'USD',
+      reference: `Investment in ${plan.name}`
     });
 
-    // Log activity
-    await SystemLog.create({
-      action: 'create-investment',
-      entity: 'investment',
-      entityId: investment._id,
-      performedBy: req.user.id,
-      performedByModel: 'User',
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-      details: { planId, amount, autoRenew }
-    });
-
-    // Send email confirmation
-    const mailOptions = {
-      from: 'BitHash <no-reply@bithash.com>',
-      to: req.user.email,
-      subject: 'New Investment Created',
-      html: `<p>Hello ${req.user.firstName},</p>
-             <p>Your investment in ${plan.name} has been successfully created.</p>
-             <p>Amount: $${amount}</p>
-             <p>Duration: ${plan.duration} days</p>
-             <p>Interest Rate: ${plan.interestRate}%</p>
-             <p>Maturity Date: ${endDate.toDateString()}</p>
-             <p>Thank you for choosing BitHash.</p>`
-    };
-
-    await transporter.sendMail(mailOptions);
+    await logActivity(req.user._id, 'INVESTMENT_CREATE', `Invested $${amount} in ${plan.name}`);
 
     res.status(201).json({
       status: 'success',
-      data: {
-        investment
-      }
+      data: investment
     });
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
   }
 });
 
-app.get('/api/investments', protect, async (req, res, next) => {
+// POST /api/transactions/transfer - Transfer funds between accounts
+app.post('/api/transactions/transfer', protect, async (req, res) => {
   try {
-    const { status } = req.query;
+    const { recipientEmail, amount, note } = req.body;
 
-    // Build query
-    const query = { userId: req.user.id };
-    if (status) query.status = status;
-
-    const investments = await Investment.find(query)
-      .populate('planId')
-      .sort({ createdAt: -1 });
-
-    res.status(200).json({
-      status: 'success',
-      results: investments.length,
-      data: {
-        investments
-      }
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// KYC routes
-app.post('/api/kyc/submit', protect, async (req, res, next) => {
-  try {
-    const { documents } = req.body;
-
-    // Validate documents
-    if (!documents || !Array.isArray(documents) || documents.length === 0) {
-      return next(new AppError('Please provide at least one document', 400));
+    if (!recipientEmail || !amount) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide recipient email and amount'
+      });
     }
 
-    // Update user KYC status and documents
-    const user = await User.findByIdAndUpdate(
-      req.user.id,
-      {
-        'kyc.status': 'pending',
-        $push: {
-          'kyc.documents': {
-            $each: documents.map(doc => ({
-              type: doc.type,
-              url: doc.url,
-              status: 'pending'
-            }))
-          }
-        }
-      },
-      { new: true }
-    );
+    if (amount <= 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Amount must be greater than 0'
+      });
+    }
 
-    // Log activity
-    await SystemLog.create({
-      action: 'submit-kyc',
-      entity: 'user',
-      entityId: req.user.id,
-      performedBy: req.user.id,
-      performedByModel: 'User',
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-      details: { documentTypes: documents.map(d => d.type) }
+    // Check if recipient exists
+    const recipient = await User.findOne({ email: recipientEmail });
+    if (!recipient) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Recipient not found'
+      });
+    }
+
+    // Check sender balance
+    const sender = await User.findById(req.user._id);
+    if (sender.balance < amount) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Insufficient balance'
+      });
+    }
+
+    // Perform transfer
+    sender.balance -= amount;
+    recipient.balance += amount;
+
+    await sender.save();
+    await recipient.save();
+
+    // Create transaction records for both parties
+    const senderTransaction = await Transaction.create({
+      user: req.user._id,
+      type: 'transfer-out',
+      amount,
+      status: 'completed',
+      currency: 'USD',
+      reference: `Transfer to ${recipient.email}`,
+      note
     });
 
-    // Send notification to admin
-    const admins = await Admin.find({ role: { $in: ['super-admin', 'admin'] } });
-    await Message.create({
-      from: req.user.id,
-      fromModel: 'User',
-      to: admins[0]._id, // Send to first admin (in real app, might use round-robin)
-      toModel: 'Admin',
-      message: `New KYC submission from ${user.email} requires review`,
-      read: false
+    const recipientTransaction = await Transaction.create({
+      user: recipient._id,
+      type: 'transfer-in',
+      amount,
+      status: 'completed',
+      currency: 'USD',
+      reference: `Transfer from ${sender.email}`,
+      note
     });
 
-    res.status(200).json({
+    // Send notification to recipient
+    const notification = new Notification({
+      user: recipient._id,
+      title: 'Funds Received',
+      message: `You have received $${amount} from ${sender.firstName} ${sender.lastName}.`,
+      type: 'transfer'
+    });
+    await notification.save();
+
+    await logActivity(req.user._id, 'FUNDS_TRANSFER', `Transferred $${amount} to ${recipient.email}`);
+
+    res.status(201).json({
       status: 'success',
-      data: {
-        user: {
-          kyc: user.kyc
-        }
-      }
+      data: senderTransaction
     });
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
   }
 });
 
-// Error handling middleware (must be at the end)
-app.use(globalErrorHandler);
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({
+    status: 'error',
+    message: 'Something went wrong!'
+  });
+});
 
-// Initialize default admin and start server
-initializeDefaultAdmin().then(() => {
-  if (cluster.isMaster && NODE_ENV === 'production') {
-    console.log(`Master ${process.pid} is running`);
+// 404 handler
+app.all('*', (req, res) => {
+  res.status(404).json({
+    status: 'error',
+    message: `Can't find ${req.originalUrl} on this server!`
+  });
+});
 
-    // Fork workers
-    for (let i = 0; i < os.cpus().length; i++) {
-      cluster.fork();
-    }
+// Start server
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
 
-    cluster.on('exit', (worker, code, signal) => {
-      console.log(`Worker ${worker.process.pid} died`);
-      cluster.fork(); // Create a new worker
-    });
-  } else {
-    const server = app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT} in ${NODE_ENV} mode`);
-    });
-
-    // WebSocket server for real-time updates
-    const wss = new WebSocket.Server({ server });
-
-    wss.on('connection', (ws) => {
-      console.log('New WebSocket connection');
-
-      ws.on('message', (message) => {
-        console.log('Received:', message);
-        // Handle WebSocket messages
-      });
-
-      ws.on('close', () => {
-        console.log('WebSocket connection closed');
-      });
-    });
-
-    // Graceful shutdown
-    process.on('SIGTERM', () => {
-      console.log('SIGTERM received. Shutting down gracefully');
-      server.close(() => {
-        console.log('Process terminated');
-        process.exit(0);
-      });
-    });
-
-    process.on('SIGINT', () => {
-      console.log('SIGINT received. Shutting down gracefully');
-      server.close(() => {
-        console.log('Process terminated');
-        process.exit(0);
-      });
-    });
-  }
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received. Shutting down gracefully');
+  server.close(() => {
+    console.log('Process terminated');
+  });
 });
