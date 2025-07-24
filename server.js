@@ -34,6 +34,19 @@ app.use(mongoSanitize());
 app.use(xss());
 app.use(hpp());
 
+const session = require('express-session');
+
+// Session configuration
+app.use(session({
+  secret: '17581758Na.%', 
+  resave: false,
+  saveUninitialized: true,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    sameSite: 'strict'
+  }
+}));
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
