@@ -187,6 +187,7 @@ const AdminSchema = new mongoose.Schema({
     location: String,
     timestamp: { type: Date, default: Date.now }
   }],
+  passwordChangedAt: Date, 
   permissions: [String],
   twoFactorAuth: {
     enabled: { type: Boolean, default: false },
@@ -405,7 +406,8 @@ const initializeAdmin = async () => {
       password: hashedPassword,
       name: 'Super Admin',
       role: 'super',
-      permissions: ['all']
+      permissions: ['all'],
+      passwordChangedAt: Date.now()  // Add this line
     });
     console.log('Default admin created');
   }
@@ -541,7 +543,8 @@ const adminProtect = async (req, res, next) => {
     }
 
     const decoded = verifyJWT(token);
-    const currentAdmin = await Admin.findById(decoded.id).select('+passwordChangedAt');
+    // REMOVE passwordChangedAt from the select
+    const currentAdmin = await Admin.findById(decoded.id);
 
     if (!currentAdmin) {
       return res.status(401).json({
