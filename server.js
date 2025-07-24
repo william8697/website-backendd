@@ -1152,13 +1152,14 @@ app.post('/api/admin/auth/login', [
     }
 
     const token = generateJWT(admin._id, true);
+    const csrfToken = crypto.randomBytes(32).toString('hex');
 
     // Update last login
     admin.lastLogin = new Date();
     admin.loginHistory.push(getUserDeviceInfo(req));
     await admin.save();
 
-    res.cookie('adminJwt', token, {
+    res.cookie('admin_jwt', token, {
       expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -1168,6 +1169,7 @@ app.post('/api/admin/auth/login', [
     res.status(200).json({
       status: 'success',
       token,
+      csrfToken,
       data: {
         admin: {
           id: admin._id,
