@@ -531,8 +531,8 @@ const adminProtect = async (req, res, next) => {
     let token;
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
       token = req.headers.authorization.split(' ')[1];
-    } else if (req.cookies.adminJwt) {
-      token = req.cookies.adminJwt;
+    } else if (req.cookies.admin_jwt) {
+      token = req.cookies.admin_jwt;
     }
 
     if (!token) {
@@ -542,8 +542,7 @@ const adminProtect = async (req, res, next) => {
       });
     }
 
-    const decoded = verifyJWT(token);
-    // REMOVE passwordChangedAt from the select
+    const decoded = await verifyToken(token);
     const currentAdmin = await Admin.findById(decoded.id);
 
     if (!currentAdmin) {
@@ -552,6 +551,11 @@ const adminProtect = async (req, res, next) => {
         message: 'The admin belonging to this token no longer exists.'
       });
     }
+
+    // Generate new CSRF token for each request
+    const csrfToken = crypto.randomBytes(32).toString('hex');
+    req.session.csrfToken = csrfToken;
+    res.locals.csrfToken = csrfToken;
 
     req.admin = currentAdmin;
     next();
@@ -589,6 +593,18 @@ const checkCSRF = (req, res, next) => {
   }
   next();
 };
+
+
+
+
+function verifyToken(token) {
+    return new Promise((resolve, reject) => {
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) return reject(err);
+            resolve(decoded);
+        });
+    });
+}
 
 // Routes
 
