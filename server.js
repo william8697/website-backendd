@@ -1103,30 +1103,13 @@ app.post('/api/users/api-keys', protect, [
 });
 
 // Admin Authentication
-// Add this route near the top of your routes section, before any protected routes
-app.get('/api/csrf-token', adminCsrfProtection, (req, res) => {
-  try {
-    // Set CSRF token in HTTP-only cookie
-    res.cookie('XSRF-TOKEN', req.csrfToken(), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 24 * 60 * 60 * 1000 // 1 day
-    });
-
-    // Also send the token in the response
-    res.status(200).json({
-      status: 'success',
-      data: {
-        csrfToken: req.csrfToken()
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to generate CSRF token'
-    });
-  }
+app.get('/api/admin/csrf-token', (req, res) => {
+  const csrfToken = crypto.randomBytes(32).toString('hex');
+  req.session.csrfToken = csrfToken;
+  res.status(200).json({
+    status: 'success',
+    csrfToken
+  });
 });
 
 app.post('/api/admin/auth/login', [
