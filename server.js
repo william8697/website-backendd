@@ -1103,7 +1103,7 @@ app.post('/api/users/api-keys', protect, [
 });
 
 // Admin Authentication
-app.get('/api/admin/csrf-token', (req, res) => {
+app.get('/api/csrf-token', (req, res) => {
   const csrfToken = crypto.randomBytes(32).toString('hex');
   req.session.csrfToken = csrfToken;
   res.status(200).json({
