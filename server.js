@@ -76,6 +76,8 @@ app.use('/api/auth/forgot-password', authLimiter);
 
 // Database connection with enhanced settings
 mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
   autoIndex: true,
   connectTimeoutMS: 30000,
   socketTimeoutMS: 30000,
@@ -226,7 +228,10 @@ UserSchema.virtual('fullName').get(function() {
   return `${this.firstName} ${this.lastName}`;
 });
 
+UserSchema.index({ email: 1 });
+UserSchema.index({ status: 1 });
 UserSchema.index({ 'kycStatus.identity': 1, 'kycStatus.address': 1, 'kycStatus.facial': 1 });
+UserSchema.index({ referredBy: 1 });
 UserSchema.index({ createdAt: -1 });
 
 const User = mongoose.model('User', UserSchema);
@@ -1923,6 +1928,77 @@ app.delete('/api/users/api-keys/:id', protect, async (req, res) => {
 });
 
 // Admin Authentication
+app.get('/api/admin/auth/verify', async (req, res) => {
+  try {
+    // Get token from header
+    let token;
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
+    } else if (req.cookies.admin_jwt) {
+      token = req.cookies.admin_jwt;
+    }
+
+    if (!token) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'You are not logged in! Please log in to get access.'
+      });
+    }
+
+    // Verify token
+    const decoded = verifyJWT(token);
+    if (!decoded.isAdmin) {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'You do not have permission to access this resource'
+      });
+    }
+
+    // Get admin from database
+    const currentAdmin = await Admin.findById(decoded.id)
+      .select('-password -passwordChangedAt -__v -twoFactorAuth.secret');
+
+    if (!currentAdmin) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'The admin belonging to this token no longer exists.'
+      });
+    }
+
+    // Check if password was changed after token was issued
+    if (currentAdmin.passwordChangedAt && decoded.iat < currentAdmin.passwordChangedAt.getTime() / 1000) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Admin recently changed password! Please log in again.'
+      });
+    }
+
+    // Return admin data
+    res.status(200).json({
+      status: 'success',
+      data: {
+        admin: {
+          id: currentAdmin._id,
+          name: currentAdmin.name,
+          email: currentAdmin.email,
+          role: currentAdmin.role
+        }
+      }
+    });
+
+    await logActivity('verify-admin', 'admin', currentAdmin._id, currentAdmin._id, 'Admin', req);
+
+  } catch (err) {
+    console.error('Admin verification error:', err);
+    res.status(401).json({
+      status: 'fail',
+      message: err.message || 'Invalid token. Please log in again.'
+    });
+  }
+});
+
+
+
 app.get('/api/csrf-token', (req, res) => {
   const csrfToken = crypto.randomBytes(32).toString('hex');
   req.session.csrfToken = csrfToken;
