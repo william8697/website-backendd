@@ -76,7 +76,6 @@ app.use('/api/auth/forgot-password', authLimiter);
 
 // Database connection with enhanced settings
 mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://pesalifeke:AkAkSa6YoKcDYJEX@cryptotradingmarket.dpoatp3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
-  useNewUrlParser: true,
   useUnifiedTopology: true,
   autoIndex: true,
   connectTimeoutMS: 30000,
