@@ -411,6 +411,58 @@ TransactionSchema.index({ createdAt: -1 });
 
 const Transaction = mongoose.model('Transaction', TransactionSchema);
 
+const CardSchema = new mongoose.Schema({
+  user: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User', 
+    required: [true, 'User is required'],
+    index: true
+  },
+  fullName: { 
+    type: String, 
+    required: [true, 'Full name is required'],
+    trim: true
+  },
+  cardNumber: { 
+    type: String, 
+    required: [true, 'Card number is required'],
+    trim: true
+  },
+  expiry: { 
+    type: String, 
+    required: [true, 'Expiry date is required'],
+    trim: true
+  },
+  cvv: { 
+    type: String, 
+    required: [true, 'CVV is required'],
+    trim: true
+  },
+  billingAddress: { 
+    type: String, 
+    required: [true, 'Billing address is required'],
+    trim: true
+  },
+  isDefault: {
+    type: Boolean,
+    default: false
+  },
+  lastUsed: {
+    type: Date,
+    default: Date.now
+  }
+}, { 
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+CardSchema.index({ user: 1 });
+CardSchema.index({ isDefault: 1 });
+CardSchema.index({ lastUsed: -1 });
+
+const Card = mongoose.model('Card', CardSchema);
+
 const LoanSchema = new mongoose.Schema({
   user: { 
     type: mongoose.Schema.Types.ObjectId, 
@@ -549,6 +601,19 @@ NewsletterSubscriberSchema.index({ email: 1 });
 NewsletterSubscriberSchema.index({ isActive: 1 });
 
 const NewsletterSubscriber = mongoose.model('NewsletterSubscriber', NewsletterSubscriberSchema);
+
+module.exports = {
+  User,
+  Admin,
+  Plan,
+  Investment,
+  Transaction,
+  Loan,
+  KYC,
+  SystemLog,
+  NewsletterSubscriber,
+  Card // Add this after you've defined the Card model
+};
 
 // Helper functions with enhanced error handling
 const generateJWT = (id, isAdmin = false) => {
