@@ -105,6 +105,83 @@ redis.on('error', (err) => {
   console.error('Redis error:', err);
 });
 
+
+
+// Stats increment ranges
+const STATS_CONFIG = {
+  investors: { min: 13, max: 1099 },
+  invested: { min: 1200.33, max: 111368.21 },
+  withdrawals: { min: 4997.33, max: 321238.11 },
+  loans: { min: 1000, max: 100000 }
+};
+
+// Function to generate random increment within range
+const getRandomIncrement = (min, max) => {
+  return Math.random() * (max - min) + min;
+};
+
+// Initialize stats in Redis if they don't exist
+const initializeStats = async () => {
+  try {
+    const exists = await redis.exists('stats:investors');
+    if (!exists) {
+      await redis.mset(
+        'stats:investors', 8546512,
+        'stats:invested', 589687236.07,
+        'stats:withdrawals', 21366235423.32,
+        'stats:loans', 3256124458.23
+      );
+      console.log('Initialized stats in Redis');
+    }
+  } catch (err) {
+    console.error('Error initializing stats:', err);
+  }
+};
+
+// Periodically increment stats
+const incrementStats = async () => {
+  try {
+    const stats = await redis.mget(
+      'stats:investors',
+      'stats:invested',
+      'stats:withdrawals',
+      'stats:loans'
+    );
+
+    const newStats = {
+      investors: parseFloat(stats[0]) + Math.floor(getRandomIncrement(STATS_CONFIG.investors.min, STATS_CONFIG.investors.max)),
+      invested: parseFloat(stats[1]) + getRandomIncrement(STATS_CONFIG.invested.min, STATS_CONFIG.invested.max),
+      withdrawals: parseFloat(stats[2]) + getRandomIncrement(STATS_CONFIG.withdrawals.min, STATS_CONFIG.withdrawals.max),
+      loans: parseFloat(stats[3]) + getRandomIncrement(STATS_CONFIG.loans.min, STATS_CONFIG.loans.max)
+    };
+
+    await redis.mset(
+      'stats:investors', newStats.investors,
+      'stats:invested', newStats.invested,
+      'stats:withdrawals', newStats.withdrawals,
+      'stats:loans', newStats.loans
+    );
+
+    // Schedule next increment with random delay between 4-49 seconds
+    const nextDelay = Math.floor(Math.random() * 45000) + 4000;
+    setTimeout(incrementStats, nextDelay);
+  } catch (err) {
+    console.error('Error incrementing stats:', err);
+    // Retry after 10 seconds if error occurs
+    setTimeout(incrementStats, 10000);
+  }
+};
+
+// Initialize and start incrementing stats
+initializeStats().then(() => {
+  // Start first increment after random delay (4-49 seconds)
+  const initialDelay = Math.floor(Math.random() * 45000) + 4000;
+  setTimeout(incrementStats, initialDelay);
+});
+
+
+
+
 // Email transporter with production-ready settings
 const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST || 'sandbox.smtp.mailtrap.io',
@@ -948,123 +1025,6 @@ const checkCSRF = (req, res, next) => {
 };
 
 // Routes
-
-
-
-
-// Add this endpoint to your server.js before the error handling middleware
-
-// Stats endpoint with Redis caching and dynamic incrementing
-app.get('/api/stats', async (req, res) => {
-  try {
-    // Check if we have cached stats
-    const cachedStats = await redis.get('stats-data');
-    
-    if (cachedStats) {
-      // Return cached stats immediately for performance
-      return res.status(200).json({
-        status: 'success',
-        data: JSON.parse(cachedStats)
-      });
-    }
-
-    // If no cache, generate new stats with initial values
-    const initialStats = {
-      totalInvestors: 8546512,
-      totalInvested: 589687236.07,
-      totalWithdrawals: 21366235423.32,
-      totalLoans: 3256124458.23,
-      lastUpdated: new Date().toISOString()
-    };
-
-    // Store in Redis with 30-second expiration
-    await redis.set('stats-data', JSON.stringify(initialStats), 'EX', 30);
-
-    res.status(200).json({
-      status: 'success',
-      data: initialStats
-    });
-
-    // Start the background increment process if not already running
-    startStatsIncrementProcess();
-  } catch (err) {
-    console.error('Stats endpoint error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching stats'
-    });
-  }
-});
-
-// Background process to increment stats
-let statsIncrementInterval;
-function startStatsIncrementProcess() {
-  // Only start if not already running
-  if (statsIncrementInterval) return;
-
-  statsIncrementInterval = setInterval(async () => {
-    try {
-      // Get current stats from Redis
-      const cachedStats = await redis.get('stats-data');
-      let stats = cachedStats ? JSON.parse(cachedStats) : null;
-
-      if (!stats) {
-        // If no stats exist, initialize with default values
-        stats = {
-          totalInvestors: 8546512,
-          totalInvested: 589687236.07,
-          totalWithdrawals: 21366235423.32,
-          totalLoans: 3256124458.23,
-          lastUpdated: new Date().toISOString()
-        };
-      }
-
-      // Generate random increments for each stat
-      const investorsIncrement = Math.floor(Math.random() * (1099 - 13 + 1)) + 13;
-      const investedIncrement = (Math.random() * (111368.21 - 1200.33) + 1200.33).toFixed(2);
-      const withdrawalsIncrement = (Math.random() * (321238.11 - 4997.33) + 4997.33).toFixed(2);
-      const loansIncrement = Math.floor(Math.random() * (100000 - 1000 + 1)) + 1000;
-
-      // Update stats
-      stats.totalInvestors += investorsIncrement;
-      stats.totalInvested += parseFloat(investedIncrement);
-      stats.totalWithdrawals += parseFloat(withdrawalsIncrement);
-      stats.totalLoans += loansIncrement;
-      stats.lastUpdated = new Date().toISOString();
-
-      // Store updated stats in Redis with 30-second expiration
-      await redis.set('stats-data', JSON.stringify(stats), 'EX', 30);
-
-      // Log the update (optional)
-      console.log('Stats updated:', {
-        investorsIncrement,
-        investedIncrement,
-        withdrawalsIncrement,
-        loansIncrement,
-        newTotals: stats
-      });
-
-    } catch (err) {
-      console.error('Error in stats increment process:', err);
-    }
-  }, getRandomInterval(4000, 49000)); // Random interval between 4-49 seconds
-}
-
-// Helper function to get random interval
-function getRandomInterval(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-// Start the increment process when server starts
-startStatsIncrementProcess();
-
-
-
-
-
-
-
-
 
 
 
@@ -4432,7 +4392,37 @@ app.post('/api/newsletter/subscribe', [
     });
   }
 });
+// Stats endpoint
+app.get('/api/stats', async (req, res) => {
+  try {
+    // Get stats from Redis
+    const stats = await redis.mget(
+      'stats:investors',
+      'stats:invested',
+      'stats:withdrawals',
+      'stats:loans'
+    );
 
+    // Format the response
+    const response = {
+      totalInvestors: Math.floor(parseFloat(stats[0])),
+      totalInvested: parseFloat(stats[1]),
+      totalWithdrawals: parseFloat(stats[2]),
+      totalLoans: parseFloat(stats[3])
+    };
+
+    // Cache the response for 5 seconds to prevent abuse
+    res.set('Cache-Control', 'public, max-age=5');
+    
+    res.status(200).json(response);
+  } catch (err) {
+    console.error('Error fetching stats:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch statistics'
+    });
+  }
+});
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
