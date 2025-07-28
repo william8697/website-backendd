@@ -115,6 +115,23 @@ const STATS_CONFIG = {
   loans: { min: 1000, max: 100000 }
 };
 
+// Format large numbers with appropriate suffixes (K, M, B)
+const formatNumber = (num, isCurrency = false) => {
+  const absNum = Math.abs(num);
+  const prefix = isCurrency ? '$' : '';
+  
+  if (absNum >= 1000000000) {
+    return `${prefix}${(num / 1000000000).toFixed(1)} B`;
+  }
+  if (absNum >= 1000000) {
+    return `${prefix}${(num / 1000000).toFixed(1)} M`;
+  }
+  if (absNum >= 1000) {
+    return `${prefix}${(num / 1000).toFixed(1)} K`;
+  }
+  return isCurrency ? `${prefix}${num.toFixed(2)}` : num.toString();
+};
+
 // Function to generate random increment within range
 const getRandomIncrement = (min, max) => {
   return Math.random() * (max - min) + min;
@@ -135,6 +152,28 @@ const initializeStats = async () => {
     }
   } catch (err) {
     console.error('Error initializing stats:', err);
+  }
+};
+
+// Get formatted stats for display
+const getFormattedStats = async () => {
+  try {
+    const stats = await redis.mget(
+      'stats:investors',
+      'stats:invested',
+      'stats:withdrawals',
+      'stats:loans'
+    );
+    
+    return {
+      investors: formatNumber(parseFloat(stats[0])),
+      invested: formatNumber(parseFloat(stats[1]), true),
+      withdrawals: formatNumber(parseFloat(stats[2]), true),
+      loans: formatNumber(parseFloat(stats[3]), true)
+    };
+  } catch (err) {
+    console.error('Error getting formatted stats:', err);
+    return null;
   }
 };
 
@@ -162,6 +201,10 @@ const incrementStats = async () => {
       'stats:loans', newStats.loans
     );
 
+    // Get formatted stats for logging
+    const formattedStats = await getFormattedStats();
+    console.log('Stats updated:', formattedStats);
+
     // Schedule next increment with random delay between 4-49 seconds
     const nextDelay = Math.floor(Math.random() * 45000) + 4000;
     setTimeout(incrementStats, nextDelay);
@@ -179,6 +222,10 @@ initializeStats().then(() => {
   setTimeout(incrementStats, initialDelay);
 });
 
+// Export the getFormattedStats function to use in your frontend/API
+module.exports = {
+  getFormattedStats
+};
 
 
 
