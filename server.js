@@ -3537,23 +3537,34 @@ app.delete('/api/admin/two-factor', adminProtect, [
 });
 
 // Dashboard Endpoints
-app.get('/api/plans', protect, async (req, res) => {
+// Add this endpoint to your server.js
+app.get('/api/plans', async (req, res) => {
   try {
-    const cachedPlans = await redis.get('investment-plans');
-    if (cachedPlans) {
-      return res.status(200).json({
-        status: 'success',
-        data: JSON.parse(cachedPlans)
-      });
-    }
+    // Get active plans from database, sorted by minimum amount
+    const plans = await Plan.find({ isActive: true })
+      .sort({ minAmount: 1 })
+      .lean();
 
-    const plans = await Plan.find({ isActive: true });
-    await redis.set('investment-plans', JSON.stringify(plans), 'EX', 3600);
+    // Transform the data to match frontend expectations
+    const formattedPlans = plans.map(plan => ({
+      id: plan._id.toString(),
+      name: plan.name,
+      description: plan.description,
+      returnRate: `${plan.percentage}%`,
+      returnPeriod: `After ${plan.duration} hours`,
+      minAmount: plan.minAmount,
+      maxAmount: plan.maxAmount,
+      isPopular: plan.name.includes('Gold') || plan.name.includes('Advance'), // Mark some plans as popular
+      features: [
+        `Minimum investment: $${plan.minAmount}`,
+        `Maximum investment: $${plan.maxAmount}`,
+        `Duration: ${plan.duration} hours`,
+        `Principal protection`,
+        `24/7 customer support`
+      ]
+    }));
 
-    res.status(200).json({
-      status: 'success',
-      data: plans
-    });
+    res.status(200).json(formattedPlans);
   } catch (err) {
     console.error('Get plans error:', err);
     res.status(500).json({
