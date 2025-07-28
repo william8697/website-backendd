@@ -4423,6 +4423,61 @@ app.post('/api/newsletter/subscribe', [
   }
 });
 
+// Stats endpoint
+app.get('/api/stats', async (req, res) => {
+  try {
+    let stats = await redis.get('global-stats');
+    if (!stats) {
+      // Initialize if not exists
+      stats = {
+        totalInvestors: 8546512,
+        totalInvested: 27200000000,
+        totalWithdrawals: 43400000000,
+        totalLoans: 3200000000
+      };
+      await redis.set('global-stats', JSON.stringify(stats), 'EX', 86400);
+    } else {
+      stats = JSON.parse(stats);
+    }
+
+    // Format numbers for frontend
+    const formatNumber = (num) => {
+      if (num >= 1000000000) {
+        return (num / 1000000000).toFixed(1) + 'B';
+      }
+      if (num >= 1000000) {
+        return (num / 1000000).toFixed(1) + 'M';
+      }
+      if (num >= 1000) {
+        return (num / 1000).toFixed(1) + 'K';
+      }
+      return num.toString();
+    };
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        totalInvestors: stats.totalInvestors,
+        totalInvested: stats.totalInvested / 100, // Convert cents to dollars
+        totalWithdrawals: stats.totalWithdrawals / 100,
+        totalLoans: stats.totalLoans / 100,
+        formatted: {
+          totalInvestors: formatNumber(stats.totalInvestors),
+          totalInvested: formatNumber(stats.totalInvested / 100),
+          totalWithdrawals: formatNumber(stats.totalWithdrawals / 100),
+          totalLoans: formatNumber(stats.totalLoans / 100)
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Stats error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch stats'
+    });
+  }
+});
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {
