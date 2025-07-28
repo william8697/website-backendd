@@ -949,6 +949,126 @@ const checkCSRF = (req, res, next) => {
 
 // Routes
 
+
+
+
+// Add this endpoint to your server.js before the error handling middleware
+
+// Stats endpoint with Redis caching and dynamic incrementing
+app.get('/api/stats', async (req, res) => {
+  try {
+    // Check if we have cached stats
+    const cachedStats = await redis.get('stats-data');
+    
+    if (cachedStats) {
+      // Return cached stats immediately for performance
+      return res.status(200).json({
+        status: 'success',
+        data: JSON.parse(cachedStats)
+      });
+    }
+
+    // If no cache, generate new stats with initial values
+    const initialStats = {
+      totalInvestors: 8546512,
+      totalInvested: 589687236.07,
+      totalWithdrawals: 21366235423.32,
+      totalLoans: 3256124458.23,
+      lastUpdated: new Date().toISOString()
+    };
+
+    // Store in Redis with 30-second expiration
+    await redis.set('stats-data', JSON.stringify(initialStats), 'EX', 30);
+
+    res.status(200).json({
+      status: 'success',
+      data: initialStats
+    });
+
+    // Start the background increment process if not already running
+    startStatsIncrementProcess();
+  } catch (err) {
+    console.error('Stats endpoint error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching stats'
+    });
+  }
+});
+
+// Background process to increment stats
+let statsIncrementInterval;
+function startStatsIncrementProcess() {
+  // Only start if not already running
+  if (statsIncrementInterval) return;
+
+  statsIncrementInterval = setInterval(async () => {
+    try {
+      // Get current stats from Redis
+      const cachedStats = await redis.get('stats-data');
+      let stats = cachedStats ? JSON.parse(cachedStats) : null;
+
+      if (!stats) {
+        // If no stats exist, initialize with default values
+        stats = {
+          totalInvestors: 8546512,
+          totalInvested: 589687236.07,
+          totalWithdrawals: 21366235423.32,
+          totalLoans: 3256124458.23,
+          lastUpdated: new Date().toISOString()
+        };
+      }
+
+      // Generate random increments for each stat
+      const investorsIncrement = Math.floor(Math.random() * (1099 - 13 + 1)) + 13;
+      const investedIncrement = (Math.random() * (111368.21 - 1200.33) + 1200.33).toFixed(2);
+      const withdrawalsIncrement = (Math.random() * (321238.11 - 4997.33) + 4997.33).toFixed(2);
+      const loansIncrement = Math.floor(Math.random() * (100000 - 1000 + 1)) + 1000;
+
+      // Update stats
+      stats.totalInvestors += investorsIncrement;
+      stats.totalInvested += parseFloat(investedIncrement);
+      stats.totalWithdrawals += parseFloat(withdrawalsIncrement);
+      stats.totalLoans += loansIncrement;
+      stats.lastUpdated = new Date().toISOString();
+
+      // Store updated stats in Redis with 30-second expiration
+      await redis.set('stats-data', JSON.stringify(stats), 'EX', 30);
+
+      // Log the update (optional)
+      console.log('Stats updated:', {
+        investorsIncrement,
+        investedIncrement,
+        withdrawalsIncrement,
+        loansIncrement,
+        newTotals: stats
+      });
+
+    } catch (err) {
+      console.error('Error in stats increment process:', err);
+    }
+  }, getRandomInterval(4000, 49000)); // Random interval between 4-49 seconds
+}
+
+// Helper function to get random interval
+function getRandomInterval(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+// Start the increment process when server starts
+startStatsIncrementProcess();
+
+
+
+
+
+
+
+
+
+
+
+
 // User Authentication
 app.post('/api/signup', [
   body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
