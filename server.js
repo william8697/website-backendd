@@ -4320,7 +4320,78 @@ app.post('/api/newsletter/subscribe', [
   }
 });
 
+// Stats Endpoint for Frontend
+app.get('/api/stats', async (req, res) => {
+    try {
+        // Try to get cached stats first
+        const cachedStats = await redis.get('global-stats');
+        if (cachedStats) {
+            return res.status(200).json(JSON.parse(cachedStats));
+        }
 
+        // Initialize stats if they don't exist
+        let stats = {
+            totalInvestors: 8546512,
+            totalInvested: 27200000000, // $27.2B
+            totalWithdrawals: 43400000000, // $43.4B
+            totalLoans: 3200000000 // $3.2B
+        };
+
+        // Generate random increments
+        const randomInvestors = Math.floor(Math.random() * (1099 - 13 + 1)) + 13;
+        const randomInvested = (Math.random() * (111368.21 - 1200.33) + 1200.33).toFixed(2);
+        const randomWithdrawals = (Math.random() * (321238.11 - 4997.33) + 4997.33).toFixed(2);
+        const randomLoans = Math.floor(Math.random() * (100000 - 1000 + 1)) + 1000;
+
+        // Update stats with random increments
+        stats.totalInvestors += randomInvestors;
+        stats.totalInvested += parseFloat(randomInvested);
+        stats.totalWithdrawals += parseFloat(randomWithdrawals);
+        stats.totalLoans += randomLoans;
+
+        // Cache the updated stats for 30 seconds
+        await redis.set('global-stats', JSON.stringify(stats), 'EX', 30);
+
+        res.status(200).json(stats);
+    } catch (err) {
+        console.error('Stats endpoint error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching stats'
+        });
+    }
+});
+
+// Background worker to periodically update stats
+setInterval(async () => {
+    try {
+        // Get current stats or initialize if they don't exist
+        let stats = JSON.parse(await redis.get('global-stats')) || {
+            totalInvestors: 8546512,
+            totalInvested: 27200000000,
+            totalWithdrawals: 43400000000,
+            totalLoans: 3200000000
+        };
+
+        // Generate random increments
+        const randomInvestors = Math.floor(Math.random() * (1099 - 13 + 1)) + 13;
+        const randomInvested = (Math.random() * (111368.21 - 1200.33) + 1200.33).toFixed(2);
+        const randomWithdrawals = (Math.random() * (321238.11 - 4997.33) + 4997.33).toFixed(2);
+        const randomLoans = Math.floor(Math.random() * (100000 - 1000 + 1)) + 1000;
+
+        // Update stats with random increments
+        stats.totalInvestors += randomInvestors;
+        stats.totalInvested += parseFloat(randomInvested);
+        stats.totalWithdrawals += parseFloat(randomWithdrawals);
+        stats.totalLoans += randomLoans;
+
+        // Save updated stats to Redis
+        await redis.set('global-stats', JSON.stringify(stats));
+
+    } catch (err) {
+        console.error('Background stats update error:', err);
+    }
+}, Math.floor(Math.random() * (49000 - 4000 + 1)) + 4000); // Random interval between 4-49 seconds
 
 
 
