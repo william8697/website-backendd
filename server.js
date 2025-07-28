@@ -107,126 +107,6 @@ redis.on('error', (err) => {
 
 
 
-// Stats increment ranges
-const STATS_CONFIG = {
-  investors: { min: 13, max: 1099 },
-  invested: { min: 1200.33, max: 111368.21 },
-  withdrawals: { min: 4997.33, max: 321238.11 },
-  loans: { min: 1000, max: 100000 }
-};
-
-// Format large numbers with appropriate suffixes (K, M, B)
-const formatNumber = (num, isCurrency = false) => {
-  const absNum = Math.abs(num);
-  const prefix = isCurrency ? '$' : '';
-  
-  if (absNum >= 1000000000) {
-    return `${prefix}${(num / 1000000000).toFixed(1)} B`;
-  }
-  if (absNum >= 1000000) {
-    return `${prefix}${(num / 1000000).toFixed(1)} M`;
-  }
-  if (absNum >= 1000) {
-    return `${prefix}${(num / 1000).toFixed(1)} K`;
-  }
-  return isCurrency ? `${prefix}${num.toFixed(2)}` : num.toString();
-};
-
-// Function to generate random increment within range
-const getRandomIncrement = (min, max) => {
-  return Math.random() * (max - min) + min;
-};
-
-// Initialize stats in Redis if they don't exist
-const initializeStats = async () => {
-  try {
-    const exists = await redis.exists('stats:investors');
-    if (!exists) {
-      await redis.mset(
-        'stats:investors', 8546512,
-        'stats:invested', 589687236.07,
-        'stats:withdrawals', 21366235423.32,
-        'stats:loans', 3256124458.23
-      );
-      console.log('Initialized stats in Redis');
-    }
-  } catch (err) {
-    console.error('Error initializing stats:', err);
-  }
-};
-
-// Get formatted stats for display
-const getFormattedStats = async () => {
-  try {
-    const stats = await redis.mget(
-      'stats:investors',
-      'stats:invested',
-      'stats:withdrawals',
-      'stats:loans'
-    );
-    
-    return {
-      investors: formatNumber(parseFloat(stats[0])),
-      invested: formatNumber(parseFloat(stats[1]), true),
-      withdrawals: formatNumber(parseFloat(stats[2]), true),
-      loans: formatNumber(parseFloat(stats[3]), true)
-    };
-  } catch (err) {
-    console.error('Error getting formatted stats:', err);
-    return null;
-  }
-};
-
-// Periodically increment stats
-const incrementStats = async () => {
-  try {
-    const stats = await redis.mget(
-      'stats:investors',
-      'stats:invested',
-      'stats:withdrawals',
-      'stats:loans'
-    );
-
-    const newStats = {
-      investors: parseFloat(stats[0]) + Math.floor(getRandomIncrement(STATS_CONFIG.investors.min, STATS_CONFIG.investors.max)),
-      invested: parseFloat(stats[1]) + getRandomIncrement(STATS_CONFIG.invested.min, STATS_CONFIG.invested.max),
-      withdrawals: parseFloat(stats[2]) + getRandomIncrement(STATS_CONFIG.withdrawals.min, STATS_CONFIG.withdrawals.max),
-      loans: parseFloat(stats[3]) + getRandomIncrement(STATS_CONFIG.loans.min, STATS_CONFIG.loans.max)
-    };
-
-    await redis.mset(
-      'stats:investors', newStats.investors,
-      'stats:invested', newStats.invested,
-      'stats:withdrawals', newStats.withdrawals,
-      'stats:loans', newStats.loans
-    );
-
-    // Get formatted stats for logging
-    const formattedStats = await getFormattedStats();
-    console.log('Stats updated:', formattedStats);
-
-    // Schedule next increment with random delay between 4-49 seconds
-    const nextDelay = Math.floor(Math.random() * 45000) + 4000;
-    setTimeout(incrementStats, nextDelay);
-  } catch (err) {
-    console.error('Error incrementing stats:', err);
-    // Retry after 10 seconds if error occurs
-    setTimeout(incrementStats, 10000);
-  }
-};
-
-// Initialize and start incrementing stats
-initializeStats().then(() => {
-  // Start first increment after random delay (4-49 seconds)
-  const initialDelay = Math.floor(Math.random() * 45000) + 4000;
-  setTimeout(incrementStats, initialDelay);
-});
-
-// Export the getFormattedStats function to use in your frontend/API
-module.exports = {
-  getFormattedStats
-};
-
 
 
 // Email transporter with production-ready settings
@@ -4439,37 +4319,11 @@ app.post('/api/newsletter/subscribe', [
     });
   }
 });
-// Stats endpoint
-app.get('/api/stats', async (req, res) => {
-  try {
-    // Get stats from Redis
-    const stats = await redis.mget(
-      'stats:investors',
-      'stats:invested',
-      'stats:withdrawals',
-      'stats:loans'
-    );
 
-    // Format the response
-    const response = {
-      totalInvestors: Math.floor(parseFloat(stats[0])),
-      totalInvested: parseFloat(stats[1]),
-      totalWithdrawals: parseFloat(stats[2]),
-      totalLoans: parseFloat(stats[3])
-    };
 
-    // Cache the response for 5 seconds to prevent abuse
-    res.set('Cache-Control', 'public, max-age=5');
-    
-    res.status(200).json(response);
-  } catch (err) {
-    console.error('Error fetching stats:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch statistics'
-    });
-  }
-});
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
