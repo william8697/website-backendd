@@ -4321,99 +4321,109 @@ app.post('/api/newsletter/subscribe', [
 
 
 
-// Stats generation and caching system
-const generateStats = async () => {
+// Stats endpoint with Redis caching and dynamic incrementing
+app.get('/api/stats', async (req, res) => {
   try {
-    // Get or initialize stats from Redis
-    let stats = await redis.get('platform-stats');
+    // Get current UTC time to check if it's midnight UTC
     const now = new Date();
-    const currentHour = now.getUTCHours();
-    const currentDate = now.getUTCDate();
-
-    if (!stats) {
-      // Initialize stats if they don't exist
-      stats = {
-        totalInvestors: 6546512,
-        totalInvested: 61236234.21,
-        totalWithdrawals: 47236585.06,
-        totalLoans: 13236512.17,
-        lastResetDate: currentDate,
-        lastInvestorCount: 6546512,
-        lastInvestmentAmount: 61236234.21,
-        lastWithdrawalAmount: 47236585.06,
-        lastLoanAmount: 13236512.17
-      };
-    } else {
-      stats = JSON.parse(stats);
+    const isMidnightUTC = now.getUTCHours() === 0 && now.getUTCMinutes() === 0;
+    
+    // Generate cache key based on UTC date
+    const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const cacheKey = `stats:${todayUTC.toISOString().split('T')[0]}`;
+    
+    // Try to get stats from Redis
+    let stats = await redis.get(cacheKey);
+    
+    if (!stats || isMidnightUTC) {
+      // Initialize new stats if it's midnight UTC or no stats exist
+      const baseInvestors = 6546512;
+      const baseInvested = getRandomInRange(6546956, 7642287) * 10;
+      const baseWithdrawals = getRandomInRange(6546956, 7642287) * 7.22;
+      const baseLoans = getRandomInRange(6546956, 7642287) * 2.02;
       
-      // Check if we need to reset daily stats (at 12:00 UTC)
-      if ((currentHour >= 12 && stats.lastResetDate !== currentDate) || 
-          (currentHour < 12 && stats.lastResetDate !== currentDate - 1)) {
-        // Reset daily stats with random base figures
-        stats.totalInvested = Math.floor(Math.random() * (7642287 - 6546956) + 6546956) * 10;
-        stats.totalWithdrawals = Math.floor(Math.random() * (7642287 - 6546956) + 6546956) * 10;
-        stats.totalLoans = Math.floor(Math.random() * (7642287 - 6546956) + 6546956) * 2;
-        stats.lastResetDate = currentDate;
-        stats.lastInvestmentAmount = stats.totalInvested;
-        stats.lastWithdrawalAmount = stats.totalWithdrawals;
-        stats.lastLoanAmount = stats.totalLoans;
+      stats = {
+        totalInvestors: baseInvestors,
+        totalInvested: parseFloat(baseInvested.toFixed(2)),
+        totalWithdrawals: parseFloat(baseWithdrawals.toFixed(2)),
+        totalLoans: parseFloat(baseLoans.toFixed(2)),
+        lastUpdated: now.getTime(),
+        changeRates: {
+          investors: getRandomChangeRate(),
+          invested: getRandomChangeRate(),
+          withdrawals: getRandomChangeRate(),
+          loans: getRandomChangeRate()
+        }
+      };
+      
+      // Store in Redis with 48h expiration (in case of midnight transition)
+      await redis.set(cacheKey, JSON.stringify(stats), 'EX', 48 * 60 * 60);
+    } else {
+      // Parse existing stats
+      stats = JSON.parse(stats);
+      stats.lastUpdated = new Date(stats.lastUpdated);
+      
+      // Calculate time since last update in seconds
+      const secondsSinceUpdate = (now - stats.lastUpdated) / 1000;
+      
+      // Increment values based on time passed
+      if (secondsSinceUpdate > 1) { // At least 1 second passed
+        const intervals = Math.floor(secondsSinceUpdate / getRandomInterval());
+        
+        if (intervals > 0) {
+          stats.totalInvestors += getRandomInRange(13, 1099) * intervals;
+          stats.totalInvested += getRandomInRange(1200.33, 111368.21) * intervals;
+          stats.totalWithdrawals += getRandomInRange(4997.33, 321238.11) * intervals;
+          stats.totalLoans += getRandomInRange(1000, 100000) * intervals;
+          
+          // Update change rates periodically
+          if (secondsSinceUpdate > 300) { // Every 5 minutes
+            stats.changeRates = {
+              investors: getRandomChangeRate(),
+              invested: getRandomChangeRate(),
+              withdrawals: getRandomChangeRate(),
+              loans: getRandomChangeRate()
+            };
+          }
+          
+          stats.lastUpdated = now.getTime();
+          await redis.set(cacheKey, JSON.stringify(stats), 'EX', 48 * 60 * 60);
+        }
       }
     }
-
-    // Generate random increments for each stat
-    const investorIncrement = Math.floor(Math.random() * (1099 - 13) + 13);
-    const investmentIncrement = (Math.random() * (111368.21 - 1200.33) + 1200.33);
-    const withdrawalIncrement = (Math.random() * (321238.11 - 4997.33) + 4997.33);
-    const loanIncrement = (Math.random() * (100000 - 1000) + 1000);
-
-    // Update stats
-    stats.totalInvestors += investorIncrement;
-    stats.totalInvested += investmentIncrement;
-    stats.totalWithdrawals += withdrawalIncrement;
-    stats.totalLoans += loanIncrement;
-
-    // Calculate percentage changes (random between 0.3% to 31%)
-    stats.investorChange = (Math.random() * 0.31 + 0.003).toFixed(3);
-    stats.investmentChange = (Math.random() * 0.31 + 0.003).toFixed(3);
-    stats.withdrawalChange = (Math.random() * 0.31 + 0.003).toFixed(3);
-    stats.loanChange = (Math.random() * 0.31 + 0.003).toFixed(3);
-
-    // Cache the updated stats with 1 minute expiration
-    await redis.set('platform-stats', JSON.stringify(stats), 'EX', 60);
-
-    return {
+    
+    // Format response
+    const response = {
       totalInvestors: stats.totalInvestors,
       totalInvested: stats.totalInvested,
       totalWithdrawals: stats.totalWithdrawals,
       totalLoans: stats.totalLoans,
-      investorChange: stats.investorChange,
-      investmentChange: stats.investmentChange,
-      withdrawalChange: stats.withdrawalChange,
-      loanChange: stats.loanChange
+      changeRates: stats.changeRates,
+      lastUpdated: stats.lastUpdated
     };
-  } catch (err) {
-    console.error('Error generating stats:', err);
-    throw err;
-  }
-};
-
-// Stats endpoint
-app.get('/api/stats', async (req, res) => {
-  try {
-    const stats = await generateStats();
     
-    res.status(200).json({
-      status: 'success',
-      data: stats
-    });
+    res.status(200).json(response);
   } catch (err) {
     console.error('Stats endpoint error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to generate platform statistics'
+      message: 'Failed to fetch stats data'
     });
   }
 });
+
+// Helper functions
+function getRandomInRange(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+function getRandomInterval() {
+  return Math.random() * 59 + 1; // Between 1-60 seconds
+}
+
+function getRandomChangeRate() {
+  return (Math.random() * 30.7 + 0.3).toFixed(2); // Between 0.3% - 31%
+}
 
 
 
