@@ -23,7 +23,6 @@ const { body, validationResult } = require('express-validator');
 const axios = require('axios');
 const speakeasy = require('speakeasy');
 const NEWS_API_KEY = process.env.NEWS_API_KEY || '1d8aba25abc84dcca448b145d30ca6bd';
-const NEWS_CACHE_TTL = 15 * 60 * 1000; // 15 minutes cache
 
 // Initialize Express app
 const app = express();
@@ -4607,112 +4606,70 @@ setInterval(async () => {
 
 
 
-// Cache for news data
-let newsCache = {
-    data: null,
-    timestamp: 0
-};
-
-// Helper function to fetch news from API
-const fetchBitcoinNews = async (page = 1, pageSize = 3) => {
+// Bitcoin News Endpoint
+app.get('/api/news/bitcoin', async (req, res) => {
     try {
-        const cacheKey = `news-${page}-${pageSize}`;
-        const now = Date.now();
+        const { page = 1, pageSize = 3 } = req.query;
         
-        // Check cache first
-        const cachedData = await redis.get(cacheKey);
-        if (cachedData && (now - JSON.parse(cachedData).timestamp) < NEWS_CACHE_TTL) {
-            return JSON.parse(cachedData).data;
-        }
-
-        // Fetch from NewsAPI
-        const response = await axios.get('https://newsapi.org/v2/everything', {
+        // Validate parameters
+        const validatedPage = Math.max(1, parseInt(page));
+        const validatedPageSize = Math.min(Math.max(1, parseInt(pageSize)), 10);
+        
+        const response = await axios.get(`https://newsapi.org/v2/everything`, {
             params: {
-                q: 'Bitcoin OR BTC',
+                q: 'bitcoin',
                 language: 'en',
                 sortBy: 'publishedAt',
-                pageSize,
-                page,
-                apiKey: NEWS_API_KEY,
-                domains: 'coindesk.com,cointelegraph.com,decrypt.co,bitcoinmagazine.com'
+                pageSize: validatedPageSize,
+                page: validatedPage,
+                apiKey: NEWS_API_KEY
             },
             timeout: 5000 // 5 second timeout
         });
 
-        if (response.data.status !== 'ok') {
-            throw new Error('Invalid response from news API');
-        }
-
-        // Process and format the data
+        // Transform the data to our format
         const newsData = {
             articles: response.data.articles.map(article => ({
                 title: article.title,
-                description: article.description || '',
+                description: article.description,
                 url: article.url,
-                image: article.urlToImage || 'https://www.dropbox.com/scl/fi/1dq16nex1borvvknpcwox/circular_dark_background.png?rlkey=sq2ujl2oxxk9vyvg1j7oz0cdb&raw=1',
+                imageUrl: article.urlToImage || 'https://www.dropbox.com/scl/fi/1dq16nex1borvvknpcwox/circular_dark_background.png?rlkey=sq2ujl2oxxk9vyvg1j7oz0cdb&raw=1',
                 source: article.source.name,
-                publishedAt: new Date(article.publishedAt).toLocaleDateString('en-US', {
-                    year: 'numeric',
-                    month: 'short',
-                    day: 'numeric'
-                })
+                publishedAt: new Date(article.publishedAt).toLocaleDateString()
             })),
             totalResults: response.data.totalResults,
-            currentPage: page
+            currentPage: validatedPage,
+            pageSize: validatedPageSize
         };
 
-        // Cache the response
-        await redis.set(cacheKey, JSON.stringify({
-            data: newsData,
-            timestamp: now
-        }), 'EX', NEWS_CACHE_TTL / 1000);
+        // Cache in Redis for 1 hour
+        const cacheKey = `bitcoin-news:${validatedPage}:${validatedPageSize}`;
+        await redis.setex(cacheKey, 3600, JSON.stringify(newsData));
 
-        return newsData;
+        res.status(200).json(newsData);
     } catch (error) {
-        console.error('News API Error:', error);
+        console.error('News API error:', error);
         
-        // Fallback to cached data if available
-        if (newsCache.data && (now - newsCache.timestamp) < NEWS_CACHE_TTL * 2) {
-            return newsCache.data;
+        // Try to serve from cache if available
+        try {
+            const { page = 1, pageSize = 3 } = req.query;
+            const cacheKey = `bitcoin-news:${page}:${pageSize}`;
+            const cachedData = await redis.get(cacheKey);
+            
+            if (cachedData) {
+                return res.status(200).json(JSON.parse(cachedData));
+            }
+            
+            throw new Error('No cached data available');
+        } catch (cacheError) {
+            console.error('Cache fallback failed:', cacheError);
+            res.status(500).json({
+                status: 'error',
+                message: 'Failed to fetch news data'
+            });
         }
-        
-        throw new Error('Failed to fetch news data');
-    }
-};
-
-// Bitcoin News Endpoint
-app.get('/api/news/bitcoin', [
-    query('page').optional().isInt({ min: 1 }).toInt().withMessage('Page must be a positive integer'),
-    query('limit').optional().isInt({ min: 1, max: 10 }).toInt().withMessage('Limit must be between 1 and 10')
-], async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({
-            status: 'fail',
-            errors: errors.array()
-        });
-    }
-
-    try {
-        const page = req.query.page || 1;
-        const limit = req.query.limit || 3;
-
-        const newsData = await fetchBitcoinNews(page, limit);
-
-        res.status(200).json({
-            status: 'success',
-            data: newsData
-        });
-    } catch (err) {
-        console.error('News endpoint error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch Bitcoin news'
-        });
     }
 });
-
-
 
 
 
