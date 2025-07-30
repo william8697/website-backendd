@@ -754,7 +754,7 @@ const initializePlans = async () => {
         description: '20% After 10 hours',
         percentage: 20,
         duration: 10,
-        minAmount: 30,
+        minAmount: 100,
         maxAmount: 499,
         referralBonus: 5
       },
