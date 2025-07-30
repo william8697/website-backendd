@@ -3539,7 +3539,7 @@ app.delete('/api/admin/two-factor', adminProtect, [
 });
 
 // Dashboard Endpoints
-// Plans Endpoint - Visible to all users, investment capability for logged-in users only
+// Plans Endpoint with login state detection
 app.get('/api/plans', async (req, res) => {
   try {
     // Get plans from database
@@ -3547,9 +3547,11 @@ app.get('/api/plans', async (req, res) => {
     
     // Get user balance if logged in
     let userBalance = 0;
+    let isLoggedIn = false;
     if (req.user) {
       const user = await User.findById(req.user.id).select('balances');
       userBalance = user.balances.main;
+      isLoggedIn = true;
     }
 
     // Format plans data
@@ -3563,14 +3565,16 @@ app.get('/api/plans', async (req, res) => {
       maxAmount: plan.maxAmount,
       referralBonus: plan.referralBonus,
       colorScheme: getPlanColorScheme(plan._id),
-      canInvest: req.user ? userBalance >= plan.minAmount : false
+      buttonState: isLoggedIn ? 'Invest' : 'Login to Invest',
+      canInvest: isLoggedIn && userBalance >= plan.minAmount
     }));
 
     res.status(200).json({
       status: 'success',
       data: {
         plans: formattedPlans,
-        userBalance: req.user ? userBalance : null
+        userBalance: isLoggedIn ? userBalance : null,
+        isLoggedIn
       }
     });
   } catch (err) {
@@ -3585,7 +3589,7 @@ app.get('/api/plans', async (req, res) => {
 // Helper function to assign consistent color schemes to plans
 function getPlanColorScheme(planId) {
   const colors = [
-     { primary: '#003366', secondary: '#004488', accent: '#0066CC' }, // Blue
+    { primary: '#003366', secondary: '#004488', accent: '#0066CC' }, // Blue
     { primary: '#4B0082', secondary: '#6A0DAD', accent: '#8A2BE2' }, // Indigo
     { primary: '#006400', secondary: '#008000', accent: '#00AA00' }, // Green
     { primary: '#8B0000', secondary: '#A52A2A', accent: '#CD5C5C' }, // Red
