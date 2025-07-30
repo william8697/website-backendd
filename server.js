@@ -4602,160 +4602,156 @@ setInterval(async () => {
 
 
 
-// Bitcoin News Endpoint
-const cryptoPanicKey = 'd0753e27bd2ab287e5bb75263257d7988ef25162';
-const newsDataKey = 'pub_33c50ca8457d4db8b1d9ae27bc132991';
-const gNewsKey = '910104d8bf756251535b02cf758dee6d';
+// Add these near other require statements if not already present
+const axios = require('axios');
+const { v4: uuidv4 } = require('uuid');
 
-// Cache news for 30 minutes to reduce API calls
-const newsCache = {
-  data: null,
-  timestamp: 0,
-  ttl: 30 * 60 * 1000 // 30 minutes
+// News API configuration
+const NEWS_API_CONFIG = {
+  cryptopanic: {
+    url: 'https://cryptopanic.com/api/v1/posts/',
+    apiKey: 'd0753e27bd2ab287e5bb75263257d7988ef25162'
+  },
+  newsdata: {
+    url: 'https://newsdata.io/api/1/news',
+    apiKey: 'pub_33c50ca8457d4db8b1d9ae27bc132991'
+  },
+  gnews: {
+    url: 'https://gnews.io/api/v4/top-headlines',
+    apiKey: '910104d8bf756251535b02cf758dee6d'
+  },
+  cryptocompare: {
+    url: 'https://min-api.cryptocompare.com/data/v2/news/',
+    apiKey: 'e7f3b5a5f2e1c5d5a5f2e1c5d5a5f2e1c5d5a5f2e1c5d5a5f2e1c5d5a5f2e1c'
+  }
 };
 
-async function fetchCryptoPanicNews() {
+// Cache setup for news
+const NEWS_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+let newsCache = {
+  data: null,
+  timestamp: 0
+};
+
+// Helper function to fetch from CryptoPanic
+async function fetchCryptoPanic() {
   try {
-    const response = await axios.get(`https://cryptopanic.com/api/v1/posts/?auth_token=${cryptoPanicKey}&currencies=BTC&filter=rising`);
+    const response = await axios.get(`${NEWS_API_CONFIG.cryptopanic.url}?auth_token=${NEWS_API_CONFIG.cryptopanic.apiKey}&filter=hot&currencies=BTC`);
     return response.data.results.map(item => ({
-      source: 'CryptoPanic',
+      id: `cp-${item.id}`,
       title: item.title,
+      description: item.metadata?.description || '',
+      source: 'CryptoPanic',
       url: item.url,
-      published_at: item.published_at,
-      domain: item.domain,
-      image: item.metadata ? item.metadata.image : null
+      image: item.metadata?.image || 'https://cryptopanic.com/static/img/cryptopanic-logo.png',
+      publishedAt: new Date(item.created_at).toISOString()
     }));
   } catch (error) {
-    console.error('CryptoPanic API error:', error);
+    console.error('CryptoPanic API error:', error.message);
     return [];
   }
 }
 
+// Helper function to fetch from NewsData
 async function fetchNewsData() {
   try {
-    const response = await axios.get(`https://newsdata.io/api/1/news?apikey=${newsDataKey}&q=bitcoin&language=en`);
+    const response = await axios.get(`${NEWS_API_CONFIG.newsdata.url}?apikey=${NEWS_API_CONFIG.newsdata.apiKey}&q=bitcoin&language=en`);
     return response.data.results.map(item => ({
-      source: 'NewsData.io',
+      id: `nd-${item.article_id}`,
       title: item.title,
+      description: item.description || '',
+      source: item.source_id || 'NewsData',
       url: item.link,
-      published_at: item.pubDate,
-      domain: item.source_id,
-      image: item.image_url,
-      content: item.content
+      image: item.image_url || 'https://newsdata.io/static/img/newsdata-logo.png',
+      publishedAt: item.pubDate || new Date().toISOString()
     }));
   } catch (error) {
-    console.error('NewsData API error:', error);
+    console.error('NewsData API error:', error.message);
     return [];
   }
 }
 
+// Helper function to fetch from GNews
 async function fetchGNews() {
   try {
-    const response = await axios.get(`https://gnews.io/api/v4/search?q=bitcoin&token=${gNewsKey}&lang=en`);
+    const response = await axios.get(`${NEWS_API_CONFIG.gnews.url}?token=${NEWS_API_CONFIG.gnews.apiKey}&q=bitcoin&lang=en`);
     return response.data.articles.map(item => ({
-      source: 'GNews',
+      id: `gn-${uuidv4()}`,
       title: item.title,
+      description: item.description,
+      source: item.source.name,
       url: item.url,
-      published_at: item.publishedAt,
-      domain: item.source.name,
-      image: item.image,
-      content: item.content
+      image: item.image || 'https://gnews.io/img/favicon/favicon-32x32.png',
+      publishedAt: item.publishedAt || new Date().toISOString()
     }));
   } catch (error) {
-    console.error('GNews API error:', error);
+    console.error('GNews API error:', error.message);
     return [];
   }
 }
 
-// Combine and deduplicate news from all sources
-async function getCombinedNews() {
-  // Check cache first
-  if (newsCache.data && Date.now() - newsCache.timestamp < newsCache.ttl) {
-    return newsCache.data;
-  }
-
+// Helper function to fetch from CryptoCompare
+async function fetchCryptoCompare() {
   try {
-    const [cryptoPanicNews, newsData, gNews] = await Promise.all([
-      fetchCryptoPanicNews(),
-      fetchNewsData(),
-      fetchGNews()
-    ]);
-
-    const allNews = [...cryptoPanicNews, ...newsData, ...gNews];
-    
-    // Deduplicate by URL
-    const uniqueNews = allNews.filter((item, index, self) =>
-      index === self.findIndex(t => t.url === item.url)
-    );
-
-    // Sort by date (newest first)
-    uniqueNews.sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
-
-    // Update cache
-    newsCache.data = uniqueNews;
-    newsCache.timestamp = Date.now();
-
-    return uniqueNews;
+    const response = await axios.get(`${NEWS_API_CONFIG.cryptocompare.url}?categories=BTC&excludeCategories=Sponsored`);
+    return response.data.Data.map(item => ({
+      id: `cc-${item.id}`,
+      title: item.title,
+      description: item.body,
+      source: item.source_info.name,
+      url: item.url,
+      image: item.imageurl || 'https://www.cryptocompare.com/media/20562/favicon.png',
+      publishedAt: new Date(item.published_on * 1000).toISOString()
+    }));
   } catch (error) {
-    console.error('Error fetching combined news:', error);
+    console.error('CryptoCompare API error:', error.message);
     return [];
   }
 }
 
-// News endpoint
-app.get('/api/news', async (req, res) => {
+// BTC News endpoint
+app.get('/api/btc-news', async (req, res) => {
   try {
-    const { page = 1, limit = 3 } = req.query;
-    const allNews = await getCombinedNews();
-
-    const startIndex = (page - 1) * limit;
-    const endIndex = page * limit;
-    const paginatedNews = allNews.slice(startIndex, endIndex);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        news: paginatedNews,
-        total: allNews.length,
-        page: parseInt(page),
-        pages: Math.ceil(allNews.length / limit)
-      }
-    });
-  } catch (error) {
-    console.error('News endpoint error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch news'
-    });
-  }
-});
-
-// Single news article endpoint
-app.get('/api/news/:id', async (req, res) => {
-  try {
-    const allNews = await getCombinedNews();
-    const newsId = parseInt(req.params.id);
-    
-    if (newsId < 0 || newsId >= allNews.length) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'News article not found'
+    // Check cache first
+    const now = Date.now();
+    if (newsCache.data && now - newsCache.timestamp < NEWS_CACHE_TTL) {
+      return res.status(200).json({
+        status: 'success',
+        data: newsCache.data
       });
     }
 
+    // Fetch from all sources in parallel
+    const [cryptoPanicNews, newsDataNews, gNews, cryptoCompareNews] = await Promise.all([
+      fetchCryptoPanic(),
+      fetchNewsData(),
+      fetchGNews(),
+      fetchCryptoCompare()
+    ]);
+
+    // Combine and sort news by date
+    const allNews = [...cryptoPanicNews, ...newsDataNews, ...gNews, ...cryptoCompareNews]
+      .filter(item => item.title && item.url) // Filter out invalid items
+      .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+
+    // Update cache
+    newsCache = {
+      data: allNews,
+      timestamp: now
+    };
+
     res.status(200).json({
       status: 'success',
-      data: allNews[newsId]
+      data: allNews
     });
   } catch (error) {
-    console.error('Single news endpoint error:', error);
+    console.error('BTC News error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch news article'
+      message: 'Failed to fetch BTC news'
     });
   }
 });
-
 
 // Error handling middleware
 app.use((err, req, res, next) => {
