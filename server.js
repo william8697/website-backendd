@@ -22,7 +22,6 @@ const validator = require('validator');
 const { body, validationResult } = require('express-validator');
 const axios = require('axios');
 const speakeasy = require('speakeasy');
-const NEWS_API_KEY = process.env.NEWS_API_KEY || '1d8aba25abc84dcca448b145d30ca6bd';
 
 // Initialize Express app
 const app = express();
@@ -4605,71 +4604,188 @@ setInterval(async () => {
 
 
 
+// Add this near your other routes in server.js
+const NEWS_API_KEY = process.env.NEWS_API_KEY || '1d8aba25abc84dcca448b145d30ca6bd';
 
-// Bitcoin News Endpoint
-app.get('/api/news/bitcoin', async (req, res) => {
-    try {
-        const { page = 1, pageSize = 3 } = req.query;
-        
-        // Validate parameters
-        const validatedPage = Math.max(1, parseInt(page));
-        const validatedPageSize = Math.min(Math.max(1, parseInt(pageSize)), 10);
-        
-        const response = await axios.get(`https://newsapi.org/v2/everything`, {
-            params: {
-                q: 'bitcoin',
-                language: 'en',
-                sortBy: 'publishedAt',
-                pageSize: validatedPageSize,
-                page: validatedPage,
-                apiKey: NEWS_API_KEY
-            },
-            timeout: 5000 // 5 second timeout
-        });
+// Bitcoin News Endpoint - Production Grade with Caching
+app.get('/api/news/bitcoin', [
+  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+  query('sources').optional().isString().withMessage('Sources must be a string')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
 
-        // Transform the data to our format
-        const newsData = {
-            articles: response.data.articles.map(article => ({
-                title: article.title,
-                description: article.description,
-                url: article.url,
-                imageUrl: article.urlToImage || 'https://www.dropbox.com/scl/fi/1dq16nex1borvvknpcwox/circular_dark_background.png?rlkey=sq2ujl2oxxk9vyvg1j7oz0cdb&raw=1',
-                source: article.source.name,
-                publishedAt: new Date(article.publishedAt).toLocaleDateString()
-            })),
-            totalResults: response.data.totalResults,
-            currentPage: validatedPage,
-            pageSize: validatedPageSize
-        };
-
-        // Cache in Redis for 1 hour
-        const cacheKey = `bitcoin-news:${validatedPage}:${validatedPageSize}`;
-        await redis.setex(cacheKey, 3600, JSON.stringify(newsData));
-
-        res.status(200).json(newsData);
-    } catch (error) {
-        console.error('News API error:', error);
-        
-        // Try to serve from cache if available
-        try {
-            const { page = 1, pageSize = 3 } = req.query;
-            const cacheKey = `bitcoin-news:${page}:${pageSize}`;
-            const cachedData = await redis.get(cacheKey);
-            
-            if (cachedData) {
-                return res.status(200).json(JSON.parse(cachedData));
-            }
-            
-            throw new Error('No cached data available');
-        } catch (cacheError) {
-            console.error('Cache fallback failed:', cacheError);
-            res.status(500).json({
-                status: 'error',
-                message: 'Failed to fetch news data'
-            });
-        }
+  try {
+    const { page = 1, sources = 'coingecko,coindesk,newsapi,decrypt' } = req.query;
+    const cacheKey = `bitcoin-news:${page}:${sources}`;
+    
+    // Check Redis cache first
+    const cachedNews = await redis.get(cacheKey);
+    if (cachedNews) {
+      return res.status(200).json({
+        status: 'success',
+        data: JSON.parse(cachedNews)
+      });
     }
+
+    // Fetch from multiple sources
+    const newsSources = sources.split(',');
+    const newsPromises = newsSources.map(source => {
+      switch(source) {
+        case 'coingecko':
+          return fetchCoingeckoNews(page);
+        case 'coindesk':
+          return fetchCoindeskNews(page);
+        case 'newsapi':
+          return fetchNewsApi(page);
+        case 'decrypt':
+          return fetchDecryptNews(page);
+        default:
+          return Promise.resolve([]);
+      }
+    });
+
+    const results = await Promise.all(newsPromises);
+    const allArticles = results.flat().sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+    
+    // Paginate results (3 articles per page)
+    const perPage = 3;
+    const startIndex = (page - 1) * perPage;
+    const paginatedArticles = allArticles.slice(startIndex, startIndex + perPage);
+    const totalPages = Math.ceil(allArticles.length / perPage);
+
+    // Cache for 15 minutes
+    await redis.setex(cacheKey, 900, JSON.stringify({
+      articles: paginatedArticles,
+      currentPage: parseInt(page),
+      totalPages,
+      totalResults: allArticles.length
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        articles: paginatedArticles,
+        currentPage: parseInt(page),
+        totalPages,
+        totalResults: allArticles.length
+      }
+    });
+  } catch (err) {
+    console.error('Bitcoin news error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching Bitcoin news'
+    });
+  }
 });
+
+// Helper functions for different news sources
+async function fetchCoingeckoNews(page = 1) {
+  try {
+    const response = await axios.get('https://api.coingecko.com/api/v3/news', {
+      params: {
+        page: page,
+        per_page: 10
+      },
+      timeout: 5000
+    });
+
+    return response.data.data.map(article => ({
+      title: article.title,
+      description: article.description,
+      url: article.url,
+      source: 'CoinGecko',
+      publishedAt: new Date(article.updated_at).toISOString(),
+      imageUrl: article.thumb_2x || null
+    }));
+  } catch (err) {
+    console.error('CoinGecko news error:', err);
+    return [];
+  }
+}
+
+async function fetchCoindeskNews(page = 1) {
+  try {
+    const response = await axios.get('https://www.coindesk.com/wp-json/v1/articles', {
+      params: {
+        page: page,
+        per_page: 10
+      },
+      timeout: 5000
+    });
+
+    return response.data.map(article => ({
+      title: article.title.rendered,
+      description: article.excerpt.rendered.replace(/<[^>]+>/g, '').substring(0, 200) + '...',
+      url: article.link,
+      source: 'CoinDesk',
+      publishedAt: new Date(article.date).toISOString(),
+      imageUrl: article.featured_media?.source_url || null
+    }));
+  } catch (err) {
+    console.error('CoinDesk news error:', err);
+    return [];
+  }
+}
+
+async function fetchNewsApi(page = 1) {
+  try {
+    const response = await axios.get('https://newsapi.org/v2/everything', {
+      params: {
+        q: 'bitcoin',
+        apiKey: NEWS_API_KEY,
+        pageSize: 10,
+        page: page,
+        sortBy: 'publishedAt',
+        language: 'en'
+      },
+      timeout: 5000
+    });
+
+    return response.data.articles.map(article => ({
+      title: article.title,
+      description: article.description,
+      url: article.url,
+      source: article.source.name,
+      publishedAt: article.publishedAt,
+      imageUrl: article.urlToImage || null
+    }));
+  } catch (err) {
+    console.error('NewsAPI error:', err);
+    return [];
+  }
+}
+
+async function fetchDecryptNews(page = 1) {
+  try {
+    const response = await axios.get('https://api.decrypt.co/content', {
+      params: {
+        page: page,
+        per_page: 10,
+        categories: 'bitcoin'
+      },
+      timeout: 5000
+    });
+
+    return response.data.map(article => ({
+      title: article.title,
+      description: article.excerpt,
+      url: `https://decrypt.co${article.path}`,
+      source: 'Decrypt',
+      publishedAt: article.published_at,
+      imageUrl: article.cover_image?.src || null
+    }));
+  } catch (err) {
+    console.error('Decrypt news error:', err);
+    return [];
+  }
+}
 
 
 
