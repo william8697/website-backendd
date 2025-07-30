@@ -3585,7 +3585,7 @@ app.get('/api/plans', async (req, res) => {
 // Helper function to assign consistent color schemes to plans
 function getPlanColorScheme(planId) {
   const colors = [
-    { primary: '#003366', secondary: '#004488', accent: '#0066CC' }, // Blue
+     { primary: '#003366', secondary: '#004488', accent: '#0066CC' }, // Blue
     { primary: '#4B0082', secondary: '#6A0DAD', accent: '#8A2BE2' }, // Indigo
     { primary: '#006400', secondary: '#008000', accent: '#00AA00' }, // Green
     { primary: '#8B0000', secondary: '#A52A2A', accent: '#CD5C5C' }, // Red
