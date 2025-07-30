@@ -4602,164 +4602,104 @@ setInterval(async () => {
 
 
 
+// News API Endpoints
+const NEWS_CACHE_TTL = 15 * 60 * 1000; // 15 minutes cache
+const newsSources = [
+  {
+    name: 'CryptoPanic',
+    url: 'https://cryptopanic.com/api/v1/posts/?auth_token=d0753e27bd2ab287e5bb75263257d7988ef25162&currencies=BTC&kind=news',
+    transform: (item) => ({
+      title: item.title,
+      source: 'CryptoPanic',
+      url: item.url,
+      image: item.metadata?.image || 'https://cryptopanic.com/static/img/cp-logo-square.png',
+      published_at: new Date(item.published_at).toLocaleDateString()
+    })
+  },
+  {
+    name: 'NewsData',
+    url: 'https://newsdata.io/api/1/news?apikey=pub_33c50ca8457d4db8b1d9ae27bc132991&q=bitcoin&language=en',
+    transform: (item) => ({
+      title: item.title,
+      source: 'NewsData.io',
+      url: item.link,
+      image: item.image_url || 'https://newsdata.io/static/img/newsdata-icon.png',
+      published_at: new Date(item.pubDate).toLocaleDateString()
+    })
+  },
+  {
+    name: 'GNews',
+    url: 'https://gnews.io/api/v4/search?q=bitcoin&token=910104d8bf756251535b02cf758dee6d&lang=en',
+    transform: (item) => ({
+      title: item.title,
+      source: 'GNews.io',
+      url: item.url,
+      image: item.image || 'https://gnews.io/favicon.ico',
+      published_at: new Date(item.publishedAt).toLocaleDateString()
+    })
+  }
+];
 
-// Add this near your other routes in server.js
+// Cache setup for news
+let newsCache = {
+  data: [],
+  lastUpdated: 0
+};
 
-// Bitcoin News API Endpoint
+// Helper function to fetch news
+const fetchNewsFromSources = async () => {
+  try {
+    const results = await Promise.allSettled(
+      newsSources.map(source => 
+        axios.get(source.url)
+          .then(res => res.data.results || res.data.articles || res.data.posts)
+          .then(items => items.map(source.transform))
+      )
+    );
+    
+    return results
+      .filter(result => result.status === 'fulfilled')
+      .flatMap(result => result.value)
+      .sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
+  } catch (err) {
+    console.error('Error fetching news:', err);
+    return [];
+  }
+};
+
+// News endpoint with caching
 app.get('/api/news/bitcoin', async (req, res) => {
-    try {
-        // Cache key for Redis
-        const cacheKey = 'bitcoin-news';
-        
-        // Try to get cached news first
-        const cachedNews = await redis.get(cacheKey);
-        if (cachedNews) {
-            return res.status(200).json({
-                status: 'success',
-                data: JSON.parse(cachedNews)
-            });
-        }
-
-        // Array to store news from all sources
-        let allNews = [];
-        
-        // 1. Fetch from CryptoPanic API
-        try {
-            const cryptoPanicResponse = await axios.get('https://cryptopanic.com/api/v1/posts/', {
-                params: {
-                    auth_token: 'd0753e27bd2ab287e5bb75263257d7988ef25162',
-                    currencies: 'BTC',
-                    public: true,
-                    filter: 'rising'
-                },
-                timeout: 5000
-            });
-            
-            if (cryptoPanicResponse.data && cryptoPanicResponse.data.results) {
-                allNews = allNews.concat(cryptoPanicResponse.data.results.map(item => ({
-                    source: 'CryptoPanic',
-                    title: item.title,
-                    description: item.metadata?.description || '',
-                    url: item.url,
-                    published_at: item.published_at,
-                    image: item.metadata?.image || 'https://www.dropbox.com/scl/fi/1dq16nex1borvvknpcwox/circular_dark_background.png?rlkey=sq2ujl2oxxk9vyvg1j7oz0cdb&raw=1'
-                })));
-            }
-        } catch (cryptoPanicError) {
-            console.error('CryptoPanic API error:', cryptoPanicError.message);
-            await logActivity('news-fetch-error', 'system', null, null, 'System', req, { source: 'CryptoPanic', error: cryptoPanicError.message });
-        }
-
-        // 2. Fetch from Newsdata.io
-        try {
-            const newsDataResponse = await axios.get('https://newsdata.io/api/1/news', {
-                params: {
-                    apikey: 'pub_33c50ca8457d4db8b1d9ae27bc132991',
-                    q: 'bitcoin OR BTC',
-                    language: 'en',
-                    category: 'business,technology',
-                    image: 1
-                },
-                timeout: 5000
-            });
-            
-            if (newsDataResponse.data && newsDataResponse.data.results) {
-                allNews = allNews.concat(newsDataResponse.data.results.map(item => ({
-                    source: item.source_id || 'Newsdata',
-                    title: item.title,
-                    description: item.description || '',
-                    url: item.link,
-                    published_at: item.pubDate,
-                    image: item.image_url || 'https://www.dropbox.com/scl/fi/1dq16nex1borvvknpcwox/circular_dark_background.png?rlkey=sq2ujl2oxxk9vyvg1j7oz0cdb&raw=1'
-                })));
-            }
-        } catch (newsDataError) {
-            console.error('Newsdata.io API error:', newsDataError.message);
-            await logActivity('news-fetch-error', 'system', null, null, 'System', req, { source: 'Newsdata', error: newsDataError.message });
-        }
-
-        // 3. Fetch from GNews.io
-        try {
-            const gNewsResponse = await axios.get('https://gnews.io/api/v4/search', {
-                params: {
-                    token: '910104d8bf756251535b02cf758dee6d',
-                    q: 'bitcoin OR BTC',
-                    lang: 'en',
-                    country: 'us',
-                    max: 10,
-                    image: 'required'
-                },
-                timeout: 5000
-            });
-            
-            if (gNewsResponse.data && gNewsResponse.data.articles) {
-                allNews = allNews.concat(gNewsResponse.data.articles.map(item => ({
-                    source: item.source.name || 'GNews',
-                    title: item.title,
-                    description: item.description || '',
-                    url: item.url,
-                    published_at: item.publishedAt,
-                    image: item.image || 'https://www.dropbox.com/scl/fi/1dq16nex1borvvknpcwox/circular_dark_background.png?rlkey=sq2ujl2oxxk9vyvg1j7oz0cdb&raw=1'
-                })));
-            }
-        } catch (gNewsError) {
-            console.error('GNews API error:', gNewsError.message);
-            await logActivity('news-fetch-error', 'system', null, null, 'System', req, { source: 'GNews', error: gNewsError.message });
-        }
-
-        // 4. Fallback to CoinGecko if needed
-        if (allNews.length < 6) {
-            try {
-                const coinGeckoResponse = await axios.get('https://api.coingecko.com/api/v3/news', {
-                    timeout: 5000
-                });
-                
-                if (coinGeckoResponse.data && coinGeckoResponse.data.data) {
-                    allNews = allNews.concat(coinGeckoResponse.data.data.map(item => ({
-                        source: item.source || 'CoinGecko',
-                        title: item.title,
-                        description: item.description || '',
-                        url: item.url,
-                        published_at: item.updated_at,
-                        image: item.thumb_2x || 'https://www.dropbox.com/scl/fi/1dq16nex1borvvknpcwox/circular_dark_background.png?rlkey=sq2ujl2oxxk9vyvg1j7oz0cdb&raw=1'
-                    })));
-                }
-            } catch (coinGeckoError) {
-                console.error('CoinGecko API error:', coinGeckoError.message);
-                await logActivity('news-fetch-error', 'system', null, null, 'System', req, { source: 'CoinGecko', error: coinGeckoError.message });
-            }
-        }
-
-        // Sort news by date (newest first)
-        allNews.sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
-
-        // Filter out duplicates by URL
-        const uniqueNews = [];
-        const urlSet = new Set();
-        
-        for (const item of allNews) {
-            if (!urlSet.has(item.url)) {
-                urlSet.add(item.url);
-                uniqueNews.push(item);
-            }
-        }
-
-        // Cache the news for 15 minutes
-        await redis.set(cacheKey, JSON.stringify(uniqueNews), 'EX', 900);
-
-        res.status(200).json({
-            status: 'success',
-            data: uniqueNews
-        });
-    } catch (error) {
-        console.error('Bitcoin news error:', error);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch Bitcoin news'
-        });
+  try {
+    const { page = 1, limit = 3 } = req.query;
+    const now = Date.now();
+    
+    // Refresh cache if stale
+    if (now - newsCache.lastUpdated > NEWS_CACHE_TTL || !newsCache.data.length) {
+      newsCache.data = await fetchNewsFromSources();
+      newsCache.lastUpdated = now;
     }
+    
+    const startIndex = (page - 1) * limit;
+    const paginatedNews = newsCache.data.slice(startIndex, startIndex + limit);
+    const totalPages = Math.ceil(newsCache.data.length / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        news: paginatedNews,
+        currentPage: parseInt(page),
+        totalPages,
+        totalResults: newsCache.data.length
+      }
+    });
+  } catch (err) {
+    console.error('News endpoint error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch Bitcoin news'
+    });
+  }
 });
-
 
 // Error handling middleware
 app.use((err, req, res, next) => {
