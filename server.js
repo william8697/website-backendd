@@ -3539,8 +3539,8 @@ app.delete('/api/admin/two-factor', adminProtect, [
 });
 
 // Dashboard Endpoints
-// Enhanced Plans Endpoint with Investment Capability
-app.get('/api/plans', protect, async (req, res) => {
+// Plans Endpoint - Visible to all users, investment capability for logged-in users only
+app.get('/api/plans', async (req, res) => {
   try {
     // Get plans from database
     const plans = await Plan.find({ isActive: true }).lean();
@@ -3597,7 +3597,7 @@ function getPlanColorScheme(planId) {
   return colors[hash % colors.length];
 }
 
-// Investment endpoint
+// Investment endpoint (protected - remains unchanged)
 app.post('/api/investments', protect, [
   body('planId').isMongoId().withMessage('Invalid plan ID'),
   body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0')
@@ -3750,6 +3750,8 @@ app.get('/api/transactions', protect, async (req, res) => {
     });
   }
 });
+
+
 
 app.get('/api/mining/stats', protect, async (req, res) => {
   try {
