@@ -4602,227 +4602,159 @@ setInterval(async () => {
 
 
 
+// Bitcoin News Endpoint
+const cryptoPanicKey = 'd0753e27bd2ab287e5bb75263257d7988ef25162';
+const newsDataKey = 'pub_33c50ca8457d4db8b1d9ae27bc132991';
+const gNewsKey = '910104d8bf756251535b02cf758dee6d';
 
-// News API configuration
-const NEWS_API_CONFIG = {
-  cryptopanic: {
-    url: 'https://cryptopanic.com/api/v1/posts/',
-    apiKey: 'd0753e27bd2ab287e5bb75263257d7988ef25162',
-    params: {
-      currencies: 'BTC',
-      kind: 'news',
-      public: true
-    }
-  },
-  newsdata: {
-    url: 'https://newsdata.io/api/1/news',
-    apiKey: 'pub_33c50ca8457d4db8b1d9ae27bc132991',
-    params: {
-      q: 'bitcoin OR btc OR "bitcoin mining"',
-      language: 'en',
-      category: 'business,technology'
-    }
-  },
-  gnews: {
-    url: 'https://gnews.io/api/v4/search',
-    apiKey: '910104d8bf756251535b02cf758dee6d',
-    params: {
-      q: 'bitcoin OR btc OR "bitcoin mining"',
-      lang: 'en',
-      sortby: 'publishedAt'
-    }
-  },
-  coindesk: {
-    url: 'https://api.coindesk.com/v1/news/current',
-    params: {
-      format: 'json'
-    }
-  }
+// Cache news for 30 minutes to reduce API calls
+const newsCache = {
+  data: null,
+  timestamp: 0,
+  ttl: 30 * 60 * 1000 // 30 minutes
 };
 
-// News cache with Redis
-const NEWS_CACHE_KEY = 'bitcoin-news';
-const NEWS_CACHE_EXPIRY = 15 * 60; // 15 minutes
+async function fetchCryptoPanicNews() {
+  try {
+    const response = await axios.get(`https://cryptopanic.com/api/v1/posts/?auth_token=${cryptoPanicKey}&currencies=BTC&filter=rising`);
+    return response.data.results.map(item => ({
+      source: 'CryptoPanic',
+      title: item.title,
+      url: item.url,
+      published_at: item.published_at,
+      domain: item.domain,
+      image: item.metadata ? item.metadata.image : null
+    }));
+  } catch (error) {
+    console.error('CryptoPanic API error:', error);
+    return [];
+  }
+}
+
+async function fetchNewsData() {
+  try {
+    const response = await axios.get(`https://newsdata.io/api/1/news?apikey=${newsDataKey}&q=bitcoin&language=en`);
+    return response.data.results.map(item => ({
+      source: 'NewsData.io',
+      title: item.title,
+      url: item.link,
+      published_at: item.pubDate,
+      domain: item.source_id,
+      image: item.image_url,
+      content: item.content
+    }));
+  } catch (error) {
+    console.error('NewsData API error:', error);
+    return [];
+  }
+}
+
+async function fetchGNews() {
+  try {
+    const response = await axios.get(`https://gnews.io/api/v4/search?q=bitcoin&token=${gNewsKey}&lang=en`);
+    return response.data.articles.map(item => ({
+      source: 'GNews',
+      title: item.title,
+      url: item.url,
+      published_at: item.publishedAt,
+      domain: item.source.name,
+      image: item.image,
+      content: item.content
+    }));
+  } catch (error) {
+    console.error('GNews API error:', error);
+    return [];
+  }
+}
+
+// Combine and deduplicate news from all sources
+async function getCombinedNews() {
+  // Check cache first
+  if (newsCache.data && Date.now() - newsCache.timestamp < newsCache.ttl) {
+    return newsCache.data;
+  }
+
+  try {
+    const [cryptoPanicNews, newsData, gNews] = await Promise.all([
+      fetchCryptoPanicNews(),
+      fetchNewsData(),
+      fetchGNews()
+    ]);
+
+    const allNews = [...cryptoPanicNews, ...newsData, ...gNews];
+    
+    // Deduplicate by URL
+    const uniqueNews = allNews.filter((item, index, self) =>
+      index === self.findIndex(t => t.url === item.url)
+    );
+
+    // Sort by date (newest first)
+    uniqueNews.sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
+
+    // Update cache
+    newsCache.data = uniqueNews;
+    newsCache.timestamp = Date.now();
+
+    return uniqueNews;
+  } catch (error) {
+    console.error('Error fetching combined news:', error);
+    return [];
+  }
+}
 
 // News endpoint
 app.get('/api/news', async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
-    
-    // Try to get cached news first
-    const cachedNews = await redis.get(NEWS_CACHE_KEY);
-    if (cachedNews) {
-      const parsedNews = JSON.parse(cachedNews);
-      const paginatedNews = paginateNews(parsedNews, page, limit);
-      return res.status(200).json({
-        status: 'success',
-        data: paginatedNews
-      });
-    }
+    const { page = 1, limit = 3 } = req.query;
+    const allNews = await getCombinedNews();
 
-    // Fetch news from all sources in parallel
-    const [cryptopanicNews, newsdataNews, gnewsNews, coindeskNews] = await Promise.all([
-      fetchCryptopanicNews(),
-      fetchNewsdataNews(),
-      fetchGnewsNews(),
-      fetchCoindeskNews()
-    ]);
+    const startIndex = (page - 1) * limit;
+    const endIndex = page * limit;
+    const paginatedNews = allNews.slice(startIndex, endIndex);
 
-    // Combine and deduplicate news
-    const allNews = [...cryptopanicNews, ...newsdataNews, ...gnewsNews, ...coindeskNews];
-    const uniqueNews = deduplicateNews(allNews);
-    
-    // Sort by date (newest first)
-    uniqueNews.sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
-    
-    // Cache the news
-    await redis.set(NEWS_CACHE_KEY, JSON.stringify(uniqueNews), 'EX', NEWS_CACHE_EXPIRY);
-    
-    // Paginate results
-    const paginatedNews = paginateNews(uniqueNews, page, limit);
-    
     res.status(200).json({
       status: 'success',
-      data: paginatedNews
+      data: {
+        news: paginatedNews,
+        total: allNews.length,
+        page: parseInt(page),
+        pages: Math.ceil(allNews.length / limit)
+      }
     });
-
-    await logActivity('fetch-news', 'news', null, req.user?.id || null, req.user ? 'User' : 'Guest', req);
-  } catch (err) {
-    console.error('News fetch error:', err);
+  } catch (error) {
+    console.error('News endpoint error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching news'
+      message: 'Failed to fetch news'
     });
   }
 });
 
-// Helper functions for news fetching
-async function fetchCryptopanicNews() {
+// Single news article endpoint
+app.get('/api/news/:id', async (req, res) => {
   try {
-    const response = await axios.get(NEWS_API_CONFIG.cryptopanic.url, {
-      params: {
-        ...NEWS_API_CONFIG.cryptopanic.params,
-        auth_token: NEWS_API_CONFIG.cryptopanic.apiKey
-      }
-    });
+    const allNews = await getCombinedNews();
+    const newsId = parseInt(req.params.id);
     
-    return response.data.results.map(item => ({
-      id: `cp-${item.id}`,
-      title: item.title,
-      description: item.metadata?.description || '',
-      url: item.url,
-      source: 'CryptoPanic',
-      source_url: 'https://cryptopanic.com',
-      published_at: item.published_at,
-      image_url: item.metadata?.image || null,
-      author: item.domain || 'Unknown'
-    }));
-  } catch (err) {
-    console.error('CryptoPanic news error:', err);
-    return [];
-  }
-}
-
-async function fetchNewsdataNews() {
-  try {
-    const response = await axios.get(NEWS_API_CONFIG.newsdata.url, {
-      params: {
-        ...NEWS_API_CONFIG.newsdata.params,
-        apikey: NEWS_API_CONFIG.newsdata.apiKey
-      }
-    });
-    
-    return response.data.results.map(item => ({
-      id: `nd-${item.article_id}`,
-      title: item.title,
-      description: item.description || '',
-      url: item.link,
-      source: item.source_id,
-      source_url: item.source_url || `https://${item.source_id.toLowerCase()}.com`,
-      published_at: item.pubDate,
-      image_url: item.image_url || null,
-      author: item.creator ? item.creator.join(', ') : 'Unknown'
-    }));
-  } catch (err) {
-    console.error('Newsdata.io error:', err);
-    return [];
-  }
-}
-
-async function fetchGnewsNews() {
-  try {
-    const response = await axios.get(NEWS_API_CONFIG.gnews.url, {
-      params: {
-        ...NEWS_API_CONFIG.gnews.params,
-        token: NEWS_API_CONFIG.gnews.apiKey
-      }
-    });
-    
-    return response.data.articles.map(item => ({
-      id: `gn-${uuidv4()}`,
-      title: item.title,
-      description: item.description,
-      url: item.url,
-      source: item.source.name,
-      source_url: item.source.url,
-      published_at: item.publishedAt,
-      image_url: item.image || null,
-      author: item.source.name || 'Unknown'
-    }));
-  } catch (err) {
-    console.error('GNews error:', err);
-    return [];
-  }
-}
-
-async function fetchCoindeskNews() {
-  try {
-    const response = await axios.get(NEWS_API_CONFIG.coindesk.url, {
-      params: NEWS_API_CONFIG.coindesk.params
-    });
-    
-    return response.data.news.map(item => ({
-      id: `cd-${item.id}`,
-      title: item.title,
-      description: item.description,
-      url: item.url,
-      source: 'CoinDesk',
-      source_url: 'https://www.coindesk.com',
-      published_at: item.createdAt,
-      image_url: item.thumbnail || null,
-      author: item.author || 'CoinDesk Staff'
-    }));
-  } catch (err) {
-    console.error('CoinDesk error:', err);
-    return [];
-  }
-}
-
-function deduplicateNews(newsItems) {
-  const seenUrls = new Set();
-  return newsItems.filter(item => {
-    if (seenUrls.has(item.url)) {
-      return false;
+    if (newsId < 0 || newsId >= allNews.length) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'News article not found'
+      });
     }
-    seenUrls.add(item.url);
-    return true;
-  });
-}
 
-function paginateNews(newsItems, page, limit) {
-  const startIndex = (page - 1) * limit;
-  const endIndex = page * limit;
-  const paginatedItems = newsItems.slice(startIndex, endIndex);
-  
-  return {
-    total: newsItems.length,
-    page: parseInt(page),
-    pages: Math.ceil(newsItems.length / limit),
-    limit: parseInt(limit),
-    news: paginatedItems
-  };
-}
-
+    res.status(200).json({
+      status: 'success',
+      data: allNews[newsId]
+    });
+  } catch (error) {
+    console.error('Single news endpoint error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch news article'
+    });
+  }
+});
 
 
 // Error handling middleware
