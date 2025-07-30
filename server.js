@@ -764,7 +764,7 @@ const initializePlans = async () => {
         percentage: 40,
         duration: 24,
         minAmount: 500,
-        maxAmount: 1,999,
+        maxAmount: 1999,
         referralBonus: 5
       },
       {
@@ -772,8 +772,8 @@ const initializePlans = async () => {
         description: '60% After 48 hours',
         percentage: 60,
         duration: 48,
-        minAmount: 2,000,
-        maxAmount: 9,999,
+        minAmount: 2000,
+        maxAmount: 9999,
         referralBonus: 5
       },
       {
@@ -781,8 +781,8 @@ const initializePlans = async () => {
         description: '80% After 72 hours',
         percentage: 80,
         duration: 72,
-        minAmount: 10,000,
-        maxAmount: 30,000,
+        minAmount: 10000,
+        maxAmount: 30000,
         referralBonus: 5
       },
       {
@@ -790,8 +790,8 @@ const initializePlans = async () => {
         description: '100% After 96 hours',
         percentage: 100,
         duration: 96,
-        minAmount: 50,000,
-        maxAmount: 1,000,000,
+        minAmount: 50000,
+        maxAmount: 1000000,
         referralBonus: 5
       }
     ];
