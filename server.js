@@ -4602,10 +4602,6 @@ setInterval(async () => {
 
 
 
-// Add these near other require statements if not already present
-const axios = require('axios');
-const { v4: uuidv4 } = require('uuid');
-
 // News API configuration
 const NEWS_API_CONFIG = {
   cryptopanic: {
