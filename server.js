@@ -4603,41 +4603,32 @@ setInterval(async () => {
 
 
 
-// Add this near your other routes in server.js
-const NEWS_API_KEY = '1d8aba25abc84dcca448b145d30ca6bd';
-
 // Bitcoin News Endpoint
-app.get('/api/news/bitcoin', async (req, res) => {
+app.get('/api/bitcoin-news', async (req, res) => {
     try {
-        const { page = 1, pageSize = 3 } = req.query;
-        
+        // Cache news for 1 hour to reduce API calls
+        const cachedNews = await redis.get('bitcoin-news');
+        if (cachedNews) {
+            return res.status(200).json(JSON.parse(cachedNews));
+        }
+
         // Fetch from multiple sources in parallel
         const [newsApiData, coingeckoData, cryptopanicData] = await Promise.all([
-            fetchNewsFromNewsAPI(page, pageSize),
-            fetchNewsFromCoinGecko(page, pageSize),
-            fetchNewsFromCryptoPanic(page, pageSize)
+            fetchNewsFromNewsAPI(),
+            fetchNewsFromCoinGecko(),
+            fetchNewsFromCryptoPanic()
         ]);
 
-        // Combine and deduplicate news
-        const allNews = [...newsApiData, ...coingeckoData, ...cryptopanicData];
-        const uniqueNews = removeDuplicateNews(allNews);
+        // Combine and shuffle news from all sources
+        const combinedNews = [...newsApiData, ...coingeckoData, ...cryptopanicData];
+        const shuffledNews = shuffleArray(combinedNews);
 
-        // Paginate results
-        const startIndex = (page - 1) * pageSize;
-        const endIndex = startIndex + parseInt(pageSize);
-        const paginatedNews = uniqueNews.slice(startIndex, endIndex);
+        // Cache the news
+        await redis.set('bitcoin-news', JSON.stringify(shuffledNews), 'EX', 3600);
 
-        res.status(200).json({
-            status: 'success',
-            data: {
-                news: paginatedNews,
-                total: uniqueNews.length,
-                page: parseInt(page),
-                pages: Math.ceil(uniqueNews.length / pageSize)
-            }
-        });
+        res.status(200).json(shuffledNews);
     } catch (err) {
-        console.error('News fetch error:', err);
+        console.error('Error fetching Bitcoin news:', err);
         res.status(500).json({
             status: 'error',
             message: 'Failed to fetch Bitcoin news'
@@ -4646,17 +4637,26 @@ app.get('/api/news/bitcoin', async (req, res) => {
 });
 
 // Helper functions for news fetching
-async function fetchNewsFromNewsAPI(page, pageSize) {
+async function fetchNewsFromNewsAPI() {
     try {
-        const response = await axios.get(`https://newsapi.org/v2/everything?q=bitcoin&apiKey=${NEWS_API_KEY}&pageSize=${pageSize}&page=${page}&sortBy=publishedAt`);
+        const response = await axios.get('https://newsapi.org/v2/everything', {
+            params: {
+                q: 'bitcoin',
+                language: 'en',
+                sortBy: 'publishedAt',
+                pageSize: 10,
+                apiKey: '1d8aba25abc84dcca448b145d30ca6bd'
+            },
+            timeout: 5000
+        });
+
         return response.data.articles.map(article => ({
-            source: 'NewsAPI',
             title: article.title,
             description: article.description,
             url: article.url,
-            imageUrl: article.urlToImage,
+            source: article.source.name,
             publishedAt: article.publishedAt,
-            author: article.author || 'Unknown'
+            imageUrl: article.urlToImage
         }));
     } catch (err) {
         console.error('NewsAPI error:', err);
@@ -4666,15 +4666,21 @@ async function fetchNewsFromNewsAPI(page, pageSize) {
 
 async function fetchNewsFromCoinGecko() {
     try {
-        const response = await axios.get('https://api.coingecko.com/api/v3/news?category=bitcoin');
-        return response.data.map(article => ({
+        const response = await axios.get('https://api.coingecko.com/api/v3/news', {
+            params: {
+                category: 'bitcoin',
+                per_page: 10
+            },
+            timeout: 5000
+        });
+
+        return response.data.news.map(item => ({
+            title: item.title,
+            description: item.description,
+            url: item.url,
             source: 'CoinGecko',
-            title: article.title,
-            description: article.description,
-            url: article.url,
-            imageUrl: article.thumb_2x,
-            publishedAt: new Date(article.updated_at * 1000).toISOString(),
-            author: article.author || 'Unknown'
+            publishedAt: item.updated_at,
+            imageUrl: item.thumb_2x
         }));
     } catch (err) {
         console.error('CoinGecko error:', err);
@@ -4684,15 +4690,23 @@ async function fetchNewsFromCoinGecko() {
 
 async function fetchNewsFromCryptoPanic() {
     try {
-        const response = await axios.get('https://cryptopanic.com/api/v1/posts/?auth_token=1d8aba25abc84dcca448b145d30ca6bd&currencies=BTC');
-        return response.data.results.map(article => ({
-            source: 'CryptoPanic',
-            title: article.title,
-            description: article.metadata?.description || '',
-            url: article.url,
-            imageUrl: article.metadata?.image || '',
-            publishedAt: article.published_at,
-            author: article.source?.title || 'Unknown'
+        const response = await axios.get('https://cryptopanic.com/api/v1/posts/', {
+            params: {
+                auth_token: 'YOUR_CRYPTOPANIC_API_KEY', // Replace with your key
+                currencies: 'BTC',
+                public: true,
+                filter: 'rising'
+            },
+            timeout: 5000
+        });
+
+        return response.data.results.map(post => ({
+            title: post.title,
+            description: post.domain,
+            url: post.url,
+            source: post.source.title,
+            publishedAt: post.published_at,
+            imageUrl: post.metadata ? post.metadata.image : null
         }));
     } catch (err) {
         console.error('CryptoPanic error:', err);
@@ -4700,13 +4714,13 @@ async function fetchNewsFromCryptoPanic() {
     }
 }
 
-function removeDuplicateNews(news) {
-    const seenUrls = new Set();
-    return news.filter(item => {
-        if (!item.url || seenUrls.has(item.url)) return false;
-        seenUrls.add(item.url);
-        return true;
-    });
+function shuffleArray(array) {
+    const shuffled = [...array];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
 }
 
 
