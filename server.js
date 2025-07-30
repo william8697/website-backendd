@@ -4601,73 +4601,104 @@ setInterval(async () => {
 
 
 
-// Cache Bitcoin news for 1 hour to reduce API calls
+
+
+
+
+
+// Cache news articles for 30 minutes to reduce API calls
+let cachedNews = null;
+let lastNewsFetch = 0;
+
 app.get('/api/news/bitcoin', async (req, res) => {
-    try {
-        // Check Redis cache first
-        const cachedNews = await redis.get('bitcoin-news');
-        if (cachedNews) {
-            return res.status(200).json({
-                status: 'success',
-                data: JSON.parse(cachedNews)
-            });
-        }
-
-        // Fetch from NewsAPI
-        const response = await axios.get(`https://newsapi.org/v2/everything`, {
-            params: {
-                q: 'bitcoin',
-                language: 'en',
-                sortBy: 'publishedAt',
-                pageSize: 20,
-                apiKey: NEWS_API_KEY
-            },
-            timeout: 5000 // 5 second timeout
-        });
-
-        if (response.data.status !== 'ok') {
-            throw new Error('NewsAPI returned non-ok status');
-        }
-
-        // Filter and format news data
-        const news = response.data.articles
-            .filter(article => article.title && article.urlToImage)
-            .map(article => ({
-                title: article.title,
-                source: article.source.name,
-                url: article.url,
-                image: article.urlToImage,
-                publishedAt: article.publishedAt,
-                description: article.description || '',
-                content: article.content ? article.content.substring(0, 200) + '...' : ''
-            }));
-
-        // Cache for 1 hour
-        await redis.set('bitcoin-news', JSON.stringify(news), 'EX', 3600);
-
-        res.status(200).json({
-            status: 'success',
-            data: news
-        });
-    } catch (err) {
-        console.error('News fetch error:', err);
-        
-        // Try to return cached data if available
-        const cachedNews = await redis.get('bitcoin-news');
-        if (cachedNews) {
-            return res.status(200).json({
-                status: 'success',
-                data: JSON.parse(cachedNews),
-                message: 'Serving cached data due to API issue'
-            });
-        }
-
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch Bitcoin news'
-        });
+  try {
+    const { page = 1, pageSize = 3 } = req.query;
+    const currentTime = Date.now();
+    
+    // Use cached news if available and not expired (30 minutes)
+    if (cachedNews && currentTime - lastNewsFetch < 30 * 60 * 1000) {
+      return res.status(200).json({
+        status: 'success',
+        data: paginateNews(cachedNews, page, pageSize)
+      });
     }
+
+    // Fetch fresh news from NewsAPI
+    const response = await axios.get(`https://newsapi.org/v2/everything`, {
+      params: {
+        q: 'bitcoin OR cryptocurrency OR blockchain',
+        language: 'en',
+        sortBy: 'publishedAt',
+        pageSize: 50, // Fetch more to cache
+        apiKey: NEWS_API_KEY
+      },
+      timeout: 5000 // 5 second timeout
+    });
+
+    if (response.data.status !== 'ok') {
+      throw new Error('NewsAPI returned non-ok status');
+    }
+
+    // Filter and format news articles
+    const filteredNews = response.data.articles
+      .filter(article => article.title && article.urlToImage && article.description)
+      .map(article => ({
+        title: article.title,
+        description: article.description,
+        url: article.url,
+        imageUrl: article.urlToImage,
+        source: article.source.name,
+        publishedAt: article.publishedAt,
+        content: article.content ? article.content.substring(0, 200) + '...' : ''
+      }));
+
+    // Update cache
+    cachedNews = filteredNews;
+    lastNewsFetch = currentTime;
+
+    res.status(200).json({
+      status: 'success',
+      data: paginateNews(filteredNews, page, pageSize)
+    });
+
+  } catch (error) {
+    console.error('Error fetching Bitcoin news:', error);
+    
+    // Return cached news even if expired if available
+    if (cachedNews) {
+      return res.status(200).json({
+        status: 'success',
+        data: paginateNews(cachedNews, req.query.page || 1, req.query.pageSize || 3),
+        message: 'Using cached news due to API error'
+      });
+    }
+
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch Bitcoin news'
+    });
+  }
 });
+
+// Helper function to paginate news
+function paginateNews(news, page, pageSize) {
+  const startIndex = (page - 1) * pageSize;
+  const endIndex = startIndex + parseInt(pageSize);
+  const paginatedNews = news.slice(startIndex, endIndex);
+  
+  return {
+    articles: paginatedNews,
+    totalArticles: news.length,
+    currentPage: parseInt(page),
+    totalPages: Math.ceil(news.length / pageSize),
+    pageSize: parseInt(pageSize)
+  };
+}
+
+
+
+
+
 
 
 // Error handling middleware
