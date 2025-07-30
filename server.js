@@ -3540,39 +3540,181 @@ app.delete('/api/admin/two-factor', adminProtect, [
 });
 
 // Dashboard Endpoints
-// Add this endpoint to your server.js
-app.get('/api/plans', async (req, res) => {
+// Enhanced Plans Endpoint with Investment Capability
+app.get('/api/plans', protect, async (req, res) => {
   try {
-    // Get active plans from database, sorted by minimum amount
-    const plans = await Plan.find({ isActive: true })
-      .sort({ minAmount: 1 })
-      .lean();
+    // Get plans from database
+    const plans = await Plan.find({ isActive: true }).lean();
+    
+    // Get user balance if logged in
+    let userBalance = 0;
+    if (req.user) {
+      const user = await User.findById(req.user.id).select('balances');
+      userBalance = user.balances.main;
+    }
 
-    // Transform the data to match frontend expectations
+    // Format plans data
     const formattedPlans = plans.map(plan => ({
-      id: plan._id.toString(),
+      id: plan._id,
       name: plan.name,
       description: plan.description,
-      returnRate: `${plan.percentage}%`,
-      returnPeriod: `After ${plan.duration} hours`,
+      percentage: plan.percentage,
+      duration: plan.duration,
       minAmount: plan.minAmount,
       maxAmount: plan.maxAmount,
-      isPopular: plan.name.includes('Gold') || plan.name.includes('Advance'), // Mark some plans as popular
-      features: [
-        `Minimum investment: $${plan.minAmount}`,
-        `Maximum investment: $${plan.maxAmount}`,
-        `Duration: ${plan.duration} hours`,
-        `Principal protection`,
-        `24/7 customer support`
-      ]
+      referralBonus: plan.referralBonus,
+      colorScheme: getPlanColorScheme(plan._id),
+      canInvest: req.user ? userBalance >= plan.minAmount : false
     }));
 
-    res.status(200).json(formattedPlans);
+    res.status(200).json({
+      status: 'success',
+      data: {
+        plans: formattedPlans,
+        userBalance: req.user ? userBalance : null
+      }
+    });
   } catch (err) {
     console.error('Get plans error:', err);
     res.status(500).json({
       status: 'error',
       message: 'An error occurred while fetching investment plans'
+    });
+  }
+});
+
+// Helper function to assign consistent color schemes to plans
+function getPlanColorScheme(planId) {
+  const colors = [
+    { primary: '#003366', secondary: '#004488', accent: '#0066CC' }, // Blue
+    { primary: '#4B0082', secondary: '#6A0DAD', accent: '#8A2BE2' }, // Indigo
+    { primary: '#006400', secondary: '#008000', accent: '#00AA00' }, // Green
+    { primary: '#8B0000', secondary: '#A52A2A', accent: '#CD5C5C' }, // Red
+    { primary: '#DAA520', secondary: '#FFD700', accent: '#FFEC8B' }  // Gold
+  ];
+  
+  // Use planId to get consistent color (convert ObjectId to number)
+  const hash = parseInt(planId.toString().slice(-4), 16);
+  return colors[hash % colors.length];
+}
+
+// Investment endpoint
+app.post('/api/investments', protect, [
+  body('planId').isMongoId().withMessage('Invalid plan ID'),
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { planId, amount } = req.body;
+    const user = await User.findById(req.user.id).select('balances referredBy');
+    const plan = await Plan.findById(planId);
+
+    if (!plan) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Plan not found'
+      });
+    }
+
+    if (amount < plan.minAmount || amount > plan.maxAmount) {
+      return res.status(400).json({
+        status: 'fail',
+        message: `Amount must be between $${plan.minAmount} and $${plan.maxAmount} for this plan`
+      });
+    }
+
+    if (user.balances.main < amount) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Insufficient balance for investment'
+      });
+    }
+
+    // Deduct from main balance and add to active balance
+    user.balances.main -= amount;
+    user.balances.active += amount;
+    await user.save();
+
+    // Calculate end date and expected return
+    const endDate = new Date(Date.now() + plan.duration * 60 * 60 * 1000);
+    const expectedReturn = amount + (amount * plan.percentage / 100);
+
+    // Create investment
+    const investment = await Investment.create({
+      user: req.user.id,
+      plan: planId,
+      amount,
+      expectedReturn,
+      endDate
+    });
+
+    // Create transaction record
+    const reference = `INV-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    await Transaction.create({
+      user: req.user.id,
+      type: 'investment',
+      amount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference,
+      netAmount: amount,
+      details: `Investment of $${amount} in ${plan.name} (Expected return: $${expectedReturn.toFixed(2)})`
+    });
+
+    // Handle referral bonus if applicable
+    if (user.referredBy) {
+      const referringUser = await User.findById(user.referredBy);
+      if (referringUser) {
+        const bonusAmount = amount * (plan.referralBonus / 100);
+        referringUser.balances.main += bonusAmount;
+        await referringUser.save();
+
+        investment.referralBonusPaid = true;
+        investment.referralBonusAmount = bonusAmount;
+        await investment.save();
+
+        // Create transaction for referral bonus
+        await Transaction.create({
+          user: referringUser._id,
+          type: 'referral',
+          amount: bonusAmount,
+          currency: 'USD',
+          status: 'completed',
+          method: 'internal',
+          reference: `REF-${reference}`,
+          netAmount: bonusAmount,
+          details: `Referral bonus for ${user.firstName} ${user.lastName}'s investment of $${amount}`
+        });
+
+        // Send notification to referring user
+        referringUser.notifications.push({
+          title: 'Referral Bonus',
+          message: `You've earned $${bonusAmount.toFixed(2)} from ${user.firstName} ${user.lastName}'s investment.`,
+          type: 'success'
+        });
+        await referringUser.save();
+      }
+    }
+
+    res.status(201).json({
+      status: 'success',
+      data: investment
+    });
+
+    await logActivity('create-investment', 'investment', investment._id, req.user._id, 'User', req, { planId, amount });
+  } catch (err) {
+    console.error('Create investment error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while creating investment'
     });
   }
 });
