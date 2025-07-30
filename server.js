@@ -4603,145 +4603,111 @@ setInterval(async () => {
 
 
 
+// Add this near your other routes in server.js
+const NEWS_API_KEY = '1d8aba25abc84dcca448b145d30ca6bd';
 
-// Bitcoin News API Endpoint
-app.get('/api/bitcoin-news', async (req, res) => {
+// Bitcoin News Endpoint
+app.get('/api/news/bitcoin', async (req, res) => {
     try {
-        // Cache key for Redis
-        const cacheKey = 'bitcoin-news';
+        const { page = 1, pageSize = 3 } = req.query;
         
-        // Try to get cached news first
-        const cachedNews = await redis.get(cacheKey);
-        if (cachedNews) {
-            return res.status(200).json(JSON.parse(cachedNews));
-        }
+        // Fetch from multiple sources in parallel
+        const [newsApiData, coingeckoData, cryptopanicData] = await Promise.all([
+            fetchNewsFromNewsAPI(page, pageSize),
+            fetchNewsFromCoinGecko(page, pageSize),
+            fetchNewsFromCryptoPanic(page, pageSize)
+        ]);
 
-        // Array to store news from all sources
-        let allNews = [];
+        // Combine and deduplicate news
+        const allNews = [...newsApiData, ...coingeckoData, ...cryptopanicData];
+        const uniqueNews = removeDuplicateNews(allNews);
 
-        // 1. NewsAPI.org (general news)
-        try {
-            const newsApiResponse = await axios.get('https://newsapi.org/v2/everything', {
-                params: {
-                    q: 'Bitcoin OR BTC',
-                    language: 'en',
-                    sortBy: 'publishedAt',
-                    pageSize: 5,
-                    apiKey: '1d8aba25abc84dcca448b145d30ca6bd'
-                },
-                timeout: 5000
-            });
+        // Paginate results
+        const startIndex = (page - 1) * pageSize;
+        const endIndex = startIndex + parseInt(pageSize);
+        const paginatedNews = uniqueNews.slice(startIndex, endIndex);
 
-            if (newsApiResponse.data.articles) {
-                allNews = allNews.concat(newsApiResponse.data.articles.map(article => ({
-                    source: 'NewsAPI',
-                    title: article.title,
-                    description: article.description,
-                    url: article.url,
-                    imageUrl: article.urlToImage,
-                    publishedAt: article.publishedAt,
-                    author: article.author || 'Unknown'
-                })));
+        res.status(200).json({
+            status: 'success',
+            data: {
+                news: paginatedNews,
+                total: uniqueNews.length,
+                page: parseInt(page),
+                pages: Math.ceil(uniqueNews.length / pageSize)
             }
-        } catch (err) {
-            console.error('NewsAPI error:', err.message);
-            await logActivity('news-api-error', 'system', null, null, 'System', req, { error: err.message });
-        }
-
-        // 2. CoinGecko API (crypto-specific news)
-        try {
-            const coingeckoResponse = await axios.get('https://api.coingecko.com/api/v3/news', {
-                params: {
-                    category: 'bitcoin',
-                    per_page: 5
-                },
-                timeout: 5000
-            });
-
-            if (coingeckoResponse.data && coingeckoResponse.data.news) {
-                allNews = allNews.concat(coingeckoResponse.data.news.map(article => ({
-                    source: 'CoinGecko',
-                    title: article.title,
-                    description: article.description,
-                    url: article.url,
-                    imageUrl: article.thumb_2x || null,
-                    publishedAt: article.updated_at,
-                    author: 'CoinGecko'
-                })));
-            }
-        } catch (err) {
-            console.error('CoinGecko error:', err.message);
-            await logActivity('coingecko-api-error', 'system', null, null, 'System', req, { error: err.message });
-        }
-
-        // 3. CryptoCompare API
-        try {
-            const cryptoCompareResponse = await axios.get('https://min-api.cryptocompare.com/data/v2/news/', {
-                params: {
-                    categories: 'BTC',
-                    lang: 'EN',
-                    sortOrder: 'latest',
-                    limit: 5
-                },
-                timeout: 5000
-            });
-
-            if (cryptoCompareResponse.data.Data) {
-                allNews = allNews.concat(cryptoCompareResponse.data.Data.map(article => ({
-                    source: 'CryptoCompare',
-                    title: article.title,
-                    description: article.body,
-                    url: article.url,
-                    imageUrl: article.imageurl || null,
-                    publishedAt: article.published_on * 1000, // Convert from Unix timestamp
-                    author: article.source_info.name || 'Unknown'
-                })));
-            }
-        } catch (err) {
-            console.error('CryptoCompare error:', err.message);
-            await logActivity('cryptocompare-api-error', 'system', null, null, 'System', req, { error: err.message });
-        }
-
-        // 4. CoinDesk API (fallback)
-        try {
-            const coinDeskResponse = await axios.get('https://api.coindesk.com/v1/news/pro', {
-                params: {
-                    limit: 5
-                },
-                timeout: 5000
-            });
-
-            if (coinDeskResponse.data && coinDeskResponse.data.news) {
-                allNews = allNews.concat(coinDeskResponse.data.news.map(article => ({
-                    source: 'CoinDesk',
-                    title: article.title,
-                    description: article.description,
-                    url: article.url,
-                    imageUrl: article.img || null,
-                    publishedAt: article.createdAt,
-                    author: article.author || 'CoinDesk'
-                })));
-            }
-        } catch (err) {
-            console.error('CoinDesk error:', err.message);
-            await logActivity('coindesk-api-error', 'system', null, null, 'System', req, { error: err.message });
-        }
-
-        // Sort all news by date (newest first)
-        allNews.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
-
-        // Cache the news for 15 minutes
-        await redis.set(cacheKey, JSON.stringify(allNews), 'EX', 900);
-
-        res.status(200).json(allNews);
+        });
     } catch (err) {
-        console.error('Bitcoin news error:', err);
+        console.error('News fetch error:', err);
         res.status(500).json({
             status: 'error',
             message: 'Failed to fetch Bitcoin news'
         });
     }
 });
+
+// Helper functions for news fetching
+async function fetchNewsFromNewsAPI(page, pageSize) {
+    try {
+        const response = await axios.get(`https://newsapi.org/v2/everything?q=bitcoin&apiKey=${NEWS_API_KEY}&pageSize=${pageSize}&page=${page}&sortBy=publishedAt`);
+        return response.data.articles.map(article => ({
+            source: 'NewsAPI',
+            title: article.title,
+            description: article.description,
+            url: article.url,
+            imageUrl: article.urlToImage,
+            publishedAt: article.publishedAt,
+            author: article.author || 'Unknown'
+        }));
+    } catch (err) {
+        console.error('NewsAPI error:', err);
+        return [];
+    }
+}
+
+async function fetchNewsFromCoinGecko() {
+    try {
+        const response = await axios.get('https://api.coingecko.com/api/v3/news?category=bitcoin');
+        return response.data.map(article => ({
+            source: 'CoinGecko',
+            title: article.title,
+            description: article.description,
+            url: article.url,
+            imageUrl: article.thumb_2x,
+            publishedAt: new Date(article.updated_at * 1000).toISOString(),
+            author: article.author || 'Unknown'
+        }));
+    } catch (err) {
+        console.error('CoinGecko error:', err);
+        return [];
+    }
+}
+
+async function fetchNewsFromCryptoPanic() {
+    try {
+        const response = await axios.get('https://cryptopanic.com/api/v1/posts/?auth_token=1d8aba25abc84dcca448b145d30ca6bd&currencies=BTC');
+        return response.data.results.map(article => ({
+            source: 'CryptoPanic',
+            title: article.title,
+            description: article.metadata?.description || '',
+            url: article.url,
+            imageUrl: article.metadata?.image || '',
+            publishedAt: article.published_at,
+            author: article.source?.title || 'Unknown'
+        }));
+    } catch (err) {
+        console.error('CryptoPanic error:', err);
+        return [];
+    }
+}
+
+function removeDuplicateNews(news) {
+    const seenUrls = new Set();
+    return news.filter(item => {
+        if (!item.url || seenUrls.has(item.url)) return false;
+        seenUrls.add(item.url);
+        return true;
+    });
+}
 
 
 
