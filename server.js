@@ -863,7 +863,6 @@ const verifyTOTP = (token, secret) => {
   });
 };
 
-// Add this near your other helper functions (like generateJWT, etc.)
 
 const { Configuration, OpenAIApi } = require('openai');
 
@@ -873,94 +872,52 @@ const openaiConfig = new Configuration({
 
 const openai = new OpenAIApi(openaiConfig);
 
+// Andrea AI System Prompt
+const andreaSystemPrompt = `
+You are Andrea, BitHash's AI support assistant. Your role is to provide professional, accurate help with:
+
+1. Account Support:
+- KYC verification: "Verification takes 24-48 hours. I can check your status if you provide your ticket number."
+- 2FA issues: "Let's reset your two-factor authentication. First, please verify your email."
+- Password resets: "For security, we'll send a reset link to your registered email."
+
+2. Transactions:
+- Deposits: "BTC requires 1-3 network confirmations (10-30 minutes). Your current transaction has [X] confirmations."
+- Withdrawals: "Withdrawals process within 4 hours after security review."
+
+3. Security:
+- Never ask for passwords/private keys
+- Always verify: "For security, may I confirm the email on your account?"
+
+Tone Guidelines:
+- Friendly but professional
+- Empathetic to frustrations
+- Clear explanations without jargon
+
+Escalate when:
+- User is angry/threatening
+- Account security concerns
+- Complex legal/compliance questions
+
+Example Responses:
+- "I understand this is urgent - let me check your transaction status."
+- "For your protection, I'll connect you to our security team."
+- "The Gold Plan yields 40% after 24 hours. Would you like details?"
+`;
+
 const generateAIResponse = async (prompt, context = '') => {
   try {
-
-
-
-
-
-// In server.js, assign the configuration to a variable
-const andreaConfig = {
-  ai_agent: {
-    name: "Andrea",
-    description: "BitHash's AI support assistant providing secure, professional live chat support",
-    metadata: {
-      version: "1.2",
-      last_updated: "2023-11-15"
-    },
-    behavior: {
-      opening_message: "Hello! I'm Andrea, here to assist with your BitHash account. How can I help you today?",
-      default_tone: "friendly_professional",
-      escalation_phrases: [
-        "Let me connect you to a live agent for further help. One moment!",
-        "I'll escalate this to our specialist team for review."
-      ],
-      closing_phrase: "Is there anything else I can help with?"
-    },
-    knowledge_base: {
-      account_support: {
-        kyc: "Verification typically takes 24-48 hours. I can check your submission status if you provide your ticket number.",
-        two_fa: "For security, two-factor authentication is required. You can enable it here: [link].",
-        password_reset: "Let's reset your password. First, please verify your email address."
-      },
-      transactions: {
-        deposit: "BTC deposits require 1-3 network confirmations (typically 10-30 minutes).",
-        withdrawal: "Withdrawals are processed within 4 hours after security review."
-      },
-      security: [
-        "Never share your private keys or passwords with anyone.",
-        "Always verify website URLs before entering credentials."
-      ]
-    },
-    security_protocols: {
-      never_request: ["passwords", "private_keys", "seed_phrases"],
-      verification_methods: [
-        "May I confirm the email associated with your account?",
-        "For security, could you verify the last 4 digits of your registered phone number?"
-      ]
-    },
-    escalation_triggers: {
-      keywords: ["fraud", "hacked", "legal", "sue", "manager"],
-      sentiment_threshold: 0.8
-    },
-    enterprise_integrations: {
-      crm: "Salesforce",
-      auth: "Okta",
-      transaction_api: "https://api.bithash.com/tx/status"
-    },
-    compliance: {
-      gdpr: true,
-      aml: true,
-      kyc: true
-    }
-  }
-};
-
-// Then use it in your application
-app.post('/chat', (req, res) => {
-  // Access configuration values like:
-  const openingMessage = andreaConfig.ai_agent.behavior.opening_message;
-  // ... rest of your handler logic
-});
-
-
-
-
-    
-    
-    const fullPrompt = `${context}\n\n${prompt}`;
-    
     const response = await openai.createChatCompletion({
       model: "gpt-4",
       messages: [
         {
           role: "system",
-          content: "You are a knowledgeable support agent for BitHash, a cryptocurrency investment platform. Provide accurate, helpful responses while maintaining a professional tone."
+          content: andreaSystemPrompt
         },
+        ...(context ? [{ role: "assistant", content: context }] : []),
         {
           role: "user",
-          content: fullPrompt
+          content: prompt
         }
       ],
       temperature: 0.7,
@@ -972,7 +929,7 @@ app.post('/chat', (req, res) => {
 
     return {
       response: response.data.choices[0].message.content.trim(),
-      confidence: 0.9 // Placeholder - you could implement actual confidence scoring
+      confidence: 0.9
     };
   } catch (err) {
     console.error('OpenAI API error:', err);
@@ -1003,9 +960,14 @@ const shouldEscalateToHuman = async (message, conversationHistory) => {
     return response.data.choices[0].message.content.trim().toUpperCase() === 'YES';
   } catch (err) {
     console.error('OpenAI escalation check error:', err);
-    return true; // Default to escalation if there's an error
+    return true;
   }
 };
+
+module.exports = { generateAIResponse, shouldEscalateToHuman };
+
+
+
 
 // Initialize default admin and plans
 const initializeAdmin = async () => {
