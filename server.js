@@ -4758,94 +4758,86 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-// Recent Withdrawals Endpoint
+// Add these endpoints after your existing routes but before error handlers
+
+// Recent Transactions Endpoints
 app.get('/api/transactions/recent-withdrawals', async (req, res) => {
     try {
-        // Try to get cached withdrawals first
-        const cachedWithdrawals = await redis.get('recent-withdrawals');
-        if (cachedWithdrawals) {
-            return res.status(200).json({
-                status: 'success',
-                data: JSON.parse(cachedWithdrawals)
-            });
-        }
-
-        // Get real recent withdrawals from database if no cache
+        // Get recent completed withdrawals (last 24 hours)
         const withdrawals = await Transaction.aggregate([
-            { $match: { type: 'withdrawal', status: 'completed' } },
-            { $sort: { createdAt: -1 } },
-            { $limit: 50 },
-            { $sample: { size: 1 } },
-            { 
+            {
+                $match: {
+                    type: 'withdrawal',
+                    status: 'completed',
+                    createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+                }
+            },
+            { $sample: { size: 5 } }, // Get 5 random withdrawals
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'user',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' },
+            {
                 $project: {
                     _id: 0,
                     amount: 1,
                     method: 1,
                     reference: 1,
-                    user: 1,
-                    createdAt: 1
+                    'user._id': 1,
+                    'user.email': 1
                 }
             }
         ]);
 
-        if (withdrawals.length === 0) {
-            // Generate a realistic fake withdrawal if none exist
-            const withdrawalAmount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
-            const methods = ['btc', 'bank', 'wire'];
-            const fakeWithdrawal = {
-                amount: withdrawalAmount,
-                method: methods[Math.floor(Math.random() * methods.length)],
-                reference: crypto.randomBytes(6).toString('hex').toUpperCase(),
-                user: {
-                    _id: crypto.randomBytes(12).toString('hex'),
-                    email: 'user@example.com'
-                },
-                createdAt: new Date()
-            };
+        // Format the data for frontend
+        const formattedWithdrawals = withdrawals.map(tx => ({
+            amount: tx.amount,
+            method: tx.method,
+            transactionId: tx.reference,
+            userId: tx.user._id,
+            maskedEmail: maskEmail(tx.user.email)
+        }));
 
-            // Cache for 5 minutes
-            await redis.set('recent-withdrawals', JSON.stringify([fakeWithdrawal]), 'EX', 300);
-            
-            return res.status(200).json({
-                status: 'success',
-                data: [fakeWithdrawal]
-            });
-        }
+        // Cache in Redis for 5 minutes to prevent duplicates
+        await redis.set('recent-withdrawals', JSON.stringify(formattedWithdrawals), 'EX', 300);
 
-        // Cache real withdrawals for 5 minutes
-        await redis.set('recent-withdrawals', JSON.stringify(withdrawals), 'EX', 300);
-        
         res.status(200).json({
             status: 'success',
-            data: withdrawals
+            data: formattedWithdrawals
         });
     } catch (err) {
-        console.error('Recent withdrawals error:', err);
+        console.error('Error fetching recent withdrawals:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching recent withdrawals'
+            message: 'Failed to fetch recent withdrawals'
         });
     }
 });
 
-// Recent Investments Endpoint
 app.get('/api/transactions/recent-investments', async (req, res) => {
     try {
-        // Try to get cached investments first
-        const cachedInvestments = await redis.get('recent-investments');
-        if (cachedInvestments) {
-            return res.status(200).json({
-                status: 'success',
-                data: JSON.parse(cachedInvestments)
-            });
-        }
-
-        // Get real recent investments from database if no cache
+        // Get recent investments (last 24 hours)
         const investments = await Investment.aggregate([
-            { $match: { status: 'active' } },
-            { $sort: { createdAt: -1 } },
-            { $limit: 50 },
-            { $sample: { size: 1 } },
+            {
+                $match: {
+                    createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+                }
+            },
+            { $sample: { size: 5 } }, // Get 5 random investments
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'user',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' },
             {
                 $lookup: {
                     from: 'plans',
@@ -4859,63 +4851,46 @@ app.get('/api/transactions/recent-investments', async (req, res) => {
                 $project: {
                     _id: 0,
                     amount: 1,
-                    plan: '$plan.name',
-                    user: 1,
+                    'plan.name': 1,
                     reference: 1,
-                    createdAt: 1
+                    'user._id': 1,
+                    'user.email': 1
                 }
             }
         ]);
 
-        if (investments.length === 0) {
-            // Get all plans to generate realistic fake investment
-            const plans = await Plan.find({ isActive: true });
-            if (plans.length === 0) {
-                return res.status(404).json({
-                    status: 'fail',
-                    message: 'No active investment plans found'
-                });
-            }
+        // Format the data for frontend
+        const formattedInvestments = investments.map(inv => ({
+            amount: inv.amount,
+            planName: inv.plan.name,
+            transactionId: inv.reference,
+            userId: inv.user._id,
+            maskedEmail: maskEmail(inv.user.email)
+        }));
 
-            const randomPlan = plans[Math.floor(Math.random() * plans.length)];
-            const investmentAmount = Math.floor(Math.random() * (randomPlan.maxAmount - randomPlan.minAmount + 1)) + randomPlan.minAmount;
-            
-            const fakeInvestment = {
-                amount: investmentAmount,
-                plan: randomPlan.name,
-                reference: crypto.randomBytes(6).toString('hex').toUpperCase(),
-                user: {
-                    _id: crypto.randomBytes(12).toString('hex'),
-                    email: 'user@example.com'
-                },
-                createdAt: new Date()
-            };
+        // Cache in Redis for 5 minutes to prevent duplicates
+        await redis.set('recent-investments', JSON.stringify(formattedInvestments), 'EX', 300);
 
-            // Cache for 5 minutes
-            await redis.set('recent-investments', JSON.stringify([fakeInvestment]), 'EX', 300);
-            
-            return res.status(200).json({
-                status: 'success',
-                data: [fakeInvestment]
-            });
-        }
-
-        // Cache real investments for 5 minutes
-        await redis.set('recent-investments', JSON.stringify(investments), 'EX', 300);
-        
         res.status(200).json({
             status: 'success',
-            data: investments
+            data: formattedInvestments
         });
     } catch (err) {
-        console.error('Recent investments error:', err);
+        console.error('Error fetching recent investments:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching recent investments'
+            message: 'Failed to fetch recent investments'
         });
     }
 });
 
+// Helper function to mask email
+function maskEmail(email) {
+    if (!email) return 'Ano***User';
+    const [username, domain] = email.split('@');
+    const maskedUsername = username.substring(0, 4) + '***' + username.slice(-2);
+    return maskedUsername + (domain ? '@' + domain.split('.')[0].substring(0, 2) + '***' : '');
+}
 
 
 
