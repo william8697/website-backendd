@@ -4758,30 +4758,59 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-// Add these endpoints to your server.js file
-
 // Recent Withdrawals Endpoint
-app.get('/api/recent-withdrawals', async (req, res) => {
+app.get('/api/transactions/recent-withdrawals', async (req, res) => {
     try {
-        // Generate random withdrawal data
-        const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
-        const methods = ['btc', 'bank'];
-        const method = methods[Math.floor(Math.random() * methods.length)];
-        const userId = generateRandomId();
+        // Get recent completed withdrawals (last 100)
+        const withdrawals = await Transaction.aggregate([
+            { $match: { type: 'withdrawal', status: 'completed' } },
+            { $sort: { createdAt: -1 } },
+            { $limit: 100 },
+            { $sample: { size: 1 } }, // Randomly select one
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'user',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' },
+            {
+                $project: {
+                    amount: 1,
+                    method: 1,
+                    reference: 1,
+                    'user._id': 1,
+                    createdAt: 1
+                }
+            }
+        ]);
+
+        if (withdrawals.length === 0) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'No recent withdrawals found'
+            });
+        }
+
+        const withdrawal = withdrawals[0];
         
-        const withdrawal = {
-            user: `${userId.substring(0, 4)}***${userId.substring(userId.length - 3)}`,
-            amount: amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
-            method: method === 'btc' ? 'BTC' : 'Wire Transfer',
-            transactionId: `Tx${generateRandomString(4)}•••${generateRandomString(4)}`
+        // Format response
+        const response = {
+            amount: withdrawal.amount,
+            method: withdrawal.method,
+            transactionId: withdrawal.reference,
+            userId: withdrawal.user._id,
+            timestamp: withdrawal.createdAt
         };
 
         res.status(200).json({
             status: 'success',
-            data: withdrawal
+            data: response
         });
     } catch (err) {
-        console.error('Recent withdrawals error:', err);
+        console.error('Get recent withdrawals error:', err);
         res.status(500).json({
             status: 'error',
             message: 'An error occurred while fetching recent withdrawals'
@@ -4790,55 +4819,70 @@ app.get('/api/recent-withdrawals', async (req, res) => {
 });
 
 // Recent Investments Endpoint
-app.get('/api/recent-investments', async (req, res) => {
+app.get('/api/investments/recent', async (req, res) => {
     try {
-        // Get all active plans to choose from
-        const plans = await Plan.find({ isActive: true });
-        if (!plans || plans.length === 0) {
+        // Get recent investments (last 100)
+        const investments = await Investment.aggregate([
+            { $sort: { createdAt: -1 } },
+            { $limit: 100 },
+            { $sample: { size: 1 } }, // Randomly select one
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'user',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            {
+                $lookup: {
+                    from: 'plans',
+                    localField: 'plan',
+                    foreignField: '_id',
+                    as: 'plan'
+                }
+            },
+            { $unwind: '$user' },
+            { $unwind: '$plan' },
+            {
+                $project: {
+                    amount: 1,
+                    'plan.name': 1,
+                    'user._id': 1,
+                    createdAt: 1
+                }
+            }
+        ]);
+
+        if (investments.length === 0) {
             return res.status(404).json({
                 status: 'fail',
-                message: 'No active investment plans found'
+                message: 'No recent investments found'
             });
         }
 
-        // Generate random investment data
-        const amount = Math.floor(Math.random() * (1000000 - 100 + 1)) + 100;
-        const randomPlan = plans[Math.floor(Math.random() * plans.length)];
-        const userId = generateRandomId();
+        const investment = investments[0];
         
-        const investment = {
-            user: `${userId.substring(0, 4)}***${userId.substring(userId.length - 3)}`,
-            amount: amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
-            plan: randomPlan.name,
-            transactionId: `Tx${generateRandomString(4)}•••${generateRandomString(4)}`
+        // Format response
+        const response = {
+            amount: investment.amount,
+            planName: investment.plan.name,
+            userId: investment.user._id,
+            timestamp: investment.createdAt
         };
 
         res.status(200).json({
             status: 'success',
-            data: investment
+            data: response
         });
     } catch (err) {
-        console.error('Recent investments error:', err);
+        console.error('Get recent investments error:', err);
         res.status(500).json({
             status: 'error',
             message: 'An error occurred while fetching recent investments'
         });
     }
 });
-
-// Helper function to generate random IDs
-function generateRandomId() {
-    return crypto.randomBytes(8).toString('hex');
-}
-
-// Helper function to generate random strings
-function generateRandomString(length) {
-    return crypto.randomBytes(Math.ceil(length/2))
-        .toString('hex')
-        .slice(0, length);
-}
-
-
 
 
 
