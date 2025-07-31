@@ -4758,89 +4758,77 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
+// Add these endpoints to server.js
+
 // Recent Withdrawals Endpoint
-app.get('/api/recent/withdrawals', async (req, res) => {
+app.get('/api/recent-withdrawals', async (req, res) => {
     try {
         // Check Redis cache first
-        const cacheKey = 'recent-withdrawals';
-        const cachedData = await redis.get(cacheKey);
-        
-        if (cachedData) {
-            return res.status(200).json(JSON.parse(cachedData));
+        const cachedWithdrawals = await redis.get('recent-withdrawals');
+        if (cachedWithdrawals) {
+            return res.status(200).json(JSON.parse(cachedWithdrawals));
         }
 
-        // Generate random withdrawal data
-        const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
-        const userId = crypto.randomBytes(6).toString('hex');
-        const maskedUserId = `${userId.substring(0, 4)}***${userId.substring(userId.length - 4)}`;
-        const txId = crypto.randomBytes(10).toString('hex');
-        const maskedTxId = `${txId.substring(0, 4)}•••${txId.substring(txId.length - 4)}`;
-        const method = Math.random() > 0.5 ? 'Wire Transfer' : 'BTC';
+        // Generate realistic withdrawal data
+        const withdrawals = Array.from({ length: 10 }, () => {
+            const amount = Math.floor(Math.random() * (2000000 - 120 + 1) + 120);
+            const userId = crypto.randomBytes(4).toString('hex');
+            const transactionId = crypto.randomBytes(8).toString('hex');
+            const method = Math.random() > 0.5 ? 'Wire Transfer' : 'BTC';
+            
+            return {
+                message: `User ${userId.slice(0, 3)}***${userId.slice(-3)} has withdrawn $${amount.toLocaleString()} via ${method}`,
+                transactionId: `${transactionId.slice(0, 3)}•••${transactionId.slice(-4)}`,
+                timestamp: new Date()
+            };
+        });
 
-        const withdrawalData = {
-            message: `User ${maskedUserId} has withdrawn $${amount.toLocaleString()} via ${method}`,
-            txId: maskedTxId,
-            timestamp: new Date().toISOString()
-        };
+        // Cache for 1 hour
+        await redis.set('recent-withdrawals', JSON.stringify(withdrawals), 'EX', 3600);
 
-        // Cache for 1 minute to prevent duplicates
-        await redis.set(cacheKey, JSON.stringify(withdrawalData), 'EX', 60);
-
-        res.status(200).json(withdrawalData);
+        res.status(200).json(withdrawals);
     } catch (err) {
         console.error('Recent withdrawals error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch recent withdrawals'
-        });
+        res.status(500).json({ status: 'error', message: 'Failed to fetch recent withdrawals' });
     }
 });
 
 // Recent Investments Endpoint
-app.get('/api/recent/investments', async (req, res) => {
+app.get('/api/recent-investments', async (req, res) => {
     try {
         // Check Redis cache first
-        const cacheKey = 'recent-investments';
-        const cachedData = await redis.get(cacheKey);
-        
-        if (cachedData) {
-            return res.status(200).json(JSON.parse(cachedData));
+        const cachedInvestments = await redis.get('recent-investments');
+        if (cachedInvestments) {
+            return res.status(200).json(JSON.parse(cachedInvestments));
         }
 
-        // Get all active plans to ensure valid amounts
+        // Get all active plans from database
         const plans = await Plan.find({ isActive: true });
         if (!plans.length) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'No investment plans found'
-            });
+            return res.status(404).json({ status: 'fail', message: 'No investment plans found' });
         }
 
-        // Select a random plan
-        const randomPlan = plans[Math.floor(Math.random() * plans.length)];
-        const amount = Math.floor(Math.random() * (randomPlan.maxAmount - randomPlan.minAmount + 1)) + randomPlan.minAmount;
-        
-        const userId = crypto.randomBytes(6).toString('hex');
-        const maskedUserId = `${userId.substring(0, 4)}***${userId.substring(userId.length - 4)}`;
-        const txId = crypto.randomBytes(10).toString('hex');
-        const maskedTxId = `${txId.substring(0, 4)}•••${txId.substring(txId.length - 4)}`;
+        // Generate realistic investment data
+        const investments = Array.from({ length: 10 }, () => {
+            const plan = plans[Math.floor(Math.random() * plans.length)];
+            const amount = Math.floor(Math.random() * (plan.maxAmount - plan.minAmount + 1) + plan.minAmount);
+            const userId = crypto.randomBytes(4).toString('hex');
+            const transactionId = crypto.randomBytes(8).toString('hex');
+            
+            return {
+                message: `User ${userId.slice(0, 3)}***${userId.slice(-3)} invested $${amount.toLocaleString()} into the ${plan.name}`,
+                transactionId: `${transactionId.slice(0, 3)}•••${transactionId.slice(-4)}`,
+                timestamp: new Date()
+            };
+        });
 
-        const investmentData = {
-            message: `User ${maskedUserId} invested $${amount.toLocaleString()} into the ${randomPlan.name}`,
-            txId: maskedTxId,
-            timestamp: new Date().toISOString()
-        };
+        // Cache for 1 hour
+        await redis.set('recent-investments', JSON.stringify(investments), 'EX', 3600);
 
-        // Cache for 1 minute to prevent duplicates
-        await redis.set(cacheKey, JSON.stringify(investmentData), 'EX', 60);
-
-        res.status(200).json(investmentData);
+        res.status(200).json(investments);
     } catch (err) {
         console.error('Recent investments error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch recent investments'
-        });
+        res.status(500).json({ status: 'error', message: 'Failed to fetch recent investments' });
     }
 });
 
