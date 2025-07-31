@@ -4759,21 +4759,18 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-// Add these endpoints after your existing routes in server.js
+// Add these endpoints after the existing routes in server.js
 
-// Recent Transactions Endpoints
-app.get('/api/transactions/recent-withdrawals', async (req, res) => {
+// Recent Withdrawals Endpoint
+app.get('/api/recent-withdrawals', async (req, res) => {
     try {
         // Check Redis cache first
         const cachedWithdrawals = await redis.get('recent-withdrawals');
         if (cachedWithdrawals) {
-            return res.status(200).json({
-                status: 'success',
-                data: JSON.parse(cachedWithdrawals)
-            });
+            return res.status(200).json(JSON.parse(cachedWithdrawals));
         }
 
-        // Get recent completed withdrawals
+        // Get recent completed withdrawals from database
         const withdrawals = await Transaction.aggregate([
             { $match: { type: 'withdrawal', status: 'completed' } },
             { $sort: { createdAt: -1 } },
@@ -4790,19 +4787,25 @@ app.get('/api/transactions/recent-withdrawals', async (req, res) => {
                 method: 1,
                 reference: 1,
                 createdAt: 1,
-                'user.firstName': 1,
-                'user.lastName': 1,
+                'user._id': 1,
                 'user.email': 1
             }}
         ]);
 
-        // Cache for 5 minutes
-        await redis.set('recent-withdrawals', JSON.stringify(withdrawals), 'EX', 300);
+        // Process data to hide sensitive info
+        const processedWithdrawals = withdrawals.map(w => ({
+            amount: w.amount,
+            method: w.method,
+            transactionId: w.reference,
+            userId: w.user._id,
+            maskedEmail: `${w.user.email.substring(0, 4)}***${w.user.email.substring(w.user.email.length - 4)}`,
+            timestamp: w.createdAt
+        }));
 
-        res.status(200).json({
-            status: 'success',
-            data: withdrawals
-        });
+        // Cache for 5 minutes
+        await redis.set('recent-withdrawals', JSON.stringify(processedWithdrawals), 'EX', 300);
+
+        res.status(200).json(processedWithdrawals);
     } catch (err) {
         console.error('Error fetching recent withdrawals:', err);
         res.status(500).json({
@@ -4812,18 +4815,16 @@ app.get('/api/transactions/recent-withdrawals', async (req, res) => {
     }
 });
 
-app.get('/api/transactions/recent-investments', async (req, res) => {
+// Recent Investments Endpoint
+app.get('/api/recent-investments', async (req, res) => {
     try {
         // Check Redis cache first
         const cachedInvestments = await redis.get('recent-investments');
         if (cachedInvestments) {
-            return res.status(200).json({
-                status: 'success',
-                data: JSON.parse(cachedInvestments)
-            });
+            return res.status(200).json(JSON.parse(cachedInvestments));
         }
 
-        // Get recent investments with plan details
+        // Get recent investments from database
         const investments = await Investment.aggregate([
             { $sort: { createdAt: -1 } },
             { $limit: 50 },
@@ -4843,22 +4844,26 @@ app.get('/api/transactions/recent-investments', async (req, res) => {
             { $unwind: '$plan' },
             { $project: {
                 amount: 1,
+                planName: '$plan.name',
                 createdAt: 1,
-                reference: 1,
-                'user.firstName': 1,
-                'user.lastName': 1,
-                'user.email': 1,
-                'plan.name': 1
+                'user._id': 1,
+                'user.email': 1
             }}
         ]);
 
-        // Cache for 5 minutes
-        await redis.set('recent-investments', JSON.stringify(investments), 'EX', 300);
+        // Process data to hide sensitive info
+        const processedInvestments = investments.map(i => ({
+            amount: i.amount,
+            planName: i.planName,
+            userId: i.user._id,
+            maskedEmail: `${i.user.email.substring(0, 4)}***${i.user.email.substring(i.user.email.length - 4)}`,
+            timestamp: i.createdAt
+        }));
 
-        res.status(200).json({
-            status: 'success',
-            data: investments
-        });
+        // Cache for 5 minutes
+        await redis.set('recent-investments', JSON.stringify(processedInvestments), 'EX', 300);
+
+        res.status(200).json(processedInvestments);
     } catch (err) {
         console.error('Error fetching recent investments:', err);
         res.status(500).json({
@@ -4868,113 +4873,107 @@ app.get('/api/transactions/recent-investments', async (req, res) => {
     }
 });
 
-// Generate random transaction for demo purposes
-app.get('/api/transactions/generate-random', async (req, res) => {
+// Random Activity Endpoint (combines withdrawals and investments)
+app.get('/api/random-activity', async (req, res) => {
     try {
-        // Get all active plans
-        const plans = await Plan.find({ isActive: true });
-        
-        // Generate random transaction type (withdrawal or investment)
-        const type = Math.random() > 0.5 ? 'withdrawal' : 'investment';
-        
-        if (type === 'withdrawal') {
-            // Generate random withdrawal
-            const methods = ['btc', 'bank'];
-            const method = methods[Math.floor(Math.random() * methods.length)];
-            const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
-            
-            // Get random user
-            const users = await User.aggregate([{ $sample: { size: 1 } }]);
-            const user = users[0];
-            
-            // Create transaction reference
-            const reference = `WTH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-            
-            // Create transaction
-            const transaction = await Transaction.create({
-                user: user._id,
-                type: 'withdrawal',
-                amount,
-                currency: 'USD',
-                status: 'completed',
-                method,
-                reference,
-                netAmount: amount,
-                details: `Withdrawal of $${amount} via ${method === 'btc' ? 'BTC' : 'Wire Transfer'}`,
-                processedAt: new Date()
-            });
-            
-            // Invalidate cache
-            await redis.del('recent-withdrawals');
-            
-            res.status(201).json({
-                status: 'success',
-                data: {
-                    type: 'withdrawal',
-                    transaction
-                }
-            });
-        } else {
-            // Generate random investment
-            const plan = plans[Math.floor(Math.random() * plans.length)];
-            const amount = Math.floor(Math.random() * (plan.maxAmount - plan.minAmount + 1)) + plan.minAmount;
-            
-            // Get random user
-            const users = await User.aggregate([{ $sample: { size: 1 } }]);
-            const user = users[0];
-            
-            // Create transaction reference
-            const reference = `INV-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-            
-            // Create investment
-            const endDate = new Date(Date.now() + plan.duration * 60 * 60 * 1000);
-            const expectedReturn = amount + (amount * plan.percentage / 100);
-            
-            const investment = await Investment.create({
-                user: user._id,
-                plan: plan._id,
-                amount,
-                expectedReturn,
-                startDate: new Date(),
-                endDate,
-                status: 'active'
-            });
-            
-            // Create transaction record
-            await Transaction.create({
-                user: user._id,
-                type: 'investment',
-                amount,
-                currency: 'USD',
-                status: 'completed',
-                method: 'internal',
-                reference,
-                netAmount: amount,
-                details: `Investment of $${amount} in ${plan.name} (Expected return: $${expectedReturn.toFixed(2)})`
-            });
-            
-            // Invalidate cache
-            await redis.del('recent-investments');
-            
-            res.status(201).json({
-                status: 'success',
-                data: {
-                    type: 'investment',
-                    investment
-                }
-            });
+        // Check Redis cache first
+        const cachedActivity = await redis.get('random-activity');
+        if (cachedActivity) {
+            return res.status(200).json(JSON.parse(cachedActivity));
         }
+
+        // Get recent activities
+        const [withdrawals, investments] = await Promise.all([
+            Transaction.aggregate([
+                { $match: { type: 'withdrawal', status: 'completed' } },
+                { $sort: { createdAt: -1 } },
+                { $limit: 50 },
+                { $lookup: {
+                    from: 'users',
+                    localField: 'user',
+                    foreignField: '_id',
+                    as: 'user'
+                }},
+                { $unwind: '$user' },
+                { $project: {
+                    type: { $literal: 'withdrawal' },
+                    amount: 1,
+                    method: 1,
+                    reference: 1,
+                    createdAt: 1,
+                    'user._id': 1,
+                    'user.email': 1
+                }}
+            ]),
+            Investment.aggregate([
+                { $sort: { createdAt: -1 } },
+                { $limit: 50 },
+                { $lookup: {
+                    from: 'users',
+                    localField: 'user',
+                    foreignField: '_id',
+                    as: 'user'
+                }},
+                { $lookup: {
+                    from: 'plans',
+                    localField: 'plan',
+                    foreignField: '_id',
+                    as: 'plan'
+                }},
+                { $unwind: '$user' },
+                { $unwind: '$plan' },
+                { $project: {
+                    type: { $literal: 'investment' },
+                    amount: 1,
+                    planName: '$plan.name',
+                    createdAt: 1,
+                    'user._id': 1,
+                    'user.email': 1
+                }}
+            ])
+        ]);
+
+        // Combine and process activities
+        const allActivities = [...withdrawals, ...investments]
+            .sort((a, b) => b.createdAt - a.createdAt)
+            .slice(0, 50)
+            .map(activity => {
+                const commonFields = {
+                    amount: activity.amount,
+                    userId: activity.user._id,
+                    maskedEmail: `${activity.user.email.substring(0, 4)}***${activity.user.email.substring(activity.user.email.length - 4)}`,
+                    timestamp: activity.createdAt
+                };
+
+                if (activity.type === 'withdrawal') {
+                    return {
+                        ...commonFields,
+                        type: 'withdrawal',
+                        method: activity.method,
+                        transactionId: activity.reference
+                    };
+                } else {
+                    return {
+                        ...commonFields,
+                        type: 'investment',
+                        planName: activity.planName,
+                        transactionId: crypto.randomBytes(6).toString('hex').toUpperCase()
+                    };
+                }
+            });
+
+        // Cache for 5 minutes
+        await redis.set('random-activity', JSON.stringify(allActivities), 'EX', 300);
+
+        res.status(200).json(allActivities);
     } catch (err) {
-        console.error('Error generating random transaction:', err);
+        console.error('Error fetching random activity:', err);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to generate random transaction'
+            message: 'Failed to fetch random activity'
         });
     }
 });
-
-
-
 
 
 
