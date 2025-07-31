@@ -5797,7 +5797,6 @@ app.post('/api/support/messages/:messageId/feedback', protect, [
 
 
 // Add these endpoints to your server.js file
-
 // Recent Withdrawals Endpoint
 app.get('/api/recent-withdrawals', async (req, res) => {
   try {
@@ -5813,12 +5812,18 @@ app.get('/api/recent-withdrawals', async (req, res) => {
     // Get investment plans for validation
     const plans = await Plan.find({ isActive: true });
     
-    // Generate realistic withdrawal data
+    // Generate realistic withdrawal data with mixed large and small amounts
     const withdrawals = Array.from({ length: 50 }, () => {
-      const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
-      const userCode = `User_${crypto.randomBytes(3).toString('hex').slice(0, 4)}****${crypto.randomBytes(3).toString('hex').slice(0, 4)}`;
+      // Create a mix of large and small withdrawals
+      const isLarge = Math.random() > 0.5;
+      const amount = isLarge 
+        ? Math.floor(Math.random() * (2000000 - 100000 + 1)) + 100000  // Large amounts: $100,000 - $2,000,000
+        : Math.floor(Math.random() * (99999 - 120 + 1)) + 120;        // Small amounts: $120 - $99,999
+        
+      const userCode = `Jt7x${crypto.randomBytes(2).toString('hex').slice(0, 3)}***${crypto.randomBytes(2).toString('hex').slice(0, 3)}YrW4`;
       const methods = ['btc', 'wire'];
       const method = methods[Math.floor(Math.random() * methods.length)];
+      const txId = `Ki7h7${crypto.randomBytes(2).toString('hex').slice(0, 3)}***${crypto.randomBytes(2).toString('hex').slice(0, 3)}Ji7y6`;
       
       return {
         id: crypto.randomBytes(8).toString('hex'),
@@ -5826,7 +5831,8 @@ app.get('/api/recent-withdrawals', async (req, res) => {
         amount: amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
         method: method === 'btc' ? 'BTC' : 'Wire Transfer',
         timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000)).toISOString(),
-        status: 'Completed'
+        status: 'Completed',
+        displayText: `${userCode} withdrew ${amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} via ${method === 'btc' ? 'BTC' : 'Wire Transfer'}. TX ID: ${txId}`
       };
     });
 
@@ -5861,11 +5867,17 @@ app.get('/api/recent-investments', async (req, res) => {
     // Get investment plans for validation
     const plans = await Plan.find({ isActive: true });
     
-    // Generate realistic investment data within plan limits
+    // Generate realistic investment data with mixed large and small amounts
     const investments = Array.from({ length: 50 }, () => {
       const plan = plans[Math.floor(Math.random() * plans.length)];
-      const amount = Math.floor(Math.random() * (plan.maxAmount - plan.minAmount + 1)) + plan.minAmount;
-      const userCode = `User_${crypto.randomBytes(3).toString('hex').slice(0, 4)}****${crypto.randomBytes(3).toString('hex').slice(0, 4)}`;
+      // Create a mix of large and small investments
+      const isLarge = Math.random() > 0.5;
+      const amount = isLarge
+        ? Math.floor(Math.random() * (plan.maxAmount - (plan.maxAmount * 0.7) + 1)) + (plan.maxAmount * 0.7)  // Large: 70%-100% of max
+        : Math.floor(Math.random() * ((plan.minAmount * 2) - plan.minAmount + 1)) + plan.minAmount;          // Small: min to 2x min
+        
+      const userCode = `Jt7x${crypto.randomBytes(2).toString('hex').slice(0, 3)}***${crypto.randomBytes(2).toString('hex').slice(0, 3)}YrW4`;
+      const txId = `Ki7h7${crypto.randomBytes(2).toString('hex').slice(0, 3)}***${crypto.randomBytes(2).toString('hex').slice(0, 3)}Ji7y6`;
       
       return {
         id: crypto.randomBytes(8).toString('hex'),
@@ -5873,7 +5885,8 @@ app.get('/api/recent-investments', async (req, res) => {
         amount: amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
         plan: plan.name,
         timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000)).toISOString(),
-        status: 'Active'
+        status: 'Active',
+        displayText: `${userCode} invested ${amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} in the ${plan.name}. TX ID: ${txId}`
       };
     });
 
@@ -5893,7 +5906,38 @@ app.get('/api/recent-investments', async (req, res) => {
   }
 });
 
+// Popup Notification Endpoint (rate-limited to 7 per minute)
+app.get('/api/popup-notifications', async (req, res) => {
+  try {
+    // Get all recent activities
+    const [withdrawals, investments] = await Promise.all([
+      redis.get('recent-withdrawals').then(data => data ? JSON.parse(data) : []),
+      redis.get('recent-investments').then(data => data ? JSON.parse(data) : [])
+    ]);
 
+    // Combine and sort by timestamp (newest first)
+    const allActivities = [...withdrawals, ...investments]
+      .map(activity => ({
+        ...activity,
+        timestamp: new Date(activity.timestamp).getTime()
+      }))
+      .sort((a, b) => b.timestamp - a.timestamp);
+
+    // Select up to 7 most recent activities
+    const recentActivities = allActivities.slice(0, 7);
+
+    res.status(200).json({
+      status: 'success',
+      data: recentActivities.map(activity => activity.displayText)
+    });
+  } catch (err) {
+    console.error('Error fetching popup notifications:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch notifications'
+    });
+  }
+});
 
 
 
