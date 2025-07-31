@@ -4759,226 +4759,131 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-// Add these endpoints after your existing routes in server.js
+// Add these endpoints after all other routes but before error handlers
 
-// Recent Transactions Endpoints
-app.get('/api/recent-withdrawals', async (req, res) => {
-  try {
-    // Get recent withdrawals from cache if available
-    const cachedWithdrawals = await redis.get('recent-withdrawals');
-    if (cachedWithdrawals) {
-      return res.status(200).json({
-        status: 'success',
-        data: JSON.parse(cachedWithdrawals)
-      });
+// Recent Withdrawals Endpoint
+app.get('/api/transactions/recent-withdrawals', async (req, res) => {
+    try {
+        // Get random withdrawal from the database
+        const withdrawal = await Transaction.aggregate([
+            { $match: { type: 'withdrawal', status: 'completed' } },
+            { $sample: { size: 1 } },
+            { $lookup: {
+                from: 'users',
+                localField: 'user',
+                foreignField: '_id',
+                as: 'user'
+            }},
+            { $unwind: '$user' },
+            { $project: {
+                amount: 1,
+                method: 1,
+                reference: 1,
+                'user.email': 1
+            }}
+        ]);
+
+        if (!withdrawal || withdrawal.length === 0) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'No recent withdrawals found'
+            });
+        }
+
+        // Format the user email
+        const email = withdrawal[0].user.email;
+        const maskedEmail = email.substring(0, 4) + '***' + email.substring(email.length - 4);
+
+        // Format transaction ID
+        const txId = withdrawal[0].reference;
+        const maskedTxId = txId.substring(0, 4) + '•••' + txId.substring(txId.length - 4);
+
+        // Cache the response for 1 minute to prevent duplicates
+        const cacheKey = `recent-withdrawal:${withdrawal[0]._id}`;
+        await redis.set(cacheKey, '1', 'EX', 60);
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                user: maskedEmail,
+                amount: withdrawal[0].amount,
+                method: withdrawal[0].method,
+                transactionId: maskedTxId
+            }
+        });
+    } catch (err) {
+        console.error('Recent withdrawals error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching recent withdrawals'
+        });
     }
-
-    // Get actual recent withdrawals from database
-    const withdrawals = await Transaction.aggregate([
-      { $match: { type: 'withdrawal', status: 'completed' } },
-      { $sort: { createdAt: -1 } },
-      { $limit: 50 },
-      { $lookup: {
-          from: 'users',
-          localField: 'user',
-          foreignField: '_id',
-          as: 'user'
-        }
-      },
-      { $unwind: '$user' },
-      { $project: {
-          amount: 1,
-          method: 1,
-          reference: 1,
-          'user._id': 1,
-          'user.email': 1,
-          createdAt: 1
-        }
-      }
-    ]);
-
-    // Cache for 5 minutes
-    await redis.set('recent-withdrawals', JSON.stringify(withdrawals), 'EX', 300);
-
-    res.status(200).json({
-      status: 'success',
-      data: withdrawals
-    });
-  } catch (err) {
-    console.error('Error fetching recent withdrawals:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching recent withdrawals'
-    });
-  }
 });
 
-app.get('/api/recent-investments', async (req, res) => {
-  try {
-    // Get recent investments from cache if available
-    const cachedInvestments = await redis.get('recent-investments');
-    if (cachedInvestments) {
-      return res.status(200).json({
-        status: 'success',
-        data: JSON.parse(cachedInvestments)
-      });
+// Recent Investments Endpoint
+app.get('/api/transactions/recent-investments', async (req, res) => {
+    try {
+        // Get random investment from the database
+        const investment = await Investment.aggregate([
+            { $sample: { size: 1 } },
+            { $lookup: {
+                from: 'users',
+                localField: 'user',
+                foreignField: '_id',
+                as: 'user'
+            }},
+            { $unwind: '$user' },
+            { $lookup: {
+                from: 'plans',
+                localField: 'plan',
+                foreignField: '_id',
+                as: 'plan'
+            }},
+            { $unwind: '$plan' },
+            { $project: {
+                amount: 1,
+                'plan.name': 1,
+                'user.email': 1,
+                reference: { $concat: ["INV-", { $toString: "$_id" }] }
+            }}
+        ]);
+
+        if (!investment || investment.length === 0) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'No recent investments found'
+            });
+        }
+
+        // Format the user email
+        const email = investment[0].user.email;
+        const maskedEmail = email.substring(0, 4) + '***' + email.substring(email.length - 4);
+
+        // Format transaction ID
+        const txId = investment[0].reference;
+        const maskedTxId = txId.substring(0, 4) + '•••' + txId.substring(txId.length - 4);
+
+        // Cache the response for 1 minute to prevent duplicates
+        const cacheKey = `recent-investment:${investment[0]._id}`;
+        await redis.set(cacheKey, '1', 'EX', 60);
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                user: maskedEmail,
+                amount: investment[0].amount,
+                plan: investment[0].plan.name,
+                transactionId: maskedTxId
+            }
+        });
+    } catch (err) {
+        console.error('Recent investments error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching recent investments'
+        });
     }
-
-    // Get actual recent investments from database
-    const investments = await Investment.aggregate([
-      { $sort: { createdAt: -1 } },
-      { $limit: 50 },
-      { $lookup: {
-          from: 'users',
-          localField: 'user',
-          foreignField: '_id',
-          as: 'user'
-        }
-      },
-      { $lookup: {
-          from: 'plans',
-          localField: 'plan',
-          foreignField: '_id',
-          as: 'plan'
-        }
-      },
-      { $unwind: '$user' },
-      { $unwind: '$plan' },
-      { $project: {
-          amount: 1,
-          'plan.name': 1,
-          'user._id': 1,
-          'user.email': 1,
-          createdAt: 1,
-          reference: 1
-        }
-      }
-    ]);
-
-    // Cache for 5 minutes
-    await redis.set('recent-investments', JSON.stringify(investments), 'EX', 300);
-
-    res.status(200).json({
-      status: 'success',
-      data: investments
-    });
-  } catch (err) {
-    console.error('Error fetching recent investments:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching recent investments'
-    });
-  }
 });
-
-// Transaction Proof Generator
-app.get('/api/transaction-proof', async (req, res) => {
-  try {
-    // Check if we have a cached proof
-    const cachedProof = await redis.get('current-transaction-proof');
-    if (cachedProof) {
-      return res.status(200).json({
-        status: 'success',
-        data: JSON.parse(cachedProof)
-      });
-    }
-
-    // Determine if we should show withdrawal or investment (50/50 chance)
-    const showWithdrawal = Math.random() > 0.5;
-    
-    let transactionData;
-    
-    if (showWithdrawal) {
-      // Get recent withdrawals
-      const withdrawals = await Transaction.aggregate([
-        { $match: { type: 'withdrawal', status: 'completed' } },
-        { $sort: { createdAt: -1 } },
-        { $limit: 100 },
-        { $lookup: {
-            from: 'users',
-            localField: 'user',
-            foreignField: '_id',
-            as: 'user'
-          }
-        },
-        { $unwind: '$user' },
-        { $sample: { size: 1 } }
-      ]);
-
-      if (withdrawals.length > 0) {
-        const withdrawal = withdrawals[0];
-        transactionData = {
-          type: 'withdrawal',
-          amount: withdrawal.amount,
-          method: withdrawal.method,
-          userId: withdrawal.user._id,
-          userEmail: withdrawal.user.email,
-          transactionId: withdrawal.reference,
-          timestamp: withdrawal.createdAt
-        };
-      }
-    } else {
-      // Get recent investments
-      const investments = await Investment.aggregate([
-        { $sort: { createdAt: -1 } },
-        { $limit: 100 },
-        { $lookup: {
-            from: 'users',
-            localField: 'user',
-            foreignField: '_id',
-            as: 'user'
-          }
-        },
-        { $lookup: {
-            from: 'plans',
-            localField: 'plan',
-            foreignField: '_id',
-            as: 'plan'
-          }
-        },
-        { $unwind: '$user' },
-        { $unwind: '$plan' },
-        { $sample: { size: 1 } }
-      ]);
-
-      if (investments.length > 0) {
-        const investment = investments[0];
-        transactionData = {
-          type: 'investment',
-          amount: investment.amount,
-          plan: investment.plan.name,
-          userId: investment.user._id,
-          userEmail: investment.user.email,
-          transactionId: investment.reference,
-          timestamp: investment.createdAt
-        };
-      }
-    }
-
-    if (!transactionData) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'No recent transactions found'
-      });
-    }
-
-    // Cache for a random time between 5 sec and 3 min
-    const cacheTime = Math.floor(Math.random() * (180 - 5 + 1)) + 5;
-    await redis.set('current-transaction-proof', JSON.stringify(transactionData), 'EX', cacheTime);
-
-    res.status(200).json({
-      status: 'success',
-      data: transactionData
-    });
-  } catch (err) {
-    console.error('Error generating transaction proof:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while generating transaction proof'
-    });
-  }
-});
-
 
 
 
