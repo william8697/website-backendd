@@ -4759,94 +4759,92 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
+// Add these endpoints before the error handling middleware
+
 // Recent Transactions Endpoints
 app.get('/api/transactions/recent-withdrawals', async (req, res) => {
     try {
-        // Get recent completed withdrawals (last 24 hours)
-        const withdrawals = await Transaction.aggregate([
-            {
-                $match: {
-                    type: 'withdrawal',
-                    status: 'completed',
-                    createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
-                }
-            },
-            { $sample: { size: 1 } }, // Get one random withdrawal
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: 'user',
-                    foreignField: '_id',
-                    as: 'user'
-                }
-            },
-            { $unwind: '$user' },
-            {
-                $project: {
-                    _id: 0,
-                    amount: 1,
-                    method: 1,
-                    reference: 1,
-                    'user._id': 1,
-                    'user.firstName': 1,
-                    'user.lastName': 1
-                }
-            }
-        ]);
-
-        if (withdrawals.length === 0) {
-            return res.status(404).json({
+        // Check Redis cache first
+        const cachedWithdrawals = await redis.get('recent-withdrawals');
+        if (cachedWithdrawals) {
+            return res.status(200).json({
                 status: 'success',
-                data: null,
-                message: 'No recent withdrawals found'
+                data: JSON.parse(cachedWithdrawals)
             });
         }
 
-        // Format the withdrawal data
-        const withdrawal = withdrawals[0];
-        const userCode = `${withdrawal.user.firstName.substring(0, 3)}***${withdrawal.user.lastName.substring(withdrawal.user.lastName.length - 3)}`;
-        const txIdParts = withdrawal.reference.match(/.{1,4}/g) || [];
-        const maskedTxId = `${txIdParts[0]}•••${txIdParts[txIdParts.length - 1]}`;
+        // Get recent completed withdrawals (last 24 hours)
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        
+        const withdrawals = await Transaction.aggregate([
+            { 
+                $match: { 
+                    type: 'withdrawal',
+                    status: 'completed',
+                    createdAt: { $gte: twentyFourHoursAgo }
+                } 
+            },
+            { $sample: { size: 10 } }, // Get random 10 withdrawals
+            { 
+                $project: {
+                    _id: 0,
+                    userId: 1,
+                    amount: 1,
+                    method: 1,
+                    reference: 1,
+                    createdAt: 1
+                }
+            },
+            { $sort: { createdAt: -1 } }
+        ]);
+
+        // Get user details for these withdrawals
+        const populatedWithdrawals = await Promise.all(withdrawals.map(async withdrawal => {
+            const user = await User.findById(withdrawal.userId).select('email');
+            return {
+                ...withdrawal,
+                userEmail: user.email
+            };
+        }));
+
+        // Cache for 5 minutes
+        await redis.set('recent-withdrawals', JSON.stringify(populatedWithdrawals), 'EX', 300);
 
         res.status(200).json({
             status: 'success',
-            data: {
-                title: 'Withdrawal Alert',
-                message: `User ${userCode} has withdrawn $${withdrawal.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} via ${withdrawal.method === 'btc' ? 'Bitcoin' : 'Wire Transfer'}`,
-                transactionId: maskedTxId,
-                type: 'withdrawal',
-                timestamp: new Date()
-            }
+            data: populatedWithdrawals
         });
     } catch (err) {
-        console.error('Get recent withdrawals error:', err);
+        console.error('Error fetching recent withdrawals:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching recent withdrawals'
+            message: 'Failed to fetch recent withdrawals'
         });
     }
 });
 
 app.get('/api/transactions/recent-investments', async (req, res) => {
     try {
+        // Check Redis cache first
+        const cachedInvestments = await redis.get('recent-investments');
+        if (cachedInvestments) {
+            return res.status(200).json({
+                status: 'success',
+                data: JSON.parse(cachedInvestments)
+            });
+        }
+
         // Get recent investments (last 24 hours)
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        
         const investments = await Investment.aggregate([
-            {
-                $match: {
-                    createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
-                }
+            { 
+                $match: { 
+                    createdAt: { $gte: twentyFourHoursAgo }
+                } 
             },
-            { $sample: { size: 1 } }, // Get one random investment
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: 'user',
-                    foreignField: '_id',
-                    as: 'user'
-                }
-            },
-            { $unwind: '$user' },
-            {
+            { $sample: { size: 10 } }, // Get random 10 investments
+            { 
                 $lookup: {
                     from: 'plans',
                     localField: 'plan',
@@ -4855,48 +4853,40 @@ app.get('/api/transactions/recent-investments', async (req, res) => {
                 }
             },
             { $unwind: '$plan' },
-            {
+            { 
                 $project: {
                     _id: 0,
+                    userId: 1,
                     amount: 1,
-                    'plan.name': 1,
+                    planName: '$plan.name',
                     reference: 1,
-                    'user._id': 1,
-                    'user.firstName': 1,
-                    'user.lastName': 1
+                    createdAt: 1
                 }
-            }
+            },
+            { $sort: { createdAt: -1 } }
         ]);
 
-        if (investments.length === 0) {
-            return res.status(404).json({
-                status: 'success',
-                data: null,
-                message: 'No recent investments found'
-            });
-        }
+        // Get user details for these investments
+        const populatedInvestments = await Promise.all(investments.map(async investment => {
+            const user = await User.findById(investment.userId).select('email');
+            return {
+                ...investment,
+                userEmail: user.email
+            };
+        }));
 
-        // Format the investment data
-        const investment = investments[0];
-        const userCode = `${investment.user.firstName.substring(0, 3)}***${investment.user.lastName.substring(investment.user.lastName.length - 3)}`;
-        const txIdParts = investment.reference.match(/.{1,4}/g) || [];
-        const maskedTxId = `${txIdParts[0]}•••${txIdParts[txIdParts.length - 1]}`;
+        // Cache for 5 minutes
+        await redis.set('recent-investments', JSON.stringify(populatedInvestments), 'EX', 300);
 
         res.status(200).json({
             status: 'success',
-            data: {
-                title: '💼 New Investment Alert',
-                message: `User ${userCode} invested $${investment.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} into the ${investment.plan.name.toLowerCase()} plan`,
-                transactionId: maskedTxId,
-                type: 'investment',
-                timestamp: new Date()
-            }
+            data: populatedInvestments
         });
     } catch (err) {
-        console.error('Get recent investments error:', err);
+        console.error('Error fetching recent investments:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching recent investments'
+            message: 'Failed to fetch recent investments'
         });
     }
 });
