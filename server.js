@@ -5539,111 +5539,139 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-// Recent Withdrawals Endpoint - Keep exactly the same
-app.get('/api/transactions/recent-withdrawals', async (req, res) => {
-    try {
-        // Check Redis cache first
-        const cachedWithdrawals = await redis.get('recent-withdrawals');
-        if (cachedWithdrawals) {
-            return res.status(200).json({
-                status: 'success',
-                data: JSON.parse(cachedWithdrawals)
-            });
-        }
+// Redis Transaction Stream Service
+const TRANSACTION_STREAM_KEY = 'transactions:stream';
+const INVESTMENT_COLOR = '#00D395'; // Primary green
+const WITHDRAWAL_COLOR = '#FFB800'; // Gold/yellow
 
-        // Generate realistic withdrawal data
-        const withdrawals = Array.from({ length: 10 }, () => {
-            const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
-            const userId = 'User ' + crypto.randomBytes(3).toString('hex').toUpperCase();
-            const maskedUserId = userId.slice(0, 4) + '***' + userId.slice(-4);
-            const txId = 'Tx' + crypto.randomBytes(4).toString('hex').toUpperCase();
-            const maskedTxId = txId.slice(0, 4) + '•••' + txId.slice(-4);
-            const method = Math.random() > 0.5 ? 'BTC' : 'Wire Transfer';
-            
-            return {
-                type: 'withdrawal',
-                user: maskedUserId,
-                amount: amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
-                method: method,
-                txId: maskedTxId,
-                timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000))
-            };
-        });
+// Generate realistic transaction data
+async function generateTransaction() {
+  const types = ['investment', 'withdrawal'];
+  const type = types[Math.floor(Math.random() * types.length)];
+  
+  let amount, packageName, userId;
+  
+  if (type === 'investment') {
+    const plans = await Plan.find({ isActive: true }).lean();
+    const plan = plans[Math.floor(Math.random() * plans.length)];
+    amount = Math.floor(Math.random() * (plan.maxAmount - plan.minAmount + 1)) + plan.minAmount;
+    packageName = plan.name;
+  } else {
+    amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
+  }
+  
+  // Generate masked user ID
+  userId = 'user_' + crypto.randomBytes(3).toString('hex') + '****' + crypto.randomBytes(2).toString('hex');
+  
+  return {
+    type,
+    amount,
+    currency: 'USD',
+    timestamp: new Date().toISOString(),
+    userId,
+    ...(type === 'investment' && { packageName }),
+    method: type === 'withdrawal' ? ['btc', 'wire'][Math.floor(Math.random() * 2)] : undefined
+  };
+}
 
-        // Cache for 1 hour
-        await redis.set('recent-withdrawals', JSON.stringify(withdrawals), 'EX', 3600);
+// Add transaction to Redis stream
+async function addTransactionToStream() {
+  try {
+    const transaction = await generateTransaction();
+    await redis.xadd(TRANSACTION_STREAM_KEY, '*', 
+      'type', transaction.type,
+      'amount', transaction.amount,
+      'currency', transaction.currency,
+      'timestamp', transaction.timestamp,
+      'userId', transaction.userId,
+      ...(transaction.packageName ? ['packageName', transaction.packageName] : []),
+      ...(transaction.method ? ['method', transaction.method] : [])
+    );
+    
+    // Set random delay for next transaction (3s to 10 minutes)
+    const delay = Math.floor(Math.random() * (600000 - 3000 + 1)) + 3000;
+    setTimeout(addTransactionToStream, delay);
+  } catch (err) {
+    console.error('Error adding transaction to stream:', err);
+    // Retry after 30 seconds on error
+    setTimeout(addTransactionToStream, 30000);
+  }
+}
 
-        res.status(200).json({
-            status: 'success',
-            data: withdrawals
-        });
-    } catch (err) {
-        console.error('Error fetching recent withdrawals:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch recent withdrawals'
-        });
-    }
+// Start the transaction stream
+addTransactionToStream();
+
+// Recent Transactions Endpoint
+app.get('/api/transactions/recent', async (req, res) => {
+  try {
+    // Get last 50 transactions from stream
+    const transactions = await redis.xrevrange(TRANSACTION_STREAM_KEY, '+', '-', 'COUNT', 50);
+    
+    // Format transactions
+    const formatted = transactions.map(t => {
+      const transaction = {
+        id: t[0],
+        type: t[1][1],
+        amount: parseFloat(t[1][3]),
+        currency: t[1][5],
+        timestamp: t[1][7],
+        userId: t[1][9],
+        color: t[1][1] === 'investment' ? INVESTMENT_COLOR : WITHDRAWAL_COLOR
+      };
+      
+      // Add additional fields based on type
+      if (t[1][1] === 'investment') {
+        transaction.packageName = t[1][11];
+      } else {
+        transaction.method = t[1][11];
+      }
+      
+      return transaction;
+    });
+    
+    res.json({
+      status: 'success',
+      data: formatted
+    });
+  } catch (err) {
+    console.error('Error getting recent transactions:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to retrieve recent transactions'
+    });
+  }
 });
 
-// Recent Investments Endpoint - Keep exactly the same
-app.get('/api/transactions/recent-investments', async (req, res) => {
-    try {
-        // Check Redis cache first
-        const cachedInvestments = await redis.get('recent-investments');
-        if (cachedInvestments) {
-            return res.status(200).json({
-                status: 'success',
-                data: JSON.parse(cachedInvestments)
-            });
-        }
-
-        // Get plans from database to ensure valid amounts
-        const plans = await Plan.find({ isActive: true });
-        if (!plans || plans.length === 0) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'No investment plans found'
-            });
-        }
-
-        // Generate realistic investment data
-        const investments = Array.from({ length: 10 }, () => {
-            const plan = plans[Math.floor(Math.random() * plans.length)];
-            const amount = Math.floor(
-                Math.random() * (plan.maxAmount - plan.minAmount + 1) + plan.minAmount
-            );
-            const userId = 'User ' + crypto.randomBytes(3).toString('hex').toUpperCase();
-            const maskedUserId = userId.slice(0, 4) + '***' + userId.slice(-4);
-            const txId = 'Inv' + crypto.randomBytes(4).toString('hex').toUpperCase();
-            const maskedTxId = txId.slice(0, 4) + '•••' + txId.slice(-4);
-            
-            return {
-                type: 'investment',
-                user: maskedUserId,
-                amount: amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
-                plan: plan.name,
-                txId: maskedTxId,
-                timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000))
-            };
-        });
-
-        // Cache for 1 hour
-        await redis.set('recent-investments', JSON.stringify(investments), 'EX', 3600);
-
-        res.status(200).json({
-            status: 'success',
-            data: investments
-        });
-    } catch (err) {
-        console.error('Error fetching recent investments:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch recent investments'
-        });
+// Real-time Transaction Updates with Server-Sent Events
+app.get('/api/transactions/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  
+  // Initial connection message
+  res.write(`data: ${JSON.stringify({ type: 'connection', message: 'Connected to transaction stream' })}\n\n`);
+  
+  // Create Redis subscriber
+  const subscriber = redis.duplicate();
+  
+  // Subscribe to transaction updates
+  const listener = (channel, message) => {
+    if (channel === TRANSACTION_STREAM_KEY) {
+      res.write(`data: ${message}\n\n`);
     }
+  };
+  
+  subscriber.on('message', listener);
+  subscriber.subscribe(TRANSACTION_STREAM_KEY);
+  
+  // Handle client disconnect
+  req.on('close', () => {
+    subscriber.unsubscribe(TRANSACTION_STREAM_KEY);
+    subscriber.off('message', listener);
+    subscriber.quit();
+  });
 });
-
 
 
 
