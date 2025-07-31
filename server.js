@@ -4758,91 +4758,115 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-// Add these endpoints after your existing routes but before error handlers
+// Add these endpoints after your existing routes in server.js
 
-// Recent Withdrawals Endpoint
-app.get('/api/recent-withdrawals', async (req, res) => {
+/**
+ * @api {get} /api/recent-withdrawal Get recent withdrawal
+ * @apiName GetRecentWithdrawal
+ * @apiGroup Transactions
+ * @apiDescription Get a randomly generated recent withdrawal for display
+ */
+app.get('/api/recent-withdrawal', async (req, res) => {
     try {
-        // Generate realistic withdrawal data
+        // Generate random amount between $120 and $2,000,000
         const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
-        const userId = generateRandomUserId();
-        const transactionId = generateRandomTransactionId();
-        const method = ['Wire Transfer', 'BTC', 'Bank Transfer'][Math.floor(Math.random() * 3)];
         
-        const withdrawal = {
-            user: userId,
-            amount: amount,
-            method: method,
-            transactionId: transactionId,
-            timestamp: new Date()
-        };
-
+        // Format amount with commas
+        const formattedAmount = new Intl.NumberFormat('en-US', {
+            style: 'currency',
+            currency: 'USD'
+        }).format(amount);
+        
+        // Generate random user ID portion
+        const userIdPrefix = generateRandomString(4);
+        const userIdSuffix = generateRandomString(4);
+        const userId = `${userIdPrefix}***${userIdSuffix}`;
+        
+        // Generate random transaction ID
+        const txPrefix = generateRandomString(4);
+        const txSuffix = generateRandomString(5);
+        const transactionId = `${txPrefix}•••${txSuffix}`;
+        
+        // Randomly select method (BTC or Wire Transfer)
+        const methods = ['BTC', 'Wire Transfer'];
+        const method = methods[Math.floor(Math.random() * methods.length)];
+        
         res.status(200).json({
             status: 'success',
-            data: withdrawal
+            data: {
+                type: 'withdrawal',
+                amount: formattedAmount,
+                userId,
+                transactionId,
+                method,
+                timestamp: new Date()
+            }
         });
     } catch (err) {
-        console.error('Recent withdrawals error:', err);
+        console.error('Error generating withdrawal:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching recent withdrawals'
+            message: 'Failed to generate withdrawal data'
         });
     }
 });
 
-// Recent Investments Endpoint
-app.get('/api/recent-investments', async (req, res) => {
+/**
+ * @api {get} /api/recent-investment Get recent investment
+ * @apiName GetRecentInvestment
+ * @apiGroup Transactions
+ * @apiDescription Get a randomly generated recent investment for display
+ */
+app.get('/api/recent-investment', async (req, res) => {
     try {
-        // Generate realistic investment data
+        // Generate random amount between $100 and $1,000,000
+        const amount = Math.floor(Math.random() * (1000000 - 100 + 1)) + 100;
+        
+        // Format amount with commas
+        const formattedAmount = new Intl.NumberFormat('en-US', {
+            style: 'currency',
+            currency: 'USD'
+        }).format(amount);
+        
+        // Generate random user ID portion
+        const userIdPrefix = generateRandomString(4);
+        const userIdSuffix = generateRandomString(4);
+        const userId = `${userIdPrefix}***${userIdSuffix}`;
+        
+        // Generate random transaction ID
+        const txPrefix = generateRandomString(4);
+        const txSuffix = generateRandomString(5);
+        const transactionId = `${txPrefix}•••${txSuffix}`;
+        
+        // Get random plan from database
         const plans = await Plan.find({ isActive: true });
         const randomPlan = plans[Math.floor(Math.random() * plans.length)];
-        const amount = Math.floor(Math.random() * (1000000 - 100 + 1)) + 100;
-        const userId = generateRandomUserId();
-        const transactionId = generateRandomTransactionId();
         
-        const investment = {
-            user: userId,
-            amount: amount,
-            plan: randomPlan.name,
-            transactionId: transactionId,
-            timestamp: new Date()
-        };
-
         res.status(200).json({
             status: 'success',
-            data: investment
+            data: {
+                type: 'investment',
+                amount: formattedAmount,
+                userId,
+                transactionId,
+                plan: randomPlan ? randomPlan.name : 'Starter Plan',
+                timestamp: new Date()
+            }
         });
     } catch (err) {
-        console.error('Recent investments error:', err);
+        console.error('Error generating investment:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching recent investments'
+            message: 'Failed to generate investment data'
         });
     }
 });
 
-// Helper functions
-function generateRandomUserId() {
+// Helper function to generate random strings
+function generateRandomString(length) {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     let result = '';
-    for (let i = 0; i < 4; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    result += '***';
-    for (let i = 0; i < 4; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
-}
-
-function generateRandomTransactionId() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    for (let i = 0; i < 4; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    result += '•••';
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < length; i++) {
         result += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return result;
