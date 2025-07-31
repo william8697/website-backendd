@@ -5795,45 +5795,44 @@ app.post('/api/support/messages/:messageId/feedback', protect, [
 
 
 
-// Redis configuration for popups
-const POPUP_CHANNEL = 'transaction_popups';
-const RECENT_WITHDRAWALS_KEY = 'recent_withdrawals';
-const RECENT_INVESTMENTS_KEY = 'recent_investments';
 
-// Get recent withdrawals
-app.get('/api/transactions/recent-withdrawals', async (req, res) => {
+// Add these endpoints to your server.js file
+
+// Recent Withdrawals Endpoint
+app.get('/api/recent-withdrawals', async (req, res) => {
   try {
-    const cached = await redis.get(RECENT_WITHDRAWALS_KEY);
-    if (cached) {
+    // Get recent withdrawals from Redis cache if available
+    const cachedWithdrawals = await redis.get('recent-withdrawals');
+    if (cachedWithdrawals) {
       return res.status(200).json({
         status: 'success',
-        data: JSON.parse(cached)
+        data: JSON.parse(cachedWithdrawals)
       });
     }
 
-    const withdrawals = await Transaction.aggregate([
-      { $match: { type: 'withdrawal', status: 'completed' } },
-      { $sort: { createdAt: -1 } },
-      { $limit: 50 },
-      { 
-        $project: {
-          _id: 0,
-          id: '$_id',
-          user: { $concat: [
-            { $substr: ['$user', 0, 3] },
-            '****',
-            { $substr: ['$user', -3, 3] }
-          ]},
-          amount: 1,
-          method: 1,
-          currency: 1,
-          timestamp: '$createdAt'
-        }
-      }
-    ]);
-
-    await redis.set(RECENT_WITHDRAWALS_KEY, JSON.stringify(withdrawals), 'EX', 300);
+    // Get investment plans for validation
+    const plans = await Plan.find({ isActive: true });
     
+    // Generate realistic withdrawal data
+    const withdrawals = Array.from({ length: 50 }, () => {
+      const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
+      const userCode = `User_${crypto.randomBytes(3).toString('hex').slice(0, 4)}****${crypto.randomBytes(3).toString('hex').slice(0, 4)}`;
+      const methods = ['btc', 'wire'];
+      const method = methods[Math.floor(Math.random() * methods.length)];
+      
+      return {
+        id: crypto.randomBytes(8).toString('hex'),
+        user: userCode,
+        amount: amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
+        method: method === 'btc' ? 'BTC' : 'Wire Transfer',
+        timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000)).toISOString(),
+        status: 'Completed'
+      };
+    });
+
+    // Cache for 1 hour
+    await redis.set('recent-withdrawals', JSON.stringify(withdrawals), 'EX', 3600);
+
     res.status(200).json({
       status: 'success',
       data: withdrawals
@@ -5847,49 +5846,40 @@ app.get('/api/transactions/recent-withdrawals', async (req, res) => {
   }
 });
 
-// Get recent investments
-app.get('/api/transactions/recent-investments', async (req, res) => {
+// Recent Investments Endpoint
+app.get('/api/recent-investments', async (req, res) => {
   try {
-    const cached = await redis.get(RECENT_INVESTMENTS_KEY);
-    if (cached) {
+    // Get recent investments from Redis cache if available
+    const cachedInvestments = await redis.get('recent-investments');
+    if (cachedInvestments) {
       return res.status(200).json({
         status: 'success',
-        data: JSON.parse(cached)
+        data: JSON.parse(cachedInvestments)
       });
     }
 
-    const investments = await Investment.aggregate([
-      { $match: { status: 'active' } },
-      { $sort: { createdAt: -1 } },
-      { $limit: 50 },
-      { 
-        $lookup: {
-          from: 'plans',
-          localField: 'plan',
-          foreignField: '_id',
-          as: 'plan'
-        }
-      },
-      { $unwind: '$plan' },
-      {
-        $project: {
-          _id: 0,
-          id: '$_id',
-          user: { $concat: [
-            { $substr: ['$user', 0, 3] },
-            '****',
-            { $substr: ['$user', -3, 3] }
-          ]},
-          amount: 1,
-          planName: '$plan.name',
-          expectedReturn: 1,
-          timestamp: '$createdAt'
-        }
-      }
-    ]);
-
-    await redis.set(RECENT_INVESTMENTS_KEY, JSON.stringify(investments), 'EX', 300);
+    // Get investment plans for validation
+    const plans = await Plan.find({ isActive: true });
     
+    // Generate realistic investment data within plan limits
+    const investments = Array.from({ length: 50 }, () => {
+      const plan = plans[Math.floor(Math.random() * plans.length)];
+      const amount = Math.floor(Math.random() * (plan.maxAmount - plan.minAmount + 1)) + plan.minAmount;
+      const userCode = `User_${crypto.randomBytes(3).toString('hex').slice(0, 4)}****${crypto.randomBytes(3).toString('hex').slice(0, 4)}`;
+      
+      return {
+        id: crypto.randomBytes(8).toString('hex'),
+        user: userCode,
+        amount: amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
+        plan: plan.name,
+        timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000)).toISOString(),
+        status: 'Active'
+      };
+    });
+
+    // Cache for 1 hour
+    await redis.set('recent-investments', JSON.stringify(investments), 'EX', 3600);
+
     res.status(200).json({
       status: 'success',
       data: investments
@@ -5903,140 +5893,8 @@ app.get('/api/transactions/recent-investments', async (req, res) => {
   }
 });
 
-// SSE endpoint for live transaction updates
-app.get('/api/transactions/stream', (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
 
-  const sendEvent = (type, data) => {
-    res.write(`event: ${type}\n`);
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
 
-  // Initial data
-  Promise.all([
-    Transaction.find({ type: 'withdrawal', status: 'completed' })
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .lean(),
-    Investment.find({ status: 'active' })
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .populate('plan')
-      .lean()
-  ]).then(([withdrawals, investments]) => {
-    sendEvent('init', { withdrawals, investments });
-  });
-
-  // Redis subscriber for real-time updates
-  const subscriber = redis.duplicate();
-  subscriber.subscribe(POPUP_CHANNEL, (err) => {
-    if (err) console.error('Failed to subscribe:', err);
-  });
-
-  subscriber.on('message', (channel, message) => {
-    if (channel === POPUP_CHANNEL) {
-      const data = JSON.parse(message);
-      sendEvent(data.type, data.transaction);
-    }
-  });
-
-  req.on('close', () => {
-    subscriber.unsubscribe();
-    subscriber.quit();
-  });
-});
-
-// Background worker to generate popup events
-setInterval(async () => {
-  try {
-    const shouldShowPopup = Math.random() > 0.3; // 70% chance to show a popup
-    if (!shouldShowPopup) return;
-
-    const popupType = Math.random() > 0.5 ? 'withdrawal' : 'investment';
-    const delay = Math.floor(Math.random() * (10 * 60 * 1000 - 3 * 1000) + 3 * 1000);
-
-    setTimeout(async () => {
-      try {
-        if (popupType === 'withdrawal') {
-          const withdrawals = await Transaction.aggregate([
-            { $match: { type: 'withdrawal', status: 'completed' } },
-            { $sample: { size: 1 } },
-            {
-              $project: {
-                user: { $concat: [
-                  { $substr: ['$user', 0, 3] },
-                  '****',
-                  { $substr: ['$user', -3, 3] }
-                ]},
-                amount: 1,
-                method: 1,
-                currency: 1,
-                timestamp: '$createdAt'
-              }
-            }
-          ]);
-
-          if (withdrawals.length > 0) {
-            const withdrawal = withdrawals[0];
-            // Ensure amount is within range
-            withdrawal.amount = Math.min(Math.max(withdrawal.amount, 120), 2000000);
-            redis.publish(POPUP_CHANNEL, JSON.stringify({
-              type: 'withdrawal',
-              transaction: withdrawal
-            }));
-          }
-        } else {
-          const investments = await Investment.aggregate([
-            { $match: { status: 'active' } },
-            { $sample: { size: 1 } },
-            { 
-              $lookup: {
-                from: 'plans',
-                localField: 'plan',
-                foreignField: '_id',
-                as: 'plan'
-              }
-            },
-            { $unwind: '$plan' },
-            {
-              $project: {
-                user: { $concat: [
-                  { $substr: ['$user', 0, 3] },
-                  '****',
-                  { $substr: ['$user', -3, 3] }
-                ]},
-                amount: 1,
-                planName: '$plan.name',
-                expectedReturn: 1,
-                timestamp: '$createdAt'
-              }
-            }
-          ]);
-
-          if (investments.length > 0) {
-            const investment = investments[0];
-            // Ensure amount is within plan limits
-            const plan = await Plan.findById(investment.plan);
-            if (plan) {
-              investment.amount = Math.min(Math.max(investment.amount, plan.minAmount), plan.maxAmount);
-              redis.publish(POPUP_CHANNEL, JSON.stringify({
-                type: 'investment',
-                transaction: investment
-              }));
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Error generating popup:', err);
-      }
-    }, delay);
-  } catch (err) {
-    console.error('Popup interval error:', err);
-  }
-}, 30000); // Check every 30 seconds
 
 
 
