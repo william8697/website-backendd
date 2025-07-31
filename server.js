@@ -4759,7 +4759,7 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-// Add these endpoints before the error handling middleware
+// Add these endpoints after your existing routes in server.js
 
 // Recent Transactions Endpoints
 app.get('/api/transactions/recent-withdrawals', async (req, res) => {
@@ -4773,46 +4773,35 @@ app.get('/api/transactions/recent-withdrawals', async (req, res) => {
             });
         }
 
-        // Get recent completed withdrawals (last 24 hours)
-        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        
+        // Get recent completed withdrawals
         const withdrawals = await Transaction.aggregate([
-            { 
-                $match: { 
-                    type: 'withdrawal',
-                    status: 'completed',
-                    createdAt: { $gte: twentyFourHoursAgo }
-                } 
-            },
-            { $sample: { size: 10 } }, // Get random 10 withdrawals
-            { 
-                $project: {
-                    _id: 0,
-                    userId: 1,
-                    amount: 1,
-                    method: 1,
-                    reference: 1,
-                    createdAt: 1
-                }
-            },
-            { $sort: { createdAt: -1 } }
+            { $match: { type: 'withdrawal', status: 'completed' } },
+            { $sort: { createdAt: -1 } },
+            { $limit: 50 },
+            { $lookup: {
+                from: 'users',
+                localField: 'user',
+                foreignField: '_id',
+                as: 'user'
+            }},
+            { $unwind: '$user' },
+            { $project: {
+                amount: 1,
+                method: 1,
+                reference: 1,
+                createdAt: 1,
+                'user.firstName': 1,
+                'user.lastName': 1,
+                'user.email': 1
+            }}
         ]);
 
-        // Get user details for these withdrawals
-        const populatedWithdrawals = await Promise.all(withdrawals.map(async withdrawal => {
-            const user = await User.findById(withdrawal.userId).select('email');
-            return {
-                ...withdrawal,
-                userEmail: user.email
-            };
-        }));
-
         // Cache for 5 minutes
-        await redis.set('recent-withdrawals', JSON.stringify(populatedWithdrawals), 'EX', 300);
+        await redis.set('recent-withdrawals', JSON.stringify(withdrawals), 'EX', 300);
 
         res.status(200).json({
             status: 'success',
-            data: populatedWithdrawals
+            data: withdrawals
         });
     } catch (err) {
         console.error('Error fetching recent withdrawals:', err);
@@ -4834,59 +4823,152 @@ app.get('/api/transactions/recent-investments', async (req, res) => {
             });
         }
 
-        // Get recent investments (last 24 hours)
-        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        
+        // Get recent investments with plan details
         const investments = await Investment.aggregate([
-            { 
-                $match: { 
-                    createdAt: { $gte: twentyFourHoursAgo }
-                } 
-            },
-            { $sample: { size: 10 } }, // Get random 10 investments
-            { 
-                $lookup: {
-                    from: 'plans',
-                    localField: 'plan',
-                    foreignField: '_id',
-                    as: 'plan'
-                }
-            },
+            { $sort: { createdAt: -1 } },
+            { $limit: 50 },
+            { $lookup: {
+                from: 'users',
+                localField: 'user',
+                foreignField: '_id',
+                as: 'user'
+            }},
+            { $lookup: {
+                from: 'plans',
+                localField: 'plan',
+                foreignField: '_id',
+                as: 'plan'
+            }},
+            { $unwind: '$user' },
             { $unwind: '$plan' },
-            { 
-                $project: {
-                    _id: 0,
-                    userId: 1,
-                    amount: 1,
-                    planName: '$plan.name',
-                    reference: 1,
-                    createdAt: 1
-                }
-            },
-            { $sort: { createdAt: -1 } }
+            { $project: {
+                amount: 1,
+                createdAt: 1,
+                reference: 1,
+                'user.firstName': 1,
+                'user.lastName': 1,
+                'user.email': 1,
+                'plan.name': 1
+            }}
         ]);
 
-        // Get user details for these investments
-        const populatedInvestments = await Promise.all(investments.map(async investment => {
-            const user = await User.findById(investment.userId).select('email');
-            return {
-                ...investment,
-                userEmail: user.email
-            };
-        }));
-
         // Cache for 5 minutes
-        await redis.set('recent-investments', JSON.stringify(populatedInvestments), 'EX', 300);
+        await redis.set('recent-investments', JSON.stringify(investments), 'EX', 300);
 
         res.status(200).json({
             status: 'success',
-            data: populatedInvestments
+            data: investments
         });
     } catch (err) {
         console.error('Error fetching recent investments:', err);
         res.status(500).json({
             status: 'error',
             message: 'Failed to fetch recent investments'
+        });
+    }
+});
+
+// Generate random transaction for demo purposes
+app.get('/api/transactions/generate-random', async (req, res) => {
+    try {
+        // Get all active plans
+        const plans = await Plan.find({ isActive: true });
+        
+        // Generate random transaction type (withdrawal or investment)
+        const type = Math.random() > 0.5 ? 'withdrawal' : 'investment';
+        
+        if (type === 'withdrawal') {
+            // Generate random withdrawal
+            const methods = ['btc', 'bank'];
+            const method = methods[Math.floor(Math.random() * methods.length)];
+            const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
+            
+            // Get random user
+            const users = await User.aggregate([{ $sample: { size: 1 } }]);
+            const user = users[0];
+            
+            // Create transaction reference
+            const reference = `WTH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+            
+            // Create transaction
+            const transaction = await Transaction.create({
+                user: user._id,
+                type: 'withdrawal',
+                amount,
+                currency: 'USD',
+                status: 'completed',
+                method,
+                reference,
+                netAmount: amount,
+                details: `Withdrawal of $${amount} via ${method === 'btc' ? 'BTC' : 'Wire Transfer'}`,
+                processedAt: new Date()
+            });
+            
+            // Invalidate cache
+            await redis.del('recent-withdrawals');
+            
+            res.status(201).json({
+                status: 'success',
+                data: {
+                    type: 'withdrawal',
+                    transaction
+                }
+            });
+        } else {
+            // Generate random investment
+            const plan = plans[Math.floor(Math.random() * plans.length)];
+            const amount = Math.floor(Math.random() * (plan.maxAmount - plan.minAmount + 1)) + plan.minAmount;
+            
+            // Get random user
+            const users = await User.aggregate([{ $sample: { size: 1 } }]);
+            const user = users[0];
+            
+            // Create transaction reference
+            const reference = `INV-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+            
+            // Create investment
+            const endDate = new Date(Date.now() + plan.duration * 60 * 60 * 1000);
+            const expectedReturn = amount + (amount * plan.percentage / 100);
+            
+            const investment = await Investment.create({
+                user: user._id,
+                plan: plan._id,
+                amount,
+                expectedReturn,
+                startDate: new Date(),
+                endDate,
+                status: 'active'
+            });
+            
+            // Create transaction record
+            await Transaction.create({
+                user: user._id,
+                type: 'investment',
+                amount,
+                currency: 'USD',
+                status: 'completed',
+                method: 'internal',
+                reference,
+                netAmount: amount,
+                details: `Investment of $${amount} in ${plan.name} (Expected return: $${expectedReturn.toFixed(2)})`
+            });
+            
+            // Invalidate cache
+            await redis.del('recent-investments');
+            
+            res.status(201).json({
+                status: 'success',
+                data: {
+                    type: 'investment',
+                    investment
+                }
+            });
+        }
+    } catch (err) {
+        console.error('Error generating random transaction:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to generate random transaction'
         });
     }
 });
