@@ -601,140 +601,6 @@ NewsletterSubscriberSchema.index({ isActive: 1 });
 
 const NewsletterSubscriber = mongoose.model('NewsletterSubscriber', NewsletterSubscriberSchema);
 
-// Add to your existing models section (after NewsletterSubscriberSchema)
-
-const SupportMessageSchema = new mongoose.Schema({
-  conversationId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'SupportConversation',
-    required: true,
-    index: true
-  },
-  sender: {
-    type: mongoose.Schema.Types.ObjectId,
-    refPath: 'senderModel',
-    required: true
-  },
-  senderModel: {
-    type: String,
-    required: true,
-    enum: ['User', 'Admin']
-  },
-  content: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  attachments: [{
-    url: String,
-    name: String,
-    type: String,
-    size: Number
-  }],
-  metadata: {
-    isAI: {
-      type: Boolean,
-      default: false
-    },
-    aiConfidence: {
-      type: Number,
-      min: 0,
-      max: 1
-    },
-    suggestedResponse: {
-      type: String,
-      trim: true
-    }
-  }
-}, {
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
-
-const SupportConversationSchema = new mongoose.Schema({
-  user: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
-    index: true
-  },
-  agent: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Admin',
-    index: true
-  },
-  status: {
-    type: String,
-    enum: ['open', 'waiting', 'active', 'resolved', 'closed'],
-    default: 'open',
-    index: true
-  },
-  subject: {
-    type: String,
-    trim: true
-  },
-  category: {
-    type: String,
-    enum: ['general', 'account', 'investment', 'withdrawal', 'kyc', 'technical', 'other'],
-    default: 'general',
-    index: true
-  },
-  priority: {
-    type: String,
-    enum: ['low', 'medium', 'high', 'critical'],
-    default: 'medium',
-    index: true
-  },
-  lastMessageAt: {
-    type: Date,
-    index: true
-  },
-  resolvedAt: {
-    type: Date
-  },
-  aiHandoff: {
-    initiated: {
-      type: Boolean,
-      default: false
-    },
-    reason: {
-      type: String,
-      trim: true
-    },
-    timestamp: {
-      type: Date
-    }
-  },
-  rating: {
-    score: {
-      type: Number,
-      min: 1,
-      max: 5
-    },
-    feedback: {
-      type: String,
-      trim: true
-    }
-  }
-}, {
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
-
-SupportConversationSchema.virtual('messages', {
-  ref: 'SupportMessage',
-  localField: '_id',
-  foreignField: 'conversationId'
-});
-
-SupportConversationSchema.index({ user: 1, status: 1 });
-SupportConversationSchema.index({ agent: 1, status: 1 });
-SupportConversationSchema.index({ lastMessageAt: -1 });
-
-const SupportMessage = mongoose.model('SupportMessage', SupportMessageSchema);
-const SupportConversation = mongoose.model('SupportConversation', SupportConversationSchema);
 
 
 module.exports = {
@@ -865,112 +731,6 @@ const verifyTOTP = (token, secret) => {
 };
 
 
-// server.js - Updated OpenAI Implementation
-require('dotenv').config();
-const { OpenAI } = require('openai');
-
-// Initialize OpenAI with correct modern syntax
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
-// Andrea AI Assistant Configuration
-const andreaConfig = {
-  identity: {
-    name: "Andrea",
-    role: "BitHash Support Assistant",
-    tone: "friendly and professional",
-    escalationPhrase: "Let me connect you with a specialist who can better assist with this."
-  },
-  knowledgeDomains: [
-    "Account Settings & KYC Verification",
-    "Deposits & Withdrawals",
-    "Investment Plans",
-    "Security Features"
-  ],
-  limitations: [
-    "Cannot process password resets",
-    "Cannot access full account numbers",
-    "Cannot bypass security protocols"
-  ]
-};
-
-// Generate AI Response with Andrea's personality
-async function generateAIResponse(userInput, conversationHistory = []) {
-  try {
-    const messages = [
-      {
-        role: "system",
-        content: `You are ${andreaConfig.identity.name}, a ${andreaConfig.identity.tone} AI assistant for BitHash. 
-        Your role is to help users with: ${andreaConfig.knowledgeDomains.join(', ')}.
-        Follow these rules:
-        1. Be concise yet helpful
-        2. Never ask for sensitive information
-        3. Escalate using this phrase when needed: "${andreaConfig.identity.escalationPhrase}"
-        4. Admit when you don't know something
-        5. Current BTC price: $${getCurrentBTCPrice()}`
-      },
-      ...conversationHistory,
-      { role: "user", content: userInput }
-    ];
-
-    const response = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: messages,
-      temperature: 0.7,
-      max_tokens: 300
-    });
-
-    return {
-      text: response.choices[0].message.content,
-      shouldEscalate: await checkForEscalation(userInput, response.choices[0].message.content)
-    };
-  } catch (error) {
-    console.error("Andrea AI Error:", error);
-    return {
-      text: "I'm having trouble connecting to our systems. Please try again or contact live support.",
-      shouldEscalate: true
-    };
-  }
-}
-
-// Escalation Check Function
-async function checkForEscalation(userInput, aiResponse) {
-  try {
-    const result = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [
-        {
-          role: "system",
-          content: `Analyze if this conversation should escalate to a human agent. 
-          Consider: user frustration, complexity, or need for account access.
-          Respond ONLY with "YES" or "NO".`
-        },
-        {
-          role: "user",
-          content: `User: "${userInput}"\nAI: "${aiResponse}"\n\nShould escalate?`
-        }
-      ],
-      temperature: 0.3,
-      max_tokens: 1
-    });
-
-    return result.choices[0].message.content.trim().toUpperCase() === 'YES';
-  } catch (error) {
-    console.error("Escalation Check Error:", error);
-    return true; // Default to escalation on error
-  }
-}
-
-// Helper function - replace with actual BTC price API call
-function getCurrentBTCPrice() {
-  return "118,396.00"; // Example price, implement live fetching
-}
-
-module.exports = {
-  generateAIResponse,
-  checkForEscalation
-};
 
 // Initialize default admin and plans
 const initializeAdmin = async () => {
@@ -5118,10 +4878,637 @@ app.get('/api/transactions/recent-investments', async (req, res) => {
 
 
 
-// Support Routes
-app.post('/api/support/conversations', protect, [
-  body('subject').optional().trim().escape(),
-  body('category').isIn(['general', 'account', 'investment', 'withdrawal', 'kyc', 'technical', 'other']).withMessage('Invalid category'),
+// Add these models to your existing models section
+const ChatSchema = new mongoose.Schema({
+  user: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User', 
+    required: true,
+    index: true
+  },
+  sessionId: {
+    type: String,
+    required: true,
+    unique: true,
+    index: true
+  },
+  status: {
+    type: String,
+    enum: ['active', 'waiting', 'closed', 'transferred'],
+    default: 'active'
+  },
+  agent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin'
+  },
+  messages: [{
+    sender: {
+      type: String,
+      enum: ['user', 'agent', 'ai'],
+      required: true
+    },
+    content: {
+      type: String,
+      required: true
+    },
+    timestamp: {
+      type: Date,
+      default: Date.now
+    },
+    metadata: {
+      type: mongoose.Schema.Types.Mixed
+    }
+  }],
+  startedAt: {
+    type: Date,
+    default: Date.now
+  },
+  endedAt: {
+    type: Date
+  },
+  transferReason: {
+    type: String
+  },
+  aiUsed: {
+    type: Boolean,
+    default: false
+  },
+  satisfactionRating: {
+    type: Number,
+    min: 1,
+    max: 5
+  }
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+ChatSchema.index({ user: 1 });
+ChatSchema.index({ sessionId: 1 });
+ChatSchema.index({ status: 1 });
+ChatSchema.index({ 'messages.timestamp': 1 });
+
+const Chat = mongoose.model('Chat', ChatSchema);
+
+const AgentAvailabilitySchema = new mongoose.Schema({
+  admin: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    required: true,
+    unique: true
+  },
+  status: {
+    type: String,
+    enum: ['online', 'offline', 'away', 'busy'],
+    default: 'offline'
+  },
+  currentChats: {
+    type: Number,
+    default: 0
+  },
+  maxChats: {
+    type: Number,
+    default: 5
+  },
+  lastActive: {
+    type: Date,
+    default: Date.now
+  },
+  skills: [{
+    type: String,
+    enum: ['general', 'kyc', 'payments', 'technical', 'account']
+  }]
+}, {
+  timestamps: true
+});
+
+AgentAvailabilitySchema.index({ admin: 1 });
+AgentAvailabilitySchema.index({ status: 1 });
+AgentAvailabilitySchema.index({ currentChats: 1 });
+
+const AgentAvailability = mongoose.model('AgentAvailability', AgentAvailabilitySchema);
+
+const AITrainingSchema = new mongoose.Schema({
+  input: {
+    type: String,
+    required: true
+  },
+  response: {
+    type: String,
+    required: true
+  },
+  correctedResponse: {
+    type: String
+  },
+  isCorrect: {
+    type: Boolean
+  },
+  metadata: {
+    type: mongoose.Schema.Types.Mixed
+  },
+  chatSession: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Chat'
+  },
+  trainedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    refPath: 'trainedByModel'
+  },
+  trainedByModel: {
+    type: String,
+    enum: ['Admin', 'User']
+  }
+}, {
+  timestamps: true
+});
+
+AITrainingSchema.index({ input: 'text', response: 'text' });
+AITrainingSchema.index({ chatSession: 1 });
+AITrainingSchema.index({ trainedBy: 1 });
+
+const AITraining = mongoose.model('AITraining', AITrainingSchema);
+
+// Add to your exports
+module.exports.Chat = Chat;
+module.exports.AgentAvailability = AgentAvailability;
+module.exports.AITraining = AITraining;
+
+// OpenAI integration setup
+const { Configuration, OpenAIApi } = require('openai');
+const openaiConfig = new Configuration({
+  apiKey: process.env.OPENAI_API_KEY
+});
+const openai = new OpenAIApi(openaiConfig);
+
+// AI Training Prompt from your requirements
+const aiSystemPrompt = `
+You are Andrea, BitHash's AI support assistant providing secure, professional live chat support. 
+
+Behavior Guidelines:
+- Opening message: "Hello! I'm Andrea, here to assist with your BitHash account. How can I help you today?"
+- Default tone: friendly but professional
+- For sensitive topics, say: "Let me connect you to a live agent for further help. One moment!"
+- Closing phrase: "Is there anything else I can help with?"
+
+Knowledge Base:
+Account Support:
+- KYC: Verification typically takes 24-48 hours. I can check your submission status if you provide your ticket number.
+- 2FA: For security, two-factor authentication is required. You can enable it in your account settings.
+- Password reset: Let's reset your password. First, please verify your email address.
+
+Transactions:
+- Deposits: BTC deposits require 1-3 network confirmations (typically 10-30 minutes).
+- Withdrawals: Withdrawals are processed within 4 hours after security review.
+
+Security:
+- Never share your private keys or passwords with anyone.
+- Always verify website URLs before entering credentials.
+
+Security Protocols:
+- Never request: passwords, private keys, or seed phrases
+- Verification methods:
+  - "May I confirm the email associated with your account?"
+  - "For security, could you verify the last 4 digits of your registered phone number?"
+
+Escalation Triggers:
+- Keywords: fraud, hacked, legal, sue, manager
+- High sentiment cases should be escalated
+
+Important Rules:
+- Always maintain professional tone
+- Never provide financial advice
+- Always verify user identity before discussing account details
+- Escalate complex or sensitive issues to human agents
+- Be concise but thorough in responses
+`;
+
+// Chat endpoints
+app.post('/api/chat/start', protect, async (req, res) => {
+  try {
+    // Check for existing active chat
+    const existingChat = await Chat.findOne({
+      user: req.user.id,
+      status: { $in: ['active', 'waiting'] }
+    });
+
+    if (existingChat) {
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          chat: existingChat,
+          isNew: false
+        }
+      });
+    }
+
+    // Create new chat session
+    const sessionId = crypto.randomBytes(16).toString('hex');
+    const chat = await Chat.create({
+      user: req.user.id,
+      sessionId,
+      status: 'active',
+      aiUsed: true,
+      messages: [{
+        sender: 'ai',
+        content: "Hello! I'm Andrea, here to assist with your BitHash account. How can I help you today?",
+        metadata: {
+          isSystem: true
+        }
+      }]
+    });
+
+    res.status(201).json({
+      status: 'success',
+      data: {
+        chat,
+        isNew: true
+      }
+    });
+
+    await logActivity('start-chat', 'chat', chat._id, req.user._id, 'User', req);
+  } catch (err) {
+    console.error('Start chat error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while starting chat'
+    });
+  }
+});
+
+app.post('/api/chat/message', protect, [
+  body('message').trim().notEmpty().withMessage('Message is required').escape(),
+  body('sessionId').notEmpty().withMessage('Session ID is required')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { message, sessionId } = req.body;
+    const user = await User.findById(req.user.id);
+
+    // Find active chat session
+    const chat = await Chat.findOne({
+      sessionId,
+      user: req.user.id,
+      status: { $in: ['active', 'waiting'] }
+    });
+
+    if (!chat) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Active chat session not found'
+      });
+    }
+
+    // Add user message to chat
+    chat.messages.push({
+      sender: 'user',
+      content: message,
+      metadata: {
+        timestamp: new Date()
+      }
+    });
+
+    // Check if chat is with AI or agent
+    if (chat.status === 'active' && chat.aiUsed && !chat.agent) {
+      // AI response
+      try {
+        const completion = await openai.createChatCompletion({
+          model: "gpt-4",
+          messages: [
+            {
+              role: "system",
+              content: aiSystemPrompt
+            },
+            ...chat.messages.map(msg => ({
+              role: msg.sender === 'user' ? 'user' : 'assistant',
+              content: msg.content
+            }))
+          ],
+          temperature: 0.7,
+          max_tokens: 256
+        });
+
+        const aiResponse = completion.data.choices[0].message.content;
+
+        // Check if response contains escalation triggers
+        const escalationKeywords = ['fraud', 'hacked', 'legal', 'sue', 'manager'];
+        const shouldEscalate = escalationKeywords.some(keyword => 
+          message.toLowerCase().includes(keyword) || aiResponse.toLowerCase().includes('connect you to a live agent')
+        );
+
+        if (shouldEscalate) {
+          // Transfer to agent
+          const availableAgent = await AgentAvailability.findOne({
+            status: 'online',
+            currentChats: { $lt: '$maxChats' }
+          }).sort({ currentChats: 1 });
+
+          if (availableAgent) {
+            chat.status = 'transferred';
+            chat.agent = availableAgent.admin;
+            chat.transferReason = 'Escalation from AI';
+            chat.messages.push({
+              sender: 'ai',
+              content: "I'm connecting you to a live agent who can better assist with this matter. Please hold...",
+              metadata: {
+                isTransfer: true
+              }
+            });
+
+            // Update agent's current chats
+            availableAgent.currentChats += 1;
+            await availableAgent.save();
+
+            // Notify agent via WebSocket (implementation depends on your setup)
+            // notifyAgent(availableAgent.admin, chat._id);
+          } else {
+            chat.status = 'waiting';
+            chat.messages.push({
+              sender: 'ai',
+              content: "All our agents are currently busy. Your request has been queued and an agent will be with you shortly.",
+              metadata: {
+                isWaiting: true
+              }
+            });
+          }
+        } else {
+          // Add AI response to chat
+          chat.messages.push({
+            sender: 'ai',
+            content: aiResponse,
+            metadata: {
+              isAI: true
+            }
+          });
+        }
+      } catch (aiError) {
+        console.error('AI error:', aiError);
+        chat.messages.push({
+          sender: 'ai',
+          content: "I'm having trouble processing your request. Let me connect you to a live agent.",
+          metadata: {
+            isError: true
+          }
+        });
+        chat.status = 'waiting';
+      }
+    }
+
+    await chat.save();
+
+    // Save AI training data if applicable
+    if (chat.aiUsed && chat.messages.length > 2) {
+      const lastUserMessage = chat.messages[chat.messages.length - 2].content;
+      const lastAiResponse = chat.messages[chat.messages.length - 1].content;
+      
+      await AITraining.create({
+        input: lastUserMessage,
+        response: lastAiResponse,
+        chatSession: chat._id,
+        trainedBy: req.user._id,
+        trainedByModel: 'User'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        chat
+      }
+    });
+
+    await logActivity('send-chat-message', 'chat', chat._id, req.user._id, 'User', req, { message });
+  } catch (err) {
+    console.error('Send chat message error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while sending chat message'
+    });
+  }
+});
+
+app.post('/api/chat/end', protect, [
+  body('sessionId').notEmpty().withMessage('Session ID is required')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { sessionId, rating } = req.body;
+
+    const chat = await Chat.findOneAndUpdate(
+      {
+        sessionId,
+        user: req.user.id,
+        status: { $in: ['active', 'waiting', 'transferred'] }
+      },
+      {
+        status: 'closed',
+        endedAt: new Date(),
+        satisfactionRating: rating
+      },
+      { new: true }
+    );
+
+    if (!chat) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Active chat session not found'
+      });
+    }
+
+    // If chat was with an agent, update their availability
+    if (chat.agent) {
+      await AgentAvailability.updateOne(
+        { admin: chat.agent },
+        { $inc: { currentChats: -1 } }
+      );
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Chat session ended'
+    });
+
+    await logActivity('end-chat', 'chat', chat._id, req.user._id, 'User', req);
+  } catch (err) {
+    console.error('End chat error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while ending chat'
+    });
+  }
+});
+
+// Admin chat endpoints
+app.get('/api/admin/chat/availability', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const availability = await AgentAvailability.findOne({ admin: req.admin.id });
+    
+    if (!availability) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Availability record not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: availability
+    });
+  } catch (err) {
+    console.error('Get availability error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching availability'
+    });
+  }
+});
+
+app.post('/api/admin/chat/availability', adminProtect, restrictTo('super', 'support'), [
+  body('status').isIn(['online', 'offline', 'away', 'busy']).withMessage('Invalid status'),
+  body('maxChats').optional().isInt({ min: 1, max: 10 }).withMessage('Max chats must be between 1 and 10')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { status, maxChats } = req.body;
+
+    const availability = await AgentAvailability.findOneAndUpdate(
+      { admin: req.admin.id },
+      {
+        status,
+        maxChats: maxChats || 5,
+        lastActive: new Date()
+      },
+      { upsert: true, new: true }
+    );
+
+    res.status(200).json({
+      status: 'success',
+      data: availability
+    });
+
+    await logActivity('update-availability', 'agent', availability._id, req.admin._id, 'Admin', req, { status, maxChats });
+  } catch (err) {
+    console.error('Update availability error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while updating availability'
+    });
+  }
+});
+
+app.get('/api/admin/chat/queue', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const waitingChats = await Chat.find({ status: 'waiting' })
+      .populate('user', 'firstName lastName email')
+      .sort({ createdAt: 1 });
+
+    res.status(200).json({
+      status: 'success',
+      data: waitingChats
+    });
+  } catch (err) {
+    console.error('Get chat queue error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching chat queue'
+    });
+  }
+});
+
+app.post('/api/admin/chat/accept', adminProtect, restrictTo('super', 'support'), [
+  body('chatId').isMongoId().withMessage('Invalid chat ID')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { chatId } = req.body;
+
+    // Check agent availability
+    const agentAvailability = await AgentAvailability.findOne({ admin: req.admin.id });
+    if (!agentAvailability || agentAvailability.status !== 'online' || agentAvailability.currentChats >= agentAvailability.maxChats) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'You are not available to accept new chats'
+      });
+    }
+
+    const chat = await Chat.findOneAndUpdate(
+      {
+        _id: chatId,
+        status: 'waiting'
+      },
+      {
+        status: 'transferred',
+        agent: req.admin.id
+      },
+      { new: true }
+    ).populate('user', 'firstName lastName email');
+
+    if (!chat) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Chat not found or already assigned'
+      });
+    }
+
+    // Update agent's current chats
+    agentAvailability.currentChats += 1;
+    await agentAvailability.save();
+
+    // Add system message to chat
+    chat.messages.push({
+      sender: 'agent',
+      content: `You're now connected with ${req.admin.name}. How can I help you?`,
+      metadata: {
+        isSystem: true
+      }
+    });
+    await chat.save();
+
+    res.status(200).json({
+      status: 'success',
+      data: chat
+    });
+
+    await logActivity('accept-chat', 'chat', chat._id, req.admin._id, 'Admin', req);
+  } catch (err) {
+    console.error('Accept chat error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while accepting chat'
+    });
+  }
+});
+
+app.post('/api/admin/chat/message', adminProtect, restrictTo('super', 'support'), [
+  body('chatId').isMongoId().withMessage('Invalid chat ID'),
   body('message').trim().notEmpty().withMessage('Message is required').escape()
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -5133,132 +5520,47 @@ app.post('/api/support/conversations', protect, [
   }
 
   try {
-    const { subject, category, message } = req.body;
+    const { chatId, message } = req.body;
 
-    // Create conversation
-    const conversation = await SupportConversation.create({
-      user: req.user.id,
-      subject,
-      category,
-      status: 'open'
+    const chat = await Chat.findOne({
+      _id: chatId,
+      agent: req.admin.id,
+      status: 'transferred'
     });
 
-    // Save user message
-    await SupportMessage.create({
-      conversationId: conversation._id,
-      sender: req.user.id,
-      senderModel: 'User',
-      content: message
-    });
-
-    // Generate AI response
-    const aiResponse = await generateAIResponse(message);
-    
-    // Save AI response
-    const aiMessage = await SupportMessage.create({
-      conversationId: conversation._id,
-      sender: req.user.id, // Marking as from user for display, but with isAI flag
-      senderModel: 'User',
-      content: aiResponse.response,
-      metadata: {
-        isAI: true,
-        aiConfidence: aiResponse.confidence
-      }
-    });
-
-    // Update conversation
-    conversation.lastMessageAt = new Date();
-    await conversation.save();
-
-    res.status(201).json({
-      status: 'success',
-      data: {
-        conversation,
-        messages: [aiMessage]
-      }
-    });
-
-    await logActivity('create-support-conversation', 'support', conversation._id, req.user._id, 'User', req);
-  } catch (err) {
-    console.error('Create support conversation error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while creating support conversation'
-    });
-  }
-});
-
-app.get('/api/support/conversations', protect, async (req, res) => {
-  try {
-    const { status, limit = 20, page = 1 } = req.query;
-    const skip = (page - 1) * limit;
-
-    const query = { user: req.user.id };
-    if (status) query.status = status;
-
-    const conversations = await SupportConversation.find(query)
-      .sort({ lastMessageAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .populate('agent', 'name email');
-
-    const total = await SupportConversation.countDocuments(query);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        conversations,
-        total,
-        page: parseInt(page),
-        pages: Math.ceil(total / limit)
-      }
-    });
-  } catch (err) {
-    console.error('Get support conversations error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching support conversations'
-    });
-  }
-});
-
-app.get('/api/support/conversations/:id', protect, async (req, res) => {
-  try {
-    const conversation = await SupportConversation.findOne({
-      _id: req.params.id,
-      user: req.user.id
-    }).populate('agent', 'name email');
-
-    if (!conversation) {
+    if (!chat) {
       return res.status(404).json({
         status: 'fail',
-        message: 'Conversation not found'
+        message: 'Active chat session not found'
       });
     }
 
-    const messages = await SupportMessage.find({
-      conversationId: conversation._id
-    }).sort({ createdAt: 1 });
+    chat.messages.push({
+      sender: 'agent',
+      content: message,
+      metadata: {
+        timestamp: new Date()
+      }
+    });
+    await chat.save();
 
     res.status(200).json({
       status: 'success',
-      data: {
-        conversation,
-        messages
-      }
+      data: chat
     });
+
+    await logActivity('send-agent-message', 'chat', chat._id, req.admin._id, 'Admin', req, { message });
   } catch (err) {
-    console.error('Get support conversation error:', err);
+    console.error('Send agent message error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching support conversation'
+      message: 'An error occurred while sending agent message'
     });
   }
 });
 
-app.post('/api/support/conversations/:id/messages', protect, [
-  body('message').trim().notEmpty().withMessage('Message is required').escape(),
-  body('attachments').optional().isArray().withMessage('Attachments must be an array')
+app.post('/api/admin/chat/end', adminProtect, restrictTo('super', 'support'), [
+  body('chatId').isMongoId().withMessage('Invalid chat ID')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -5269,313 +5571,91 @@ app.post('/api/support/conversations/:id/messages', protect, [
   }
 
   try {
-    const { message, attachments } = req.body;
-    const conversation = await SupportConversation.findOne({
-      _id: req.params.id,
-      user: req.user.id
-    });
+    const { chatId } = req.body;
 
-    if (!conversation) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Conversation not found'
-      });
-    }
-
-    if (conversation.status === 'closed' || conversation.status === 'resolved') {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Cannot add messages to a closed conversation'
-      });
-    }
-
-    // Save user message
-    const userMessage = await SupportMessage.create({
-      conversationId: conversation._id,
-      sender: req.user.id,
-      senderModel: 'User',
-      content: message,
-      attachments
-    });
-
-    // Update conversation status
-    conversation.status = conversation.agent ? 'active' : 'open';
-    conversation.lastMessageAt = new Date();
-    await conversation.save();
-
-    // Check if we should escalate to human
-    const conversationHistory = await SupportMessage.find({
-      conversationId: conversation._id
-    }).sort({ createdAt: 1 });
-
-    const historyText = conversationHistory.map(m => 
-      `${m.senderModel === 'User' ? 'User' : 'Agent'}: ${m.content}`
-    ).join('\n');
-
-    const shouldEscalate = await shouldEscalateToHuman(message, historyText);
-
-    if (shouldEscalate && !conversation.agent) {
-      // Find available agent
-      const agent = await Admin.findOne({
-        role: 'support',
-        'loginHistory.0': { $exists: true }
-      }).sort({ 'loginHistory.0.timestamp': -1 });
-
-      if (agent) {
-        conversation.agent = agent._id;
-        conversation.status = 'waiting';
-        conversation.aiHandoff = {
-          initiated: true,
-          reason: 'Complexity or user frustration detected',
-          timestamp: new Date()
-        };
-        await conversation.save();
-
-        // Notify agent
-        agent.notifications.push({
-          title: 'New Support Conversation',
-          message: `A conversation with ${req.user.firstName} ${req.user.lastName} requires your attention.`,
-          type: 'warning'
-        });
-        await agent.save();
-
-        res.status(201).json({
-          status: 'success',
-          data: {
-            message: userMessage,
-            status: 'waiting',
-            agent: {
-              id: agent._id,
-              name: agent.name,
-              email: agent.email
-            }
-          }
-        });
-
-        return;
-      }
-    }
-
-    // If not escalating or no agent available, generate AI response
-    const aiResponse = await generateAIResponse(message, historyText);
-    
-    // Save AI response
-    const aiMessage = await SupportMessage.create({
-      conversationId: conversation._id,
-      sender: req.user.id, // Marking as from user for display, but with isAI flag
-      senderModel: 'User',
-      content: aiResponse.response,
-      metadata: {
-        isAI: true,
-        aiConfidence: aiResponse.confidence,
-        suggestedResponse: aiResponse.response
-      }
-    });
-
-    // Update conversation
-    conversation.lastMessageAt = new Date();
-    await conversation.save();
-
-    res.status(201).json({
-      status: 'success',
-      data: {
-        message: userMessage,
-        aiResponse: aiMessage
-      }
-    });
-
-    await logActivity('add-support-message', 'support', conversation._id, req.user._id, 'User', req);
-  } catch (err) {
-    console.error('Add support message error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while adding support message'
-    });
-  }
-});
-
-app.post('/api/support/conversations/:id/close', protect, async (req, res) => {
-  try {
-    const conversation = await SupportConversation.findOneAndUpdate(
+    const chat = await Chat.findOneAndUpdate(
       {
-        _id: req.params.id,
-        user: req.user.id,
-        status: { $in: ['open', 'active', 'waiting'] }
+        _id: chatId,
+        agent: req.admin.id,
+        status: 'transferred'
       },
       {
         status: 'closed',
-        resolvedAt: new Date()
+        endedAt: new Date()
       },
       { new: true }
     );
 
-    if (!conversation) {
+    if (!chat) {
       return res.status(404).json({
         status: 'fail',
-        message: 'Conversation not found or already closed'
+        message: 'Active chat session not found'
       });
     }
 
-    res.status(200).json({
-      status: 'success',
-      data: {
-        conversation
-      }
-    });
-
-    await logActivity('close-support-conversation', 'support', conversation._id, req.user._id, 'User', req);
-  } catch (err) {
-    console.error('Close support conversation error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while closing support conversation'
-    });
-  }
-});
-
-app.post('/api/support/conversations/:id/rate', protect, [
-  body('rating').isInt({ min: 1, max: 5 }).withMessage('Rating must be between 1 and 5'),
-  body('feedback').optional().trim().escape()
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { rating, feedback } = req.body;
-    const conversation = await SupportConversation.findOneAndUpdate(
-      {
-        _id: req.params.id,
-        user: req.user.id,
-        status: 'closed'
-      },
-      {
-        rating: {
-          score: rating,
-          feedback
-        }
-      },
-      { new: true }
+    // Update agent's current chats
+    await AgentAvailability.updateOne(
+      { admin: req.admin.id },
+      { $inc: { currentChats: -1 } }
     );
 
-    if (!conversation) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Conversation not found or not closed'
-      });
-    }
-
     res.status(200).json({
       status: 'success',
-      data: {
-        conversation
-      }
+      message: 'Chat session ended'
     });
 
-    await logActivity('rate-support-conversation', 'support', conversation._id, req.user._id, 'User', req);
+    await logActivity('end-agent-chat', 'chat', chat._id, req.admin._id, 'Admin', req);
   } catch (err) {
-    console.error('Rate support conversation error:', err);
+    console.error('End agent chat error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while rating support conversation'
+      message: 'An error occurred while ending agent chat'
     });
   }
 });
 
-// Admin Support Routes
-app.get('/api/admin/support/conversations', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+app.get('/api/admin/chat/history', adminProtect, restrictTo('super', 'support'), async (req, res) => {
   try {
-    const { status, assigned, limit = 20, page = 1 } = req.query;
+    const { page = 1, limit = 20, userId, status } = req.query;
     const skip = (page - 1) * limit;
 
     const query = {};
+    if (userId) query.user = userId;
     if (status) query.status = status;
-    if (assigned === 'me') query.agent = req.admin.id;
-    else if (assigned === 'unassigned') query.agent = { $exists: false };
 
-    const conversations = await SupportConversation.find(query)
-      .sort({ lastMessageAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
+    const chats = await Chat.find(query)
       .populate('user', 'firstName lastName email')
-      .populate('agent', 'name email');
+      .populate('agent', 'name')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
 
-    const total = await SupportConversation.countDocuments(query);
+    const total = await Chat.countDocuments(query);
 
     res.status(200).json({
       status: 'success',
       data: {
-        conversations,
+        chats,
         total,
         page: parseInt(page),
         pages: Math.ceil(total / limit)
       }
     });
   } catch (err) {
-    console.error('Admin get support conversations error:', err);
+    console.error('Get chat history error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching support conversations'
+      message: 'An error occurred while fetching chat history'
     });
   }
 });
 
-app.post('/api/admin/support/conversations/:id/assign', adminProtect, restrictTo('super', 'support'), async (req, res) => {
-  try {
-    const conversation = await SupportConversation.findOneAndUpdate(
-      {
-        _id: req.params.id,
-        status: { $in: ['open', 'waiting'] }
-      },
-      {
-        agent: req.admin.id,
-        status: 'active'
-      },
-      { new: true }
-    ).populate('user', 'firstName lastName email');
-
-    if (!conversation) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Conversation not found or already assigned'
-      });
-    }
-
-    // Notify user
-    const user = await User.findById(conversation.user._id);
-    if (user) {
-      user.notifications.push({
-        title: 'Support Agent Assigned',
-        message: `${req.admin.name} is now assisting with your support request.`,
-        type: 'info'
-      });
-      await user.save();
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        conversation
-      }
-    });
-
-    await logActivity('assign-support-conversation', 'support', conversation._id, req.admin._id, 'Admin', req);
-  } catch (err) {
-    console.error('Assign support conversation error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while assigning support conversation'
-    });
-  }
-});
-
-app.post('/api/admin/support/conversations/:id/messages', adminProtect, restrictTo('super', 'support'), [
-  body('message').trim().notEmpty().withMessage('Message is required').escape(),
-  body('attachments').optional().isArray().withMessage('Attachments must be an array')
+app.post('/api/admin/ai/train', adminProtect, restrictTo('super'), [
+  body('input').trim().notEmpty().withMessage('Input is required'),
+  body('response').trim().notEmpty().withMessage('Response is required'),
+  body('correctedResponse').trim().notEmpty().withMessage('Corrected response is required'),
+  body('isCorrect').isBoolean().withMessage('isCorrect must be a boolean'),
+  body('chatSession').optional().isMongoId().withMessage('Invalid chat session ID')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -5586,168 +5666,71 @@ app.post('/api/admin/support/conversations/:id/messages', adminProtect, restrict
   }
 
   try {
-    const { message, attachments } = req.body;
-    const conversation = await SupportConversation.findOne({
-      _id: req.params.id,
-      agent: req.admin.id
+    const { input, response, correctedResponse, isCorrect, chatSession } = req.body;
+
+    const trainingRecord = await AITraining.create({
+      input,
+      response,
+      correctedResponse,
+      isCorrect,
+      chatSession,
+      trainedBy: req.admin._id,
+      trainedByModel: 'Admin',
+      metadata: {
+        source: 'manual',
+        adminId: req.admin._id
+      }
     });
-
-    if (!conversation) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Conversation not found or not assigned to you'
-      });
-    }
-
-    if (conversation.status === 'closed' || conversation.status === 'resolved') {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Cannot add messages to a closed conversation'
-      });
-    }
-
-    // Save agent message
-    const agentMessage = await SupportMessage.create({
-      conversationId: conversation._id,
-      sender: req.admin.id,
-      senderModel: 'Admin',
-      content: message,
-      attachments
-    });
-
-    // Update conversation
-    conversation.status = 'active';
-    conversation.lastMessageAt = new Date();
-    await conversation.save();
-
-    // Notify user
-    const user = await User.findById(conversation.user);
-    if (user) {
-      user.notifications.push({
-        title: 'New Support Message',
-        message: `You have a new message from ${req.admin.name} regarding your support request.`,
-        type: 'info'
-      });
-      await user.save();
-    }
 
     res.status(201).json({
       status: 'success',
-      data: {
-        message: agentMessage
-      }
+      data: trainingRecord
     });
 
-    await logActivity('add-support-message', 'support', conversation._id, req.admin._id, 'Admin', req);
+    await logActivity('train-ai', 'ai', trainingRecord._id, req.admin._id, 'Admin', req);
   } catch (err) {
-    console.error('Add support message error:', err);
+    console.error('Train AI error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while adding support message'
+      message: 'An error occurred while training AI'
     });
   }
 });
 
-app.post('/api/admin/support/conversations/:id/resolve', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+app.get('/api/admin/ai/training-data', adminProtect, restrictTo('super'), async (req, res) => {
   try {
-    const conversation = await SupportConversation.findOneAndUpdate(
-      {
-        _id: req.params.id,
-        agent: req.admin.id,
-        status: 'active'
-      },
-      {
-        status: 'resolved',
-        resolvedAt: new Date()
-      },
-      { new: true }
-    ).populate('user', 'firstName lastName email');
+    const { page = 1, limit = 20, isCorrect } = req.query;
+    const skip = (page - 1) * limit;
 
-    if (!conversation) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Conversation not found or not assigned to you'
-      });
-    }
+    const query = {};
+    if (isCorrect !== undefined) query.isCorrect = isCorrect === 'true';
 
-    // Notify user
-    const user = await User.findById(conversation.user._id);
-    if (user) {
-      user.notifications.push({
-        title: 'Support Request Resolved',
-        message: `${req.admin.name} has marked your support request as resolved.`,
-        type: 'success'
-      });
-      await user.save();
-    }
+    const trainingData = await AITraining.find(query)
+      .populate('chatSession')
+      .populate('trainedBy')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await AITraining.countDocuments(query);
 
     res.status(200).json({
       status: 'success',
       data: {
-        conversation
-      }
-    });
-
-    await logActivity('resolve-support-conversation', 'support', conversation._id, req.admin._id, 'Admin', req);
-  } catch (err) {
-    console.error('Resolve support conversation error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while resolving support conversation'
-    });
-  }
-});
-
-// File Upload Endpoint for Support Attachments
-app.post('/api/support/upload', protect, async (req, res) => {
-  try {
-    if (!req.files || !req.files.file) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'No file uploaded'
-      });
-    }
-
-    const file = req.files.file;
-    const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf', 'text/plain'];
-    const maxSize = 5 * 1024 * 1024; // 5MB
-
-    if (!allowedTypes.includes(file.mimetype)) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Invalid file type. Only JPEG, PNG, PDF, and TXT files are allowed.'
-      });
-    }
-
-    if (file.size > maxSize) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'File size exceeds 5MB limit'
-      });
-    }
-
-    // In a real implementation, you would upload to S3 or similar
-    // For this example, we'll just return a mock response
-    const fileUrl = `https://website-backendd-1.onrender.com/uploads/${Date.now()}-${file.name}`;
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        url: fileUrl,
-        name: file.name,
-        type: file.mimetype,
-        size: file.size
+        trainingData,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
       }
     });
   } catch (err) {
-    console.error('File upload error:', err);
+    console.error('Get AI training data error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while uploading file'
+      message: 'An error occurred while fetching AI training data'
     });
   }
 });
-
 
 
 
