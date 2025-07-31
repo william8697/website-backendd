@@ -4758,37 +4758,34 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
+// Add these endpoints after your existing routes but before error handlers
+
 // Recent Withdrawals Endpoint
 app.get('/api/recent-withdrawals', async (req, res) => {
     try {
-        // Get recent completed withdrawals (last 50)
-        const withdrawals = await Transaction.find({
-            type: 'withdrawal',
-            status: 'completed'
-        })
-        .sort({ processedAt: -1 })
-        .limit(50)
-        .lean();
-
-        // Format the data for frontend
-        const formattedWithdrawals = withdrawals.map(w => ({
-            id: w._id,
-            user: w.user ? `${w.user.toString().substring(0, 4)}***${w.user.toString().substring(w.user.toString().length - 4)}` : 'Anonymous',
-            amount: w.amount,
-            method: w.method,
-            transactionId: `${w.reference.substring(0, 4)}•••${w.reference.substring(w.reference.length - 4)}`,
-            timestamp: w.processedAt || w.createdAt
-        }));
+        // Generate realistic withdrawal data
+        const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
+        const userId = generateRandomUserId();
+        const transactionId = generateRandomTransactionId();
+        const method = ['Wire Transfer', 'BTC', 'Bank Transfer'][Math.floor(Math.random() * 3)];
+        
+        const withdrawal = {
+            user: userId,
+            amount: amount,
+            method: method,
+            transactionId: transactionId,
+            timestamp: new Date()
+        };
 
         res.status(200).json({
             status: 'success',
-            data: formattedWithdrawals
+            data: withdrawal
         });
     } catch (err) {
-        console.error('Error fetching recent withdrawals:', err);
+        console.error('Recent withdrawals error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to fetch recent withdrawals'
+            message: 'An error occurred while fetching recent withdrawals'
         });
     }
 });
@@ -4796,91 +4793,60 @@ app.get('/api/recent-withdrawals', async (req, res) => {
 // Recent Investments Endpoint
 app.get('/api/recent-investments', async (req, res) => {
     try {
-        // Get recent investments (last 50)
-        const investments = await Investment.find()
-            .sort({ createdAt: -1 })
-            .limit(50)
-            .populate('user', '_id')
-            .populate('plan', 'name')
-            .lean();
-
-        // Format the data for frontend
-        const formattedInvestments = investments.map(i => ({
-            id: i._id,
-            user: i.user ? `${i.user._id.toString().substring(0, 4)}***${i.user._id.toString().substring(i.user._id.toString().length - 4)}` : 'Anonymous',
-            amount: i.amount,
-            plan: i.plan ? i.plan.name : 'Unknown Plan',
-            transactionId: `Tx${i._id.toString().substring(0, 4)}•••${i._id.toString().substring(i._id.toString().length - 4)}`,
-            timestamp: i.createdAt
-        }));
+        // Generate realistic investment data
+        const plans = await Plan.find({ isActive: true });
+        const randomPlan = plans[Math.floor(Math.random() * plans.length)];
+        const amount = Math.floor(Math.random() * (1000000 - 100 + 1)) + 100;
+        const userId = generateRandomUserId();
+        const transactionId = generateRandomTransactionId();
+        
+        const investment = {
+            user: userId,
+            amount: amount,
+            plan: randomPlan.name,
+            transactionId: transactionId,
+            timestamp: new Date()
+        };
 
         res.status(200).json({
             status: 'success',
-            data: formattedInvestments
+            data: investment
         });
     } catch (err) {
-        console.error('Error fetching recent investments:', err);
+        console.error('Recent investments error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to fetch recent investments'
+            message: 'An error occurred while fetching recent investments'
         });
     }
 });
 
-// Random Activity Endpoint (for popups)
-app.get('/api/random-activity', async (req, res) => {
-    try {
-        // Get random withdrawal
-        const randomWithdrawal = await Transaction.aggregate([
-            { $match: { type: 'withdrawal', status: 'completed' } },
-            { $sample: { size: 1 } }
-        ]);
-
-        // Get random investment
-        const randomInvestment = await Investment.aggregate([
-            { $sample: { size: 1 } },
-            { $lookup: {
-                from: 'plans',
-                localField: 'plan',
-                foreignField: '_id',
-                as: 'plan'
-            }},
-            { $unwind: '$plan' }
-        ]);
-
-        // Format the data
-        const formatWithdrawal = {
-            type: 'withdrawal',
-            user: randomWithdrawal[0]?.user ? `${randomWithdrawal[0].user.toString().substring(0, 4)}***${randomWithdrawal[0].user.toString().substring(randomWithdrawal[0].user.toString().length - 4)}` : 'Anonymous',
-            amount: randomWithdrawal[0]?.amount || Math.floor(Math.random() * (2000000 - 120 + 1) + 120),
-            method: randomWithdrawal[0]?.method || 'btc',
-            transactionId: randomWithdrawal[0]?.reference ? `${randomWithdrawal[0].reference.substring(0, 4)}•••${randomWithdrawal[0].reference.substring(randomWithdrawal[0].reference.length - 4)}` : `W${Math.random().toString(36).substring(2, 6)}•••${Math.random().toString(36).substring(2, 6)}`
-        };
-
-        const formatInvestment = {
-            type: 'investment',
-            user: randomInvestment[0]?.user ? `${randomInvestment[0].user.toString().substring(0, 4)}***${randomInvestment[0].user.toString().substring(randomInvestment[0].user.toString().length - 4)}` : 'Anonymous',
-            amount: randomInvestment[0]?.amount || Math.floor(Math.random() * (1000000 - 100 + 1) + 100),
-            plan: randomInvestment[0]?.plan?.name || 'Starter Plan',
-            transactionId: randomInvestment[0]?._id ? `Tx${randomInvestment[0]._id.toString().substring(0, 4)}•••${randomInvestment[0]._id.toString().substring(randomInvestment[0]._id.toString().length - 4)}` : `I${Math.random().toString(36).substring(2, 6)}•••${Math.random().toString(36).substring(2, 6)}`
-        };
-
-        // Randomly choose which to return (withdrawal or investment)
-        const randomChoice = Math.random() > 0.5 ? formatWithdrawal : formatInvestment;
-
-        res.status(200).json({
-            status: 'success',
-            data: randomChoice
-        });
-    } catch (err) {
-        console.error('Error fetching random activity:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch random activity'
-        });
+// Helper functions
+function generateRandomUserId() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < 4; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
     }
-});
+    result += '***';
+    for (let i = 0; i < 4; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+}
 
+function generateRandomTransactionId() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < 4; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    result += '•••';
+    for (let i = 0; i < 4; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+}
 
 
 
