@@ -4759,137 +4759,95 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-// Recent Transactions Proof Endpoints
+// Recent Withdrawals Endpoint
 app.get('/api/transactions/recent-withdrawals', async (req, res) => {
     try {
-        // Get recent completed withdrawals (last 100)
-        const withdrawals = await Transaction.aggregate([
-            { $match: { type: 'withdrawal', status: 'completed' } },
-            { $sort: { createdAt: -1 } },
-            { $limit: 100 },
-            { $sample: { size: 1 } },
-            { $lookup: {
-                from: 'users',
-                localField: 'user',
-                foreignField: '_id',
-                as: 'user'
-            }},
-            { $unwind: '$user' },
-            { $project: {
-                amount: 1,
-                method: 1,
-                reference: 1,
-                'user.email': 1,
-                createdAt: 1
-            }}
-        ]);
+        // Get 5 most recent completed withdrawals
+        const withdrawals = await Transaction.find({
+            type: 'withdrawal',
+            status: 'completed'
+        })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .select('amount method createdAt reference user')
+        .populate('user', 'email');
 
-        if (withdrawals.length === 0) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'No recent withdrawals found'
-            });
-        }
+        // Format the data for frontend
+        const formattedWithdrawals = withdrawals.map(tx => {
+            const emailParts = tx.user.email.split('@');
+            const maskedEmail = emailParts[0].substring(0, 3) + '***' + 
+                              emailParts[0].substring(emailParts[0].length - 2) + 
+                              '@' + emailParts[1];
+            
+            const maskedTxId = tx.reference.substring(0, 4) + '•••' + 
+                             tx.reference.substring(tx.reference.length - 4);
 
-        const withdrawal = withdrawals[0];
-        
-        // Generate masked user identifier
-        const emailParts = withdrawal.user.email.split('@');
-        const maskedEmail = emailParts[0].substring(0, 3) + '***' + 
-                          emailParts[0].substring(emailParts[0].length - 2) + 
-                          '@' + emailParts[1];
-        
-        // Generate masked transaction ID
-        const maskedTxId = withdrawal.reference.substring(0, 4) + '•••' + 
-                          withdrawal.reference.substring(withdrawal.reference.length - 4);
+            return {
+                amount: tx.amount,
+                method: tx.method === 'btc' ? 'Bitcoin' : 
+                       tx.method === 'bank' ? 'Wire Transfer' : 'Card',
+                maskedEmail,
+                maskedTxId,
+                timestamp: tx.createdAt
+            };
+        });
 
         res.status(200).json({
             status: 'success',
-            data: {
-                user: maskedEmail,
-                amount: withdrawal.amount,
-                method: withdrawal.method,
-                txId: maskedTxId,
-                timestamp: withdrawal.createdAt
-            }
+            data: formattedWithdrawals
         });
     } catch (err) {
-        console.error('Get recent withdrawals error:', err);
+        console.error('Error fetching recent withdrawals:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching recent withdrawals'
+            message: 'Failed to fetch recent withdrawals'
         });
     }
 });
 
+// Recent Investments Endpoint
 app.get('/api/transactions/recent-investments', async (req, res) => {
     try {
-        // Get recent investments (last 100)
-        const investments = await Investment.aggregate([
-            { $sort: { createdAt: -1 } },
-            { $limit: 100 },
-            { $sample: { size: 1 } },
-            { $lookup: {
-                from: 'users',
-                localField: 'user',
-                foreignField: '_id',
-                as: 'user'
-            }},
-            { $lookup: {
-                from: 'plans',
-                localField: 'plan',
-                foreignField: '_id',
-                as: 'plan'
-            }},
-            { $unwind: '$user' },
-            { $unwind: '$plan' },
-            { $project: {
-                amount: 1,
-                'plan.name': 1,
-                reference: { $toString: '$_id' },
-                'user.email': 1,
-                createdAt: 1
-            }}
-        ]);
+        // Get 5 most recent investments
+        const investments = await Investment.find()
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .select('amount plan startDate user')
+            .populate('user', 'email')
+            .populate('plan', 'name');
 
-        if (investments.length === 0) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'No recent investments found'
-            });
-        }
+        // Format the data for frontend
+        const formattedInvestments = investments.map(inv => {
+            const emailParts = inv.user.email.split('@');
+            const maskedEmail = emailParts[0].substring(0, 3) + '***' + 
+                              emailParts[0].substring(emailParts[0].length - 2) + 
+                              '@' + emailParts[1];
+            
+            const txId = inv._id.toString();
+            const maskedTxId = txId.substring(0, 4) + '•••' + 
+                             txId.substring(txId.length - 4);
 
-        const investment = investments[0];
-        
-        // Generate masked user identifier
-        const emailParts = investment.user.email.split('@');
-        const maskedEmail = emailParts[0].substring(0, 3) + '***' + 
-                          emailParts[0].substring(emailParts[0].length - 2) + 
-                          '@' + emailParts[1];
-        
-        // Generate masked transaction ID
-        const maskedTxId = investment.reference.substring(0, 4) + '•••' + 
-                          investment.reference.substring(investment.reference.length - 4);
+            return {
+                amount: inv.amount,
+                planName: inv.plan.name,
+                maskedEmail,
+                maskedTxId,
+                timestamp: inv.startDate
+            };
+        });
 
         res.status(200).json({
             status: 'success',
-            data: {
-                user: maskedEmail,
-                amount: investment.amount,
-                plan: investment.plan.name,
-                txId: maskedTxId,
-                timestamp: investment.createdAt
-            }
+            data: formattedInvestments
         });
     } catch (err) {
-        console.error('Get recent investments error:', err);
+        console.error('Error fetching recent investments:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching recent investments'
+            message: 'Failed to fetch recent investments'
         });
     }
 });
-
 
 
 
