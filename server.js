@@ -5176,6 +5176,653 @@ initializeTransactionQueues();
 
 
 
+
+
+
+
+
+// Support Routes
+app.post('/api/support/conversations', protect, [
+  body('subject').optional().trim().escape(),
+  body('category').isIn(['general', 'account', 'investment', 'withdrawal', 'kyc', 'technical', 'other']).withMessage('Invalid category'),
+  body('message').trim().notEmpty().withMessage('Message is required').escape()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { subject, category, message } = req.body;
+
+    // Create conversation
+    const conversation = await SupportConversation.create({
+      user: req.user.id,
+      subject,
+      category,
+      status: 'open'
+    });
+
+    // Save user message
+    await SupportMessage.create({
+      conversationId: conversation._id,
+      sender: req.user.id,
+      senderModel: 'User',
+      content: message
+    });
+
+    // Generate AI response
+    const aiResponse = await generateAIResponse(message);
+    
+    // Save AI response
+    const aiMessage = await SupportMessage.create({
+      conversationId: conversation._id,
+      sender: req.user.id, // Marking as from user for display, but with isAI flag
+      senderModel: 'User',
+      content: aiResponse.response,
+      metadata: {
+        isAI: true,
+        aiConfidence: aiResponse.confidence
+      }
+    });
+
+    // Update conversation
+    conversation.lastMessageAt = new Date();
+    await conversation.save();
+
+    res.status(201).json({
+      status: 'success',
+      data: {
+        conversation,
+        messages: [aiMessage]
+      }
+    });
+
+    await logActivity('create-support-conversation', 'support', conversation._id, req.user._id, 'User', req);
+  } catch (err) {
+    console.error('Create support conversation error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while creating support conversation'
+    });
+  }
+});
+
+app.get('/api/support/conversations', protect, async (req, res) => {
+  try {
+    const { status, limit = 20, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const query = { user: req.user.id };
+    if (status) query.status = status;
+
+    const conversations = await SupportConversation.find(query)
+      .sort({ lastMessageAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .populate('agent', 'name email');
+
+    const total = await SupportConversation.countDocuments(query);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        conversations,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (err) {
+    console.error('Get support conversations error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching support conversations'
+    });
+  }
+});
+
+app.get('/api/support/conversations/:id', protect, async (req, res) => {
+  try {
+    const conversation = await SupportConversation.findOne({
+      _id: req.params.id,
+      user: req.user.id
+    }).populate('agent', 'name email');
+
+    if (!conversation) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Conversation not found'
+      });
+    }
+
+    const messages = await SupportMessage.find({
+      conversationId: conversation._id
+    }).sort({ createdAt: 1 });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        conversation,
+        messages
+      }
+    });
+  } catch (err) {
+    console.error('Get support conversation error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching support conversation'
+    });
+  }
+});
+
+app.post('/api/support/conversations/:id/messages', protect, [
+  body('message').trim().notEmpty().withMessage('Message is required').escape(),
+  body('attachments').optional().isArray().withMessage('Attachments must be an array')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { message, attachments } = req.body;
+    const conversation = await SupportConversation.findOne({
+      _id: req.params.id,
+      user: req.user.id
+    });
+
+    if (!conversation) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Conversation not found'
+      });
+    }
+
+    if (conversation.status === 'closed' || conversation.status === 'resolved') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Cannot add messages to a closed conversation'
+      });
+    }
+
+    // Save user message
+    const userMessage = await SupportMessage.create({
+      conversationId: conversation._id,
+      sender: req.user.id,
+      senderModel: 'User',
+      content: message,
+      attachments
+    });
+
+    // Update conversation status
+    conversation.status = conversation.agent ? 'active' : 'open';
+    conversation.lastMessageAt = new Date();
+    await conversation.save();
+
+    // Check if we should escalate to human
+    const conversationHistory = await SupportMessage.find({
+      conversationId: conversation._id
+    }).sort({ createdAt: 1 });
+
+    const historyText = conversationHistory.map(m => 
+      `${m.senderModel === 'User' ? 'User' : 'Agent'}: ${m.content}`
+    ).join('\n');
+
+    const shouldEscalate = await shouldEscalateToHuman(message, historyText);
+
+    if (shouldEscalate && !conversation.agent) {
+      // Find available agent
+      const agent = await Admin.findOne({
+        role: 'support',
+        'loginHistory.0': { $exists: true }
+      }).sort({ 'loginHistory.0.timestamp': -1 });
+
+      if (agent) {
+        conversation.agent = agent._id;
+        conversation.status = 'waiting';
+        conversation.aiHandoff = {
+          initiated: true,
+          reason: 'Complexity or user frustration detected',
+          timestamp: new Date()
+        };
+        await conversation.save();
+
+        // Notify agent
+        agent.notifications.push({
+          title: 'New Support Conversation',
+          message: `A conversation with ${req.user.firstName} ${req.user.lastName} requires your attention.`,
+          type: 'warning'
+        });
+        await agent.save();
+
+        res.status(201).json({
+          status: 'success',
+          data: {
+            message: userMessage,
+            status: 'waiting',
+            agent: {
+              id: agent._id,
+              name: agent.name,
+              email: agent.email
+            }
+          }
+        });
+
+        return;
+      }
+    }
+
+    // If not escalating or no agent available, generate AI response
+    const aiResponse = await generateAIResponse(message, historyText);
+    
+    // Save AI response
+    const aiMessage = await SupportMessage.create({
+      conversationId: conversation._id,
+      sender: req.user.id, // Marking as from user for display, but with isAI flag
+      senderModel: 'User',
+      content: aiResponse.response,
+      metadata: {
+        isAI: true,
+        aiConfidence: aiResponse.confidence,
+        suggestedResponse: aiResponse.response
+      }
+    });
+
+    // Update conversation
+    conversation.lastMessageAt = new Date();
+    await conversation.save();
+
+    res.status(201).json({
+      status: 'success',
+      data: {
+        message: userMessage,
+        aiResponse: aiMessage
+      }
+    });
+
+    await logActivity('add-support-message', 'support', conversation._id, req.user._id, 'User', req);
+  } catch (err) {
+    console.error('Add support message error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while adding support message'
+    });
+  }
+});
+
+app.post('/api/support/conversations/:id/close', protect, async (req, res) => {
+  try {
+    const conversation = await SupportConversation.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        user: req.user.id,
+        status: { $in: ['open', 'active', 'waiting'] }
+      },
+      {
+        status: 'closed',
+        resolvedAt: new Date()
+      },
+      { new: true }
+    );
+
+    if (!conversation) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Conversation not found or already closed'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        conversation
+      }
+    });
+
+    await logActivity('close-support-conversation', 'support', conversation._id, req.user._id, 'User', req);
+  } catch (err) {
+    console.error('Close support conversation error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while closing support conversation'
+    });
+  }
+});
+
+app.post('/api/support/conversations/:id/rate', protect, [
+  body('rating').isInt({ min: 1, max: 5 }).withMessage('Rating must be between 1 and 5'),
+  body('feedback').optional().trim().escape()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { rating, feedback } = req.body;
+    const conversation = await SupportConversation.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        user: req.user.id,
+        status: 'closed'
+      },
+      {
+        rating: {
+          score: rating,
+          feedback
+        }
+      },
+      { new: true }
+    );
+
+    if (!conversation) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Conversation not found or not closed'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        conversation
+      }
+    });
+
+    await logActivity('rate-support-conversation', 'support', conversation._id, req.user._id, 'User', req);
+  } catch (err) {
+    console.error('Rate support conversation error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while rating support conversation'
+    });
+  }
+});
+
+// Admin Support Routes
+app.get('/api/admin/support/conversations', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const { status, assigned, limit = 20, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const query = {};
+    if (status) query.status = status;
+    if (assigned === 'me') query.agent = req.admin.id;
+    else if (assigned === 'unassigned') query.agent = { $exists: false };
+
+    const conversations = await SupportConversation.find(query)
+      .sort({ lastMessageAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .populate('user', 'firstName lastName email')
+      .populate('agent', 'name email');
+
+    const total = await SupportConversation.countDocuments(query);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        conversations,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (err) {
+    console.error('Admin get support conversations error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching support conversations'
+    });
+  }
+});
+
+app.post('/api/admin/support/conversations/:id/assign', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const conversation = await SupportConversation.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        status: { $in: ['open', 'waiting'] }
+      },
+      {
+        agent: req.admin.id,
+        status: 'active'
+      },
+      { new: true }
+    ).populate('user', 'firstName lastName email');
+
+    if (!conversation) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Conversation not found or already assigned'
+      });
+    }
+
+    // Notify user
+    const user = await User.findById(conversation.user._id);
+    if (user) {
+      user.notifications.push({
+        title: 'Support Agent Assigned',
+        message: `${req.admin.name} is now assisting with your support request.`,
+        type: 'info'
+      });
+      await user.save();
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        conversation
+      }
+    });
+
+    await logActivity('assign-support-conversation', 'support', conversation._id, req.admin._id, 'Admin', req);
+  } catch (err) {
+    console.error('Assign support conversation error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while assigning support conversation'
+    });
+  }
+});
+
+app.post('/api/admin/support/conversations/:id/messages', adminProtect, restrictTo('super', 'support'), [
+  body('message').trim().notEmpty().withMessage('Message is required').escape(),
+  body('attachments').optional().isArray().withMessage('Attachments must be an array')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { message, attachments } = req.body;
+    const conversation = await SupportConversation.findOne({
+      _id: req.params.id,
+      agent: req.admin.id
+    });
+
+    if (!conversation) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Conversation not found or not assigned to you'
+      });
+    }
+
+    if (conversation.status === 'closed' || conversation.status === 'resolved') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Cannot add messages to a closed conversation'
+      });
+    }
+
+    // Save agent message
+    const agentMessage = await SupportMessage.create({
+      conversationId: conversation._id,
+      sender: req.admin.id,
+      senderModel: 'Admin',
+      content: message,
+      attachments
+    });
+
+    // Update conversation
+    conversation.status = 'active';
+    conversation.lastMessageAt = new Date();
+    await conversation.save();
+
+    // Notify user
+    const user = await User.findById(conversation.user);
+    if (user) {
+      user.notifications.push({
+        title: 'New Support Message',
+        message: `You have a new message from ${req.admin.name} regarding your support request.`,
+        type: 'info'
+      });
+      await user.save();
+    }
+
+    res.status(201).json({
+      status: 'success',
+      data: {
+        message: agentMessage
+      }
+    });
+
+    await logActivity('add-support-message', 'support', conversation._id, req.admin._id, 'Admin', req);
+  } catch (err) {
+    console.error('Add support message error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while adding support message'
+    });
+  }
+});
+
+app.post('/api/admin/support/conversations/:id/resolve', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const conversation = await SupportConversation.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        agent: req.admin.id,
+        status: 'active'
+      },
+      {
+        status: 'resolved',
+        resolvedAt: new Date()
+      },
+      { new: true }
+    ).populate('user', 'firstName lastName email');
+
+    if (!conversation) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Conversation not found or not assigned to you'
+      });
+    }
+
+    // Notify user
+    const user = await User.findById(conversation.user._id);
+    if (user) {
+      user.notifications.push({
+        title: 'Support Request Resolved',
+        message: `${req.admin.name} has marked your support request as resolved.`,
+        type: 'success'
+      });
+      await user.save();
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        conversation
+      }
+    });
+
+    await logActivity('resolve-support-conversation', 'support', conversation._id, req.admin._id, 'Admin', req);
+  } catch (err) {
+    console.error('Resolve support conversation error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while resolving support conversation'
+    });
+  }
+});
+
+// File Upload Endpoint for Support Attachments
+app.post('/api/support/upload', protect, async (req, res) => {
+  try {
+    if (!req.files || !req.files.file) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'No file uploaded'
+      });
+    }
+
+    const file = req.files.file;
+    const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf', 'text/plain'];
+    const maxSize = 5 * 1024 * 1024; // 5MB
+
+    if (!allowedTypes.includes(file.mimetype)) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Invalid file type. Only JPEG, PNG, PDF, and TXT files are allowed.'
+      });
+    }
+
+    if (file.size > maxSize) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'File size exceeds 5MB limit'
+      });
+    }
+
+    // In a real implementation, you would upload to S3 or similar
+    // For this example, we'll just return a mock response
+    const fileUrl = `https://website-backendd-1.onrender.com/uploads/${Date.now()}-${file.name}`;
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        url: fileUrl,
+        name: file.name,
+        type: file.mimetype,
+        size: file.size
+      }
+    });
+  } catch (err) {
+    console.error('File upload error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while uploading file'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
