@@ -4759,220 +4759,224 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-// Add these endpoints after the existing routes in server.js
+// Add these endpoints after your existing routes in server.js
 
-// Recent Withdrawals Endpoint
+// Recent Transactions Endpoints
 app.get('/api/recent-withdrawals', async (req, res) => {
-    try {
-        // Check Redis cache first
-        const cachedWithdrawals = await redis.get('recent-withdrawals');
-        if (cachedWithdrawals) {
-            return res.status(200).json(JSON.parse(cachedWithdrawals));
-        }
-
-        // Get recent completed withdrawals from database
-        const withdrawals = await Transaction.aggregate([
-            { $match: { type: 'withdrawal', status: 'completed' } },
-            { $sort: { createdAt: -1 } },
-            { $limit: 50 },
-            { $lookup: {
-                from: 'users',
-                localField: 'user',
-                foreignField: '_id',
-                as: 'user'
-            }},
-            { $unwind: '$user' },
-            { $project: {
-                amount: 1,
-                method: 1,
-                reference: 1,
-                createdAt: 1,
-                'user._id': 1,
-                'user.email': 1
-            }}
-        ]);
-
-        // Process data to hide sensitive info
-        const processedWithdrawals = withdrawals.map(w => ({
-            amount: w.amount,
-            method: w.method,
-            transactionId: w.reference,
-            userId: w.user._id,
-            maskedEmail: `${w.user.email.substring(0, 4)}***${w.user.email.substring(w.user.email.length - 4)}`,
-            timestamp: w.createdAt
-        }));
-
-        // Cache for 5 minutes
-        await redis.set('recent-withdrawals', JSON.stringify(processedWithdrawals), 'EX', 300);
-
-        res.status(200).json(processedWithdrawals);
-    } catch (err) {
-        console.error('Error fetching recent withdrawals:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch recent withdrawals'
-        });
+  try {
+    // Get recent withdrawals from cache if available
+    const cachedWithdrawals = await redis.get('recent-withdrawals');
+    if (cachedWithdrawals) {
+      return res.status(200).json({
+        status: 'success',
+        data: JSON.parse(cachedWithdrawals)
+      });
     }
+
+    // Get actual recent withdrawals from database
+    const withdrawals = await Transaction.aggregate([
+      { $match: { type: 'withdrawal', status: 'completed' } },
+      { $sort: { createdAt: -1 } },
+      { $limit: 50 },
+      { $lookup: {
+          from: 'users',
+          localField: 'user',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      { $unwind: '$user' },
+      { $project: {
+          amount: 1,
+          method: 1,
+          reference: 1,
+          'user._id': 1,
+          'user.email': 1,
+          createdAt: 1
+        }
+      }
+    ]);
+
+    // Cache for 5 minutes
+    await redis.set('recent-withdrawals', JSON.stringify(withdrawals), 'EX', 300);
+
+    res.status(200).json({
+      status: 'success',
+      data: withdrawals
+    });
+  } catch (err) {
+    console.error('Error fetching recent withdrawals:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching recent withdrawals'
+    });
+  }
 });
 
-// Recent Investments Endpoint
 app.get('/api/recent-investments', async (req, res) => {
-    try {
-        // Check Redis cache first
-        const cachedInvestments = await redis.get('recent-investments');
-        if (cachedInvestments) {
-            return res.status(200).json(JSON.parse(cachedInvestments));
-        }
-
-        // Get recent investments from database
-        const investments = await Investment.aggregate([
-            { $sort: { createdAt: -1 } },
-            { $limit: 50 },
-            { $lookup: {
-                from: 'users',
-                localField: 'user',
-                foreignField: '_id',
-                as: 'user'
-            }},
-            { $lookup: {
-                from: 'plans',
-                localField: 'plan',
-                foreignField: '_id',
-                as: 'plan'
-            }},
-            { $unwind: '$user' },
-            { $unwind: '$plan' },
-            { $project: {
-                amount: 1,
-                planName: '$plan.name',
-                createdAt: 1,
-                'user._id': 1,
-                'user.email': 1
-            }}
-        ]);
-
-        // Process data to hide sensitive info
-        const processedInvestments = investments.map(i => ({
-            amount: i.amount,
-            planName: i.planName,
-            userId: i.user._id,
-            maskedEmail: `${i.user.email.substring(0, 4)}***${i.user.email.substring(i.user.email.length - 4)}`,
-            timestamp: i.createdAt
-        }));
-
-        // Cache for 5 minutes
-        await redis.set('recent-investments', JSON.stringify(processedInvestments), 'EX', 300);
-
-        res.status(200).json(processedInvestments);
-    } catch (err) {
-        console.error('Error fetching recent investments:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch recent investments'
-        });
+  try {
+    // Get recent investments from cache if available
+    const cachedInvestments = await redis.get('recent-investments');
+    if (cachedInvestments) {
+      return res.status(200).json({
+        status: 'success',
+        data: JSON.parse(cachedInvestments)
+      });
     }
+
+    // Get actual recent investments from database
+    const investments = await Investment.aggregate([
+      { $sort: { createdAt: -1 } },
+      { $limit: 50 },
+      { $lookup: {
+          from: 'users',
+          localField: 'user',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      { $lookup: {
+          from: 'plans',
+          localField: 'plan',
+          foreignField: '_id',
+          as: 'plan'
+        }
+      },
+      { $unwind: '$user' },
+      { $unwind: '$plan' },
+      { $project: {
+          amount: 1,
+          'plan.name': 1,
+          'user._id': 1,
+          'user.email': 1,
+          createdAt: 1,
+          reference: 1
+        }
+      }
+    ]);
+
+    // Cache for 5 minutes
+    await redis.set('recent-investments', JSON.stringify(investments), 'EX', 300);
+
+    res.status(200).json({
+      status: 'success',
+      data: investments
+    });
+  } catch (err) {
+    console.error('Error fetching recent investments:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching recent investments'
+    });
+  }
 });
 
-// Random Activity Endpoint (combines withdrawals and investments)
-app.get('/api/random-activity', async (req, res) => {
-    try {
-        // Check Redis cache first
-        const cachedActivity = await redis.get('random-activity');
-        if (cachedActivity) {
-            return res.status(200).json(JSON.parse(cachedActivity));
-        }
-
-        // Get recent activities
-        const [withdrawals, investments] = await Promise.all([
-            Transaction.aggregate([
-                { $match: { type: 'withdrawal', status: 'completed' } },
-                { $sort: { createdAt: -1 } },
-                { $limit: 50 },
-                { $lookup: {
-                    from: 'users',
-                    localField: 'user',
-                    foreignField: '_id',
-                    as: 'user'
-                }},
-                { $unwind: '$user' },
-                { $project: {
-                    type: { $literal: 'withdrawal' },
-                    amount: 1,
-                    method: 1,
-                    reference: 1,
-                    createdAt: 1,
-                    'user._id': 1,
-                    'user.email': 1
-                }}
-            ]),
-            Investment.aggregate([
-                { $sort: { createdAt: -1 } },
-                { $limit: 50 },
-                { $lookup: {
-                    from: 'users',
-                    localField: 'user',
-                    foreignField: '_id',
-                    as: 'user'
-                }},
-                { $lookup: {
-                    from: 'plans',
-                    localField: 'plan',
-                    foreignField: '_id',
-                    as: 'plan'
-                }},
-                { $unwind: '$user' },
-                { $unwind: '$plan' },
-                { $project: {
-                    type: { $literal: 'investment' },
-                    amount: 1,
-                    planName: '$plan.name',
-                    createdAt: 1,
-                    'user._id': 1,
-                    'user.email': 1
-                }}
-            ])
-        ]);
-
-        // Combine and process activities
-        const allActivities = [...withdrawals, ...investments]
-            .sort((a, b) => b.createdAt - a.createdAt)
-            .slice(0, 50)
-            .map(activity => {
-                const commonFields = {
-                    amount: activity.amount,
-                    userId: activity.user._id,
-                    maskedEmail: `${activity.user.email.substring(0, 4)}***${activity.user.email.substring(activity.user.email.length - 4)}`,
-                    timestamp: activity.createdAt
-                };
-
-                if (activity.type === 'withdrawal') {
-                    return {
-                        ...commonFields,
-                        type: 'withdrawal',
-                        method: activity.method,
-                        transactionId: activity.reference
-                    };
-                } else {
-                    return {
-                        ...commonFields,
-                        type: 'investment',
-                        planName: activity.planName,
-                        transactionId: crypto.randomBytes(6).toString('hex').toUpperCase()
-                    };
-                }
-            });
-
-        // Cache for 5 minutes
-        await redis.set('random-activity', JSON.stringify(allActivities), 'EX', 300);
-
-        res.status(200).json(allActivities);
-    } catch (err) {
-        console.error('Error fetching random activity:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch random activity'
-        });
+// Transaction Proof Generator
+app.get('/api/transaction-proof', async (req, res) => {
+  try {
+    // Check if we have a cached proof
+    const cachedProof = await redis.get('current-transaction-proof');
+    if (cachedProof) {
+      return res.status(200).json({
+        status: 'success',
+        data: JSON.parse(cachedProof)
+      });
     }
+
+    // Determine if we should show withdrawal or investment (50/50 chance)
+    const showWithdrawal = Math.random() > 0.5;
+    
+    let transactionData;
+    
+    if (showWithdrawal) {
+      // Get recent withdrawals
+      const withdrawals = await Transaction.aggregate([
+        { $match: { type: 'withdrawal', status: 'completed' } },
+        { $sort: { createdAt: -1 } },
+        { $limit: 100 },
+        { $lookup: {
+            from: 'users',
+            localField: 'user',
+            foreignField: '_id',
+            as: 'user'
+          }
+        },
+        { $unwind: '$user' },
+        { $sample: { size: 1 } }
+      ]);
+
+      if (withdrawals.length > 0) {
+        const withdrawal = withdrawals[0];
+        transactionData = {
+          type: 'withdrawal',
+          amount: withdrawal.amount,
+          method: withdrawal.method,
+          userId: withdrawal.user._id,
+          userEmail: withdrawal.user.email,
+          transactionId: withdrawal.reference,
+          timestamp: withdrawal.createdAt
+        };
+      }
+    } else {
+      // Get recent investments
+      const investments = await Investment.aggregate([
+        { $sort: { createdAt: -1 } },
+        { $limit: 100 },
+        { $lookup: {
+            from: 'users',
+            localField: 'user',
+            foreignField: '_id',
+            as: 'user'
+          }
+        },
+        { $lookup: {
+            from: 'plans',
+            localField: 'plan',
+            foreignField: '_id',
+            as: 'plan'
+          }
+        },
+        { $unwind: '$user' },
+        { $unwind: '$plan' },
+        { $sample: { size: 1 } }
+      ]);
+
+      if (investments.length > 0) {
+        const investment = investments[0];
+        transactionData = {
+          type: 'investment',
+          amount: investment.amount,
+          plan: investment.plan.name,
+          userId: investment.user._id,
+          userEmail: investment.user.email,
+          transactionId: investment.reference,
+          timestamp: investment.createdAt
+        };
+      }
+    }
+
+    if (!transactionData) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'No recent transactions found'
+      });
+    }
+
+    // Cache for a random time between 5 sec and 3 min
+    const cacheTime = Math.floor(Math.random() * (180 - 5 + 1)) + 5;
+    await redis.set('current-transaction-proof', JSON.stringify(transactionData), 'EX', cacheTime);
+
+    res.status(200).json({
+      status: 'success',
+      data: transactionData
+    });
+  } catch (err) {
+    console.error('Error generating transaction proof:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while generating transaction proof'
+    });
+  }
 });
 
 
