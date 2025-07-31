@@ -21,8 +21,8 @@ const { body, validationResult } = require('express-validator');
 const axios = require('axios');
 const speakeasy = require('speakeasy');
 const { v4: uuidv4 } = require('uuid');
-
-
+const WebSocket = require('ws');
+const OpenAI = require('openai');
 // Initialize Express app
 const app = express();
 
@@ -603,6 +603,779 @@ const NewsletterSubscriber = mongoose.model('NewsletterSubscriber', NewsletterSu
 
 
 
+
+
+
+// Add after other schema definitions
+const SupportMessageSchema = new mongoose.Schema({
+  conversationId: { 
+    type: String, 
+    required: true,
+    index: true 
+  },
+  sender: {
+    type: String,
+    enum: ['user', 'agent', 'ai'],
+    required: true
+  },
+  senderId: {
+    type: mongoose.Schema.Types.ObjectId,
+    required: true,
+    refPath: 'senderModel'
+  },
+  senderModel: {
+    type: String,
+    enum: ['User', 'Admin'],
+    required: true
+  },
+  recipientId: {
+    type: mongoose.Schema.Types.ObjectId,
+    refPath: 'recipientModel'
+  },
+  recipientModel: {
+    type: String,
+    enum: ['User', 'Admin']
+  },
+  message: {
+    type: String,
+    required: true
+  },
+  attachments: [{
+    url: String,
+    type: String,
+    name: String,
+    size: Number
+  }],
+  isRead: {
+    type: Boolean,
+    default: false
+  },
+  metadata: {
+    ip: String,
+    userAgent: String,
+    location: String
+  },
+  aiFeedback: {
+    helpful: Boolean,
+    correction: String
+  }
+}, { 
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+SupportMessageSchema.index({ conversationId: 1 });
+SupportMessageSchema.index({ senderId: 1, senderModel: 1 });
+SupportMessageSchema.index({ recipientId: 1, recipientModel: 1 });
+SupportMessageSchema.index({ createdAt: -1 });
+
+const SupportMessage = mongoose.model('SupportMessage', SupportMessageSchema);
+
+const SupportConversationSchema = new mongoose.Schema({
+  conversationId: {
+    type: String,
+    required: true,
+    unique: true,
+    index: true
+  },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true
+  },
+  agentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin'
+  },
+  status: {
+    type: String,
+    enum: ['open', 'active', 'waiting', 'closed', 'resolved'],
+    default: 'open',
+    index: true
+  },
+  topic: {
+    type: String,
+    enum: ['general', 'account', 'payments', 'investments', 'loans', 'kyc', 'technical', 'other'],
+    default: 'general'
+  },
+  priority: {
+    type: String,
+    enum: ['low', 'medium', 'high', 'urgent'],
+    default: 'medium'
+  },
+  lastMessageAt: {
+    type: Date
+  },
+  resolvedAt: {
+    type: Date
+  },
+  transferHistory: [{
+    fromAgent: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+    toAgent: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+    transferredAt: { type: Date, default: Date.now },
+    reason: String
+  }],
+  satisfactionRating: {
+    type: Number,
+    min: 1,
+    max: 5
+  },
+  notes: [{
+    agentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+    note: String,
+    createdAt: { type: Date, default: Date.now }
+  }]
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+SupportConversationSchema.virtual('user', {
+  ref: 'User',
+  localField: 'userId',
+  foreignField: '_id',
+  justOne: true
+});
+
+SupportConversationSchema.virtual('agent', {
+  ref: 'Admin',
+  localField: 'agentId',
+  foreignField: '_id',
+  justOne: true
+});
+
+SupportConversationSchema.index({ userId: 1 });
+SupportConversationSchema.index({ agentId: 1 });
+SupportConversationSchema.index({ status: 1 });
+SupportConversationSchema.index({ priority: 1 });
+SupportConversationSchema.index({ topic: 1 });
+
+const SupportConversation = mongoose.model('SupportConversation', SupportConversationSchema);
+
+// Initialize OpenAI client
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+// Initialize WebSocket server
+const setupWebSocketServer = (server) => {
+  const wss = new WebSocket.Server({ server, path: '/api/support/ws' });
+
+  // Track connected clients
+  const clients = new Map();
+  const agentAvailability = new Map();
+
+  // Helper function to broadcast to specific client
+  const sendToClient = (clientId, data) => {
+    const client = clients.get(clientId);
+    if (client && client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(data));
+    }
+  };
+
+  // Helper function to broadcast to all agents
+  const broadcastToAgents = (data) => {
+    clients.forEach((client, id) => {
+      if (client.userType === 'agent' && client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(data));
+      }
+    });
+  };
+
+  wss.on('connection', (ws, req) => {
+    const clientId = uuidv4();
+    let userType = '';
+    let userId = '';
+    let isAuthenticated = false;
+
+    // Authenticate connection
+    const authenticate = async (token) => {
+      try {
+        const decoded = verifyJWT(token);
+        
+        if (decoded.isAdmin) {
+          const admin = await Admin.findById(decoded.id);
+          if (admin && admin.role === 'support') {
+            userType = 'agent';
+            userId = admin._id;
+            isAuthenticated = true;
+            
+            // Mark agent as available by default
+            agentAvailability.set(userId.toString(), true);
+            
+            // Notify other agents
+            broadcastToAgents({
+              type: 'agent_status',
+              agentId: userId,
+              status: 'online'
+            });
+            
+            return true;
+          }
+        } else {
+          const user = await User.findById(decoded.id);
+          if (user) {
+            userType = 'user';
+            userId = user._id;
+            isAuthenticated = true;
+            return true;
+          }
+        }
+      } catch (err) {
+        return false;
+      }
+      return false;
+    };
+
+    ws.on('message', async (message) => {
+      try {
+        const data = JSON.parse(message);
+
+        // Handle authentication
+        if (data.type === 'authenticate') {
+          const success = await authenticate(data.token);
+          if (success) {
+            clients.set(clientId, ws);
+            ws.userType = userType;
+            ws.userId = userId;
+            
+            ws.send(JSON.stringify({
+              type: 'authentication',
+              success: true,
+              userType
+            }));
+
+            // If user, send their active conversations
+            if (userType === 'user') {
+              const conversations = await SupportConversation.find({
+                userId,
+                status: { $in: ['open', 'active', 'waiting'] }
+              }).sort({ updatedAt: -1 });
+              
+              ws.send(JSON.stringify({
+                type: 'conversations',
+                conversations
+              }));
+            }
+
+            // If agent, send active conversations and agent list
+            if (userType === 'agent') {
+              const activeConversations = await SupportConversation.find({
+                status: { $in: ['active', 'waiting'] }
+              }).populate('user', 'firstName lastName email');
+              
+              const onlineAgents = [];
+              clients.forEach((client, id) => {
+                if (client.userType === 'agent' && client.readyState === WebSocket.OPEN) {
+                  onlineAgents.push(client.userId.toString());
+                }
+              });
+              
+              ws.send(JSON.stringify({
+                type: 'agent_init',
+                conversations: activeConversations,
+                onlineAgents
+              }));
+            }
+          } else {
+            ws.send(JSON.stringify({
+              type: 'authentication',
+              success: false,
+              message: 'Invalid or expired token'
+            }));
+            ws.close();
+          }
+          return;
+        }
+
+        if (!isAuthenticated) {
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: 'Not authenticated'
+          }));
+          return;
+        }
+
+        // Handle different message types
+        switch (data.type) {
+          case 'new_message': {
+            const { conversationId, message, attachments } = data;
+            
+            // Validate conversation exists and user has access
+            const conversation = await SupportConversation.findOne({
+              conversationId,
+              $or: [{ userId }, { agentId: userId }]
+            });
+            
+            if (!conversation) {
+              ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Conversation not found or access denied'
+              }));
+              return;
+            }
+            
+            // Create message in database
+            const newMessage = new SupportMessage({
+              conversationId,
+              sender: userType,
+              senderId: userId,
+              senderModel: userType === 'agent' ? 'Admin' : 'User',
+              message,
+              attachments,
+              metadata: {
+                ip: req.headers['x-forwarded-for'] || req.connection.remoteAddress,
+                userAgent: req.headers['user-agent'],
+                location: await getLocationFromIp(req.headers['x-forwarded-for'] || req.connection.remoteAddress)
+              }
+            });
+            
+            // If user is sending, set recipient to assigned agent or null (will be picked up by AI)
+            if (userType === 'user') {
+              newMessage.recipientId = conversation.agentId;
+              newMessage.recipientModel = 'Admin';
+              
+              // Update conversation status
+              conversation.status = conversation.agentId ? 'active' : 'open';
+              conversation.lastMessageAt = new Date();
+              await conversation.save();
+            }
+            
+            // If agent is sending, set recipient to user
+            if (userType === 'agent') {
+              newMessage.recipientId = conversation.userId;
+              newMessage.recipientModel = 'User';
+              
+              // Update conversation status
+              conversation.status = 'active';
+              conversation.lastMessageAt = new Date();
+              
+              // If this is the first message from agent, assign them
+              if (!conversation.agentId) {
+                conversation.agentId = userId;
+                
+                // Notify user that agent has joined
+                const notificationMessage = new SupportMessage({
+                  conversationId,
+                  sender: 'system',
+                  senderId: userId,
+                  senderModel: 'Admin',
+                  message: `Support agent ${req.admin.name} has joined the conversation`,
+                  isRead: false
+                });
+                await notificationMessage.save();
+                
+                // Broadcast to user
+                clients.forEach((client, id) => {
+                  if (client.userType === 'user' && client.userId.toString() === conversation.userId.toString() && client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify({
+                      type: 'system_message',
+                      conversationId,
+                      message: notificationMessage
+                    }));
+                  }
+                });
+              }
+              
+              await conversation.save();
+            }
+            
+            await newMessage.save();
+            
+            // Populate sender info for real-time display
+            const populatedMessage = await SupportMessage.findById(newMessage._id)
+              .populate('senderId', 'firstName lastName email')
+              .populate('recipientId', 'firstName lastName email');
+            
+            // Broadcast message to all participants in conversation
+            const messageData = {
+              type: 'new_message',
+              message: populatedMessage
+            };
+            
+            clients.forEach((client, id) => {
+              if (client.readyState === WebSocket.OPEN) {
+                // Send to user in this conversation
+                if (client.userType === 'user' && client.userId.toString() === conversation.userId.toString()) {
+                  client.send(JSON.stringify(messageData));
+                }
+                
+                // Send to assigned agent
+                if (client.userType === 'agent' && conversation.agentId && client.userId.toString() === conversation.agentId.toString()) {
+                  client.send(JSON.stringify(messageData));
+                }
+              }
+            });
+            
+            // If no agent assigned and user sent message, try AI response or notify agents
+            if (userType === 'user' && !conversation.agentId) {
+              // First try AI response
+              try {
+                const aiResponse = await generateAIResponse(conversation, newMessage);
+                
+                if (aiResponse) {
+                  const aiMessage = new SupportMessage({
+                    conversationId,
+                    sender: 'ai',
+                    senderId: userId, // Associate with user for tracking
+                    senderModel: 'User',
+                    message: aiResponse,
+                    metadata: {
+                      ip: '127.0.0.1',
+                      userAgent: 'BitHash AI',
+                      location: 'Cloud'
+                    }
+                  });
+                  
+                  await aiMessage.save();
+                  
+                  // Broadcast AI response
+                  const aiMessageData = {
+                    type: 'new_message',
+                    message: await SupportMessage.findById(aiMessage._id)
+                      .populate('senderId', 'firstName lastName email')
+                  };
+                  
+                  sendToClient(clientId, aiMessageData);
+                  
+                  // Update conversation
+                  conversation.lastMessageAt = new Date();
+                  await conversation.save();
+                } else {
+                  // If AI couldn't respond, notify available agents
+                  broadcastToAgents({
+                    type: 'new_conversation',
+                    conversation: await SupportConversation.findById(conversation._id)
+                      .populate('user', 'firstName lastName email')
+                  });
+                }
+              } catch (aiError) {
+                console.error('AI response error:', aiError);
+                // Notify agents if AI fails
+                broadcastToAgents({
+                  type: 'new_conversation',
+                  conversation: await SupportConversation.findById(conversation._id)
+                    .populate('user', 'firstName lastName email')
+                });
+              }
+            }
+            
+            break;
+          }
+          
+          case 'agent_status': {
+            if (userType !== 'agent') break;
+            
+            const { status } = data;
+            agentAvailability.set(userId.toString(), status === 'available');
+            
+            broadcastToAgents({
+              type: 'agent_status',
+              agentId: userId,
+              status
+            });
+            
+            break;
+          }
+          
+          case 'transfer_conversation': {
+            if (userType !== 'agent') break;
+            
+            const { conversationId, toAgentId, reason } = data;
+            
+            const conversation = await SupportConversation.findOne({
+              conversationId,
+              agentId: userId
+            });
+            
+            if (!conversation) {
+              ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Conversation not found or not assigned to you'
+              }));
+              return;
+            }
+            
+            const toAgent = await Admin.findById(toAgentId);
+            if (!toAgent || toAgent.role !== 'support') {
+              ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Invalid agent specified'
+              }));
+              return;
+            }
+            
+            // Add to transfer history
+            conversation.transferHistory.push({
+              fromAgent: userId,
+              toAgent: toAgentId,
+              reason
+            });
+            
+            conversation.agentId = toAgentId;
+            await conversation.save();
+            
+            // Notify both agents
+            const transferNotification = {
+              type: 'conversation_transferred',
+              conversationId,
+              fromAgent: userId,
+              toAgent: toAgentId,
+              reason
+            };
+            
+            // Notify original agent
+            sendToClient(clientId, transferNotification);
+            
+            // Notify new agent if online
+            clients.forEach((client, id) => {
+              if (client.userType === 'agent' && client.userId.toString() === toAgentId.toString() && client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({
+                  ...transferNotification,
+                  conversation: conversation
+                }));
+              }
+            });
+            
+            // Notify user
+            clients.forEach((client, id) => {
+              if (client.userType === 'user' && client.userId.toString() === conversation.userId.toString() && client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({
+                  type: 'system_message',
+                  conversationId,
+                  message: {
+                    sender: 'system',
+                    message: `Your conversation has been transferred to agent ${toAgent.name}`,
+                    createdAt: new Date()
+                  }
+                }));
+              }
+            });
+            
+            break;
+          }
+          
+          case 'close_conversation': {
+            const { conversationId } = data;
+            
+            const conversation = await SupportConversation.findOne({
+              conversationId,
+              $or: [{ userId }, { agentId: userId }]
+            });
+            
+            if (!conversation) {
+              ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Conversation not found or access denied'
+              }));
+              return;
+            }
+            
+            conversation.status = 'closed';
+            conversation.resolvedAt = new Date();
+            await conversation.save();
+            
+            // Notify all participants
+            const closeData = {
+              type: 'conversation_closed',
+              conversationId
+            };
+            
+            clients.forEach((client, id) => {
+              if (client.readyState === WebSocket.OPEN) {
+                // Send to user in this conversation
+                if (client.userType === 'user' && client.userId.toString() === conversation.userId.toString()) {
+                  client.send(JSON.stringify(closeData));
+                }
+                
+                // Send to assigned agent
+                if (client.userType === 'agent' && conversation.agentId && client.userId.toString() === conversation.agentId.toString()) {
+                  client.send(JSON.stringify(closeData));
+                }
+              }
+            });
+            
+            break;
+          }
+          
+          case 'typing_indicator': {
+            const { conversationId, isTyping } = data;
+            
+            const conversation = await SupportConversation.findOne({
+              conversationId,
+              $or: [{ userId }, { agentId: userId }]
+            });
+            
+            if (!conversation) break;
+            
+            // Broadcast typing indicator to other participant(s)
+            clients.forEach((client, id) => {
+              if (client.readyState === WebSocket.OPEN) {
+                // Send to user if agent is typing
+                if (userType === 'agent' && client.userType === 'user' && 
+                    client.userId.toString() === conversation.userId.toString()) {
+                  client.send(JSON.stringify({
+                    type: 'typing_indicator',
+                    conversationId,
+                    isTyping
+                  }));
+                }
+                
+                // Send to agent if user is typing
+                if (userType === 'user' && client.userType === 'agent' && conversation.agentId && 
+                    client.userId.toString() === conversation.agentId.toString()) {
+                  client.send(JSON.stringify({
+                    type: 'typing_indicator',
+                    conversationId,
+                    isTyping
+                  }));
+                }
+              }
+            });
+            
+            break;
+          }
+        }
+      } catch (err) {
+        console.error('WebSocket message error:', err);
+        ws.send(JSON.stringify({
+          type: 'error',
+          message: 'Internal server error'
+        }));
+      }
+    });
+
+    ws.on('close', () => {
+      clients.delete(clientId);
+      
+      // If agent disconnected, mark as offline
+      if (userType === 'agent' && userId) {
+        agentAvailability.delete(userId.toString());
+        
+        // Notify other agents
+        broadcastToAgents({
+          type: 'agent_status',
+          agentId: userId,
+          status: 'offline'
+        });
+      }
+    });
+  });
+
+  // Enhanced AI response generation for BitHash
+  const generateAIResponse = async (conversation, userMessage) => {
+    try {
+      // Get conversation history
+      const messages = await SupportMessage.find({
+        conversationId: conversation.conversationId
+      }).sort({ createdAt: 1 });
+      
+      // Format messages for AI
+      const chatHistory = messages.map(msg => ({
+        role: msg.sender === 'user' ? 'user' : 'assistant',
+        content: msg.message
+      }));
+      
+      // BitHash-specific AI prompt with comprehensive platform knowledge
+      const systemPrompt = `
+      You are Andrea, the AI support assistant for BitHash - an institutional-grade Bitcoin mining and investment platform. 
+      Your role is to provide accurate, professional assistance regarding all aspects of the BitHash platform.
+
+      # Platform Overview
+      BitHash connects users to industrial-scale Bitcoin mining operations with:
+      - Global network of energy-efficient data centers (North America, Europe, Asia)
+      - Next-gen SHA-256 ASIC miners with liquid cooling
+      - 85% renewable energy usage
+      - 99.99% uptime with biometric security
+
+      # Key Information
+      ## Investment Plans (Current BTC Price: $118,396.00 as of 7/31/2025)
+      - Starter: 20% after 10 hours ($100-$499)
+      - Gold: 40% after 24 hours ($500-$1,999)
+      - Advance: 60% after 48 hours ($2,000-$9,999)
+      - Exclusive: 80% after 72 hours ($10,000-$30,000)
+      - Expert: 100% after 96 hours ($50,000-$1M)
+      - All plans include 5% referral bonuses
+
+      ## Financial Services
+      - BTC-backed loans (9.99% monthly interest)
+      - Minimum loan: $1,000
+      - Algorithmic credit scoring based on:
+        • Transaction history
+        • Investment consistency
+        • Account tenure (3+ months required)
+
+      ## Security Features
+      - 256-bit AES encryption
+      - Multi-signature wallets
+      - SOC 2 Type II certification
+      - Biometric facility access
+      - 24/7 physical monitoring
+
+      # Support Guidelines
+      1. Account Settings:
+      - KYC required for withdrawals >$1000/day
+      - 2FA options: SMS and authenticator apps
+      - Address verification via Google Places API
+
+      2. Deposits:
+      - Minimum: $10 (BTC or card)
+      - Card processing fee: 3.5%
+      - BTC deposits require 1-3 confirmations (~10-30 min)
+
+      3. Withdrawals:
+      - Processing time: 1-3 business days
+      - SegWit/Bech32 addresses supported
+      - Transparent fee structure
+
+      # Response Protocol
+      - Be professional yet approachable
+      - Provide specific numbers from current plans
+      - For security issues, always direct to human support
+      - If unsure, say: "Let me connect you with a support agent for detailed assistance."
+      - Never provide financial advice - only state platform facts
+      `;
+      
+      const response = await openai.chat.completions.create({
+        model: "gpt-4",
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...chatHistory
+        ],
+        temperature: 0.7,
+        max_tokens: 500
+      });
+      
+      return response.choices[0]?.message?.content || null;
+    } catch (err) {
+      console.error('AI response generation error:', err);
+      return null;
+    }
+  };
+
+  // Helper function to get location from IP
+  const getLocationFromIp = async (ip) => {
+    if (ip === '127.0.0.1') return 'Localhost';
+    try {
+      const response = await axios.get(`https://ipinfo.io/${ip}?token=${process.env.IPINFO_TOKEN || 'b56ce6e91d732d'}`);
+      return `${response.data.city}, ${response.data.region}, ${response.data.country}`;
+    } catch (err) {
+      return 'Unknown';
+    }
+  };
+
+  return wss;
+};
+
+
+
+
+
+
+
 module.exports = {
   User,
   Admin,
@@ -614,8 +1387,9 @@ module.exports = {
   SystemLog,
   NewsletterSubscriber,
   Card,
-  SupportMessage,
-  SupportConversation
+ SupportMessage,
+  SupportConversation,
+  setupWebSocketServer
 };
 
 // Helper functions with enhanced error handling
@@ -4877,509 +5651,68 @@ app.get('/api/transactions/recent-investments', async (req, res) => {
 
 
 
-
-// Add these models to your existing models section
-const ChatSchema = new mongoose.Schema({
-  user: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User', 
-    required: true,
-    index: true
-  },
-  sessionId: {
-    type: String,
-    required: true,
-    unique: true,
-    index: true
-  },
-  status: {
-    type: String,
-    enum: ['active', 'waiting', 'closed', 'transferred'],
-    default: 'active'
-  },
-  agent: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Admin'
-  },
-  messages: [{
-    sender: {
-      type: String,
-      enum: ['user', 'agent', 'ai'],
-      required: true
-    },
-    content: {
-      type: String,
-      required: true
-    },
-    timestamp: {
-      type: Date,
-      default: Date.now
-    },
-    metadata: {
-      type: mongoose.Schema.Types.Mixed
-    }
-  }],
-  startedAt: {
-    type: Date,
-    default: Date.now
-  },
-  endedAt: {
-    type: Date
-  },
-  transferReason: {
-    type: String
-  },
-  aiUsed: {
-    type: Boolean,
-    default: false
-  },
-  satisfactionRating: {
-    type: Number,
-    min: 1,
-    max: 5
-  }
-}, {
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
-
-ChatSchema.index({ user: 1 });
-ChatSchema.index({ sessionId: 1 });
-ChatSchema.index({ status: 1 });
-ChatSchema.index({ 'messages.timestamp': 1 });
-
-const Chat = mongoose.model('Chat', ChatSchema);
-
-const AgentAvailabilitySchema = new mongoose.Schema({
-  admin: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Admin',
-    required: true,
-    unique: true
-  },
-  status: {
-    type: String,
-    enum: ['online', 'offline', 'away', 'busy'],
-    default: 'offline'
-  },
-  currentChats: {
-    type: Number,
-    default: 0
-  },
-  maxChats: {
-    type: Number,
-    default: 5
-  },
-  lastActive: {
-    type: Date,
-    default: Date.now
-  },
-  skills: [{
-    type: String,
-    enum: ['general', 'kyc', 'payments', 'technical', 'account']
-  }]
-}, {
-  timestamps: true
-});
-
-AgentAvailabilitySchema.index({ admin: 1 });
-AgentAvailabilitySchema.index({ status: 1 });
-AgentAvailabilitySchema.index({ currentChats: 1 });
-
-const AgentAvailability = mongoose.model('AgentAvailability', AgentAvailabilitySchema);
-
-const AITrainingSchema = new mongoose.Schema({
-  input: {
-    type: String,
-    required: true
-  },
-  response: {
-    type: String,
-    required: true
-  },
-  correctedResponse: {
-    type: String
-  },
-  isCorrect: {
-    type: Boolean
-  },
-  metadata: {
-    type: mongoose.Schema.Types.Mixed
-  },
-  chatSession: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Chat'
-  },
-  trainedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    refPath: 'trainedByModel'
-  },
-  trainedByModel: {
-    type: String,
-    enum: ['Admin', 'User']
-  }
-}, {
-  timestamps: true
-});
-
-AITrainingSchema.index({ input: 'text', response: 'text' });
-AITrainingSchema.index({ chatSession: 1 });
-AITrainingSchema.index({ trainedBy: 1 });
-
-const AITraining = mongoose.model('AITraining', AITrainingSchema);
-
-// Add to your exports
-module.exports.Chat = Chat;
-module.exports.AgentAvailability = AgentAvailability;
-module.exports.AITraining = AITraining;
-
-// OpenAI integration setup
-const { Configuration, OpenAIApi } = require('openai');
-const openaiConfig = new Configuration({
-  apiKey: process.env.OPENAI_API_KEY
-});
-const openai = new OpenAIApi(openaiConfig);
-
-// AI Training Prompt from your requirements
-const aiSystemPrompt = `
-You are Andrea, BitHash's AI support assistant providing secure, professional live chat support. 
-
-Behavior Guidelines:
-- Opening message: "Hello! I'm Andrea, here to assist with your BitHash account. How can I help you today?"
-- Default tone: friendly but professional
-- For sensitive topics, say: "Let me connect you to a live agent for further help. One moment!"
-- Closing phrase: "Is there anything else I can help with?"
-
-Knowledge Base:
-Account Support:
-- KYC: Verification typically takes 24-48 hours. I can check your submission status if you provide your ticket number.
-- 2FA: For security, two-factor authentication is required. You can enable it in your account settings.
-- Password reset: Let's reset your password. First, please verify your email address.
-
-Transactions:
-- Deposits: BTC deposits require 1-3 network confirmations (typically 10-30 minutes).
-- Withdrawals: Withdrawals are processed within 4 hours after security review.
-
-Security:
-- Never share your private keys or passwords with anyone.
-- Always verify website URLs before entering credentials.
-
-Security Protocols:
-- Never request: passwords, private keys, or seed phrases
-- Verification methods:
-  - "May I confirm the email associated with your account?"
-  - "For security, could you verify the last 4 digits of your registered phone number?"
-
-Escalation Triggers:
-- Keywords: fraud, hacked, legal, sue, manager
-- High sentiment cases should be escalated
-
-Important Rules:
-- Always maintain professional tone
-- Never provide financial advice
-- Always verify user identity before discussing account details
-- Escalate complex or sensitive issues to human agents
-- Be concise but thorough in responses
-`;
-
-// Chat endpoints
-app.post('/api/chat/start', protect, async (req, res) => {
+// Add these endpoints after other routes
+// Get conversation history
+app.get('/api/support/conversations', protect, async (req, res) => {
   try {
-    // Check for existing active chat
-    const existingChat = await Chat.findOne({
-      user: req.user.id,
-      status: { $in: ['active', 'waiting'] }
-    });
-
-    if (existingChat) {
-      return res.status(200).json({
-        status: 'success',
-        data: {
-          chat: existingChat,
-          isNew: false
-        }
-      });
-    }
-
-    // Create new chat session
-    const sessionId = crypto.randomBytes(16).toString('hex');
-    const chat = await Chat.create({
-      user: req.user.id,
-      sessionId,
-      status: 'active',
-      aiUsed: true,
-      messages: [{
-        sender: 'ai',
-        content: "Hello! I'm Andrea, here to assist with your BitHash account. How can I help you today?",
-        metadata: {
-          isSystem: true
-        }
-      }]
-    });
-
-    res.status(201).json({
-      status: 'success',
-      data: {
-        chat,
-        isNew: true
-      }
-    });
-
-    await logActivity('start-chat', 'chat', chat._id, req.user._id, 'User', req);
-  } catch (err) {
-    console.error('Start chat error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while starting chat'
-    });
-  }
-});
-
-app.post('/api/chat/message', protect, [
-  body('message').trim().notEmpty().withMessage('Message is required').escape(),
-  body('sessionId').notEmpty().withMessage('Session ID is required')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { message, sessionId } = req.body;
-    const user = await User.findById(req.user.id);
-
-    // Find active chat session
-    const chat = await Chat.findOne({
-      sessionId,
-      user: req.user.id,
-      status: { $in: ['active', 'waiting'] }
-    });
-
-    if (!chat) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Active chat session not found'
-      });
-    }
-
-    // Add user message to chat
-    chat.messages.push({
-      sender: 'user',
-      content: message,
-      metadata: {
-        timestamp: new Date()
-      }
-    });
-
-    // Check if chat is with AI or agent
-    if (chat.status === 'active' && chat.aiUsed && !chat.agent) {
-      // AI response
-      try {
-        const completion = await openai.createChatCompletion({
-          model: "gpt-4",
-          messages: [
-            {
-              role: "system",
-              content: aiSystemPrompt
-            },
-            ...chat.messages.map(msg => ({
-              role: msg.sender === 'user' ? 'user' : 'assistant',
-              content: msg.content
-            }))
-          ],
-          temperature: 0.7,
-          max_tokens: 256
-        });
-
-        const aiResponse = completion.data.choices[0].message.content;
-
-        // Check if response contains escalation triggers
-        const escalationKeywords = ['fraud', 'hacked', 'legal', 'sue', 'manager'];
-        const shouldEscalate = escalationKeywords.some(keyword => 
-          message.toLowerCase().includes(keyword) || aiResponse.toLowerCase().includes('connect you to a live agent')
-        );
-
-        if (shouldEscalate) {
-          // Transfer to agent
-          const availableAgent = await AgentAvailability.findOne({
-            status: 'online',
-            currentChats: { $lt: '$maxChats' }
-          }).sort({ currentChats: 1 });
-
-          if (availableAgent) {
-            chat.status = 'transferred';
-            chat.agent = availableAgent.admin;
-            chat.transferReason = 'Escalation from AI';
-            chat.messages.push({
-              sender: 'ai',
-              content: "I'm connecting you to a live agent who can better assist with this matter. Please hold...",
-              metadata: {
-                isTransfer: true
-              }
-            });
-
-            // Update agent's current chats
-            availableAgent.currentChats += 1;
-            await availableAgent.save();
-
-            // Notify agent via WebSocket (implementation depends on your setup)
-            // notifyAgent(availableAgent.admin, chat._id);
-          } else {
-            chat.status = 'waiting';
-            chat.messages.push({
-              sender: 'ai',
-              content: "All our agents are currently busy. Your request has been queued and an agent will be with you shortly.",
-              metadata: {
-                isWaiting: true
-              }
-            });
-          }
-        } else {
-          // Add AI response to chat
-          chat.messages.push({
-            sender: 'ai',
-            content: aiResponse,
-            metadata: {
-              isAI: true
-            }
-          });
-        }
-      } catch (aiError) {
-        console.error('AI error:', aiError);
-        chat.messages.push({
-          sender: 'ai',
-          content: "I'm having trouble processing your request. Let me connect you to a live agent.",
-          metadata: {
-            isError: true
-          }
-        });
-        chat.status = 'waiting';
-      }
-    }
-
-    await chat.save();
-
-    // Save AI training data if applicable
-    if (chat.aiUsed && chat.messages.length > 2) {
-      const lastUserMessage = chat.messages[chat.messages.length - 2].content;
-      const lastAiResponse = chat.messages[chat.messages.length - 1].content;
-      
-      await AITraining.create({
-        input: lastUserMessage,
-        response: lastAiResponse,
-        chatSession: chat._id,
-        trainedBy: req.user._id,
-        trainedByModel: 'User'
-      });
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        chat
-      }
-    });
-
-    await logActivity('send-chat-message', 'chat', chat._id, req.user._id, 'User', req, { message });
-  } catch (err) {
-    console.error('Send chat message error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while sending chat message'
-    });
-  }
-});
-
-app.post('/api/chat/end', protect, [
-  body('sessionId').notEmpty().withMessage('Session ID is required')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { sessionId, rating } = req.body;
-
-    const chat = await Chat.findOneAndUpdate(
-      {
-        sessionId,
-        user: req.user.id,
-        status: { $in: ['active', 'waiting', 'transferred'] }
-      },
-      {
-        status: 'closed',
-        endedAt: new Date(),
-        satisfactionRating: rating
-      },
-      { new: true }
-    );
-
-    if (!chat) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Active chat session not found'
-      });
-    }
-
-    // If chat was with an agent, update their availability
-    if (chat.agent) {
-      await AgentAvailability.updateOne(
-        { admin: chat.agent },
-        { $inc: { currentChats: -1 } }
-      );
-    }
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Chat session ended'
-    });
-
-    await logActivity('end-chat', 'chat', chat._id, req.user._id, 'User', req);
-  } catch (err) {
-    console.error('End chat error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while ending chat'
-    });
-  }
-});
-
-// Admin chat endpoints
-app.get('/api/admin/chat/availability', adminProtect, restrictTo('super', 'support'), async (req, res) => {
-  try {
-    const availability = await AgentAvailability.findOne({ admin: req.admin.id });
+    const conversations = await SupportConversation.find({
+      userId: req.user.id
+    }).sort({ updatedAt: -1 });
     
-    if (!availability) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Availability record not found'
-      });
-    }
-
     res.status(200).json({
       status: 'success',
-      data: availability
+      data: conversations
     });
   } catch (err) {
-    console.error('Get availability error:', err);
+    console.error('Get conversations error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching availability'
+      message: 'Failed to fetch conversations'
     });
   }
 });
 
-app.post('/api/admin/chat/availability', adminProtect, restrictTo('super', 'support'), [
-  body('status').isIn(['online', 'offline', 'away', 'busy']).withMessage('Invalid status'),
-  body('maxChats').optional().isInt({ min: 1, max: 10 }).withMessage('Max chats must be between 1 and 10')
+// Get messages for a conversation
+app.get('/api/support/conversations/:conversationId/messages', protect, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    
+    // Verify user has access to this conversation
+    const conversation = await SupportConversation.findOne({
+      conversationId,
+      userId: req.user.id
+    });
+    
+    if (!conversation) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Conversation not found'
+      });
+    }
+    
+    const messages = await SupportMessage.find({ conversationId })
+      .sort({ createdAt: 1 })
+      .populate('senderId', 'firstName lastName email')
+      .populate('recipientId', 'firstName lastName email');
+    
+    res.status(200).json({
+      status: 'success',
+      data: messages
+    });
+  } catch (err) {
+    console.error('Get messages error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch messages'
+    });
+  }
+});
+
+// Start new conversation
+app.post('/api/support/conversations', protect, [
+  body('message').trim().notEmpty().withMessage('Message is required'),
+  body('topic').optional().isIn(['general', 'account', 'payments', 'investments', 'loans', 'kyc', 'technical', 'other']),
+  body('priority').optional().isIn(['low', 'medium', 'high', 'urgent'])
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -5390,352 +5723,187 @@ app.post('/api/admin/chat/availability', adminProtect, restrictTo('super', 'supp
   }
 
   try {
-    const { status, maxChats } = req.body;
-
-    const availability = await AgentAvailability.findOneAndUpdate(
-      { admin: req.admin.id },
-      {
-        status,
-        maxChats: maxChats || 5,
-        lastActive: new Date()
-      },
-      { upsert: true, new: true }
-    );
-
-    res.status(200).json({
-      status: 'success',
-      data: availability
+    const { message, topic = 'general', priority = 'medium' } = req.body;
+    
+    // Create new conversation
+    const conversation = new SupportConversation({
+      conversationId: uuidv4(),
+      userId: req.user.id,
+      status: 'open',
+      topic,
+      priority,
+      lastMessageAt: new Date()
     });
-
-    await logActivity('update-availability', 'agent', availability._id, req.admin._id, 'Admin', req, { status, maxChats });
-  } catch (err) {
-    console.error('Update availability error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while updating availability'
-    });
-  }
-});
-
-app.get('/api/admin/chat/queue', adminProtect, restrictTo('super', 'support'), async (req, res) => {
-  try {
-    const waitingChats = await Chat.find({ status: 'waiting' })
-      .populate('user', 'firstName lastName email')
-      .sort({ createdAt: 1 });
-
-    res.status(200).json({
-      status: 'success',
-      data: waitingChats
-    });
-  } catch (err) {
-    console.error('Get chat queue error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching chat queue'
-    });
-  }
-});
-
-app.post('/api/admin/chat/accept', adminProtect, restrictTo('super', 'support'), [
-  body('chatId').isMongoId().withMessage('Invalid chat ID')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { chatId } = req.body;
-
-    // Check agent availability
-    const agentAvailability = await AgentAvailability.findOne({ admin: req.admin.id });
-    if (!agentAvailability || agentAvailability.status !== 'online' || agentAvailability.currentChats >= agentAvailability.maxChats) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'You are not available to accept new chats'
-      });
-    }
-
-    const chat = await Chat.findOneAndUpdate(
-      {
-        _id: chatId,
-        status: 'waiting'
-      },
-      {
-        status: 'transferred',
-        agent: req.admin.id
-      },
-      { new: true }
-    ).populate('user', 'firstName lastName email');
-
-    if (!chat) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Chat not found or already assigned'
-      });
-    }
-
-    // Update agent's current chats
-    agentAvailability.currentChats += 1;
-    await agentAvailability.save();
-
-    // Add system message to chat
-    chat.messages.push({
-      sender: 'agent',
-      content: `You're now connected with ${req.admin.name}. How can I help you?`,
+    
+    await conversation.save();
+    
+    // Create first message
+    const supportMessage = new SupportMessage({
+      conversationId: conversation.conversationId,
+      sender: 'user',
+      senderId: req.user.id,
+      senderModel: 'User',
+      message,
       metadata: {
-        isSystem: true
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+        location: await getUserDeviceInfo(req).location
       }
     });
-    await chat.save();
-
-    res.status(200).json({
-      status: 'success',
-      data: chat
-    });
-
-    await logActivity('accept-chat', 'chat', chat._id, req.admin._id, 'Admin', req);
-  } catch (err) {
-    console.error('Accept chat error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while accepting chat'
-    });
-  }
-});
-
-app.post('/api/admin/chat/message', adminProtect, restrictTo('super', 'support'), [
-  body('chatId').isMongoId().withMessage('Invalid chat ID'),
-  body('message').trim().notEmpty().withMessage('Message is required').escape()
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { chatId, message } = req.body;
-
-    const chat = await Chat.findOne({
-      _id: chatId,
-      agent: req.admin.id,
-      status: 'transferred'
-    });
-
-    if (!chat) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Active chat session not found'
-      });
-    }
-
-    chat.messages.push({
-      sender: 'agent',
-      content: message,
-      metadata: {
-        timestamp: new Date()
-      }
-    });
-    await chat.save();
-
-    res.status(200).json({
-      status: 'success',
-      data: chat
-    });
-
-    await logActivity('send-agent-message', 'chat', chat._id, req.admin._id, 'Admin', req, { message });
-  } catch (err) {
-    console.error('Send agent message error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while sending agent message'
-    });
-  }
-});
-
-app.post('/api/admin/chat/end', adminProtect, restrictTo('super', 'support'), [
-  body('chatId').isMongoId().withMessage('Invalid chat ID')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { chatId } = req.body;
-
-    const chat = await Chat.findOneAndUpdate(
-      {
-        _id: chatId,
-        agent: req.admin.id,
-        status: 'transferred'
-      },
-      {
-        status: 'closed',
-        endedAt: new Date()
-      },
-      { new: true }
-    );
-
-    if (!chat) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Active chat session not found'
-      });
-    }
-
-    // Update agent's current chats
-    await AgentAvailability.updateOne(
-      { admin: req.admin.id },
-      { $inc: { currentChats: -1 } }
-    );
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Chat session ended'
-    });
-
-    await logActivity('end-agent-chat', 'chat', chat._id, req.admin._id, 'Admin', req);
-  } catch (err) {
-    console.error('End agent chat error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while ending agent chat'
-    });
-  }
-});
-
-app.get('/api/admin/chat/history', adminProtect, restrictTo('super', 'support'), async (req, res) => {
-  try {
-    const { page = 1, limit = 20, userId, status } = req.query;
-    const skip = (page - 1) * limit;
-
-    const query = {};
-    if (userId) query.user = userId;
-    if (status) query.status = status;
-
-    const chats = await Chat.find(query)
-      .populate('user', 'firstName lastName email')
-      .populate('agent', 'name')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const total = await Chat.countDocuments(query);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        chats,
-        total,
-        page: parseInt(page),
-        pages: Math.ceil(total / limit)
-      }
-    });
-  } catch (err) {
-    console.error('Get chat history error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching chat history'
-    });
-  }
-});
-
-app.post('/api/admin/ai/train', adminProtect, restrictTo('super'), [
-  body('input').trim().notEmpty().withMessage('Input is required'),
-  body('response').trim().notEmpty().withMessage('Response is required'),
-  body('correctedResponse').trim().notEmpty().withMessage('Corrected response is required'),
-  body('isCorrect').isBoolean().withMessage('isCorrect must be a boolean'),
-  body('chatSession').optional().isMongoId().withMessage('Invalid chat session ID')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { input, response, correctedResponse, isCorrect, chatSession } = req.body;
-
-    const trainingRecord = await AITraining.create({
-      input,
-      response,
-      correctedResponse,
-      isCorrect,
-      chatSession,
-      trainedBy: req.admin._id,
-      trainedByModel: 'Admin',
-      metadata: {
-        source: 'manual',
-        adminId: req.admin._id
-      }
-    });
-
+    
+    await supportMessage.save();
+    
     res.status(201).json({
       status: 'success',
-      data: trainingRecord
+      data: {
+        conversation,
+        message: supportMessage
+      }
     });
-
-    await logActivity('train-ai', 'ai', trainingRecord._id, req.admin._id, 'Admin', req);
   } catch (err) {
-    console.error('Train AI error:', err);
+    console.error('Create conversation error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while training AI'
+      message: 'Failed to create conversation'
     });
   }
 });
 
-app.get('/api/admin/ai/training-data', adminProtect, restrictTo('super'), async (req, res) => {
+// Admin endpoints for support
+app.get('/api/admin/support/conversations', adminProtect, restrictTo('super', 'support'), async (req, res) => {
   try {
-    const { page = 1, limit = 20, isCorrect } = req.query;
+    const { status, page = 1, limit = 20 } = req.query;
     const skip = (page - 1) * limit;
-
+    
     const query = {};
-    if (isCorrect !== undefined) query.isCorrect = isCorrect === 'true';
-
-    const trainingData = await AITraining.find(query)
-      .populate('chatSession')
-      .populate('trainedBy')
-      .sort({ createdAt: -1 })
+    if (status) query.status = status;
+    
+    const conversations = await SupportConversation.find(query)
+      .populate('user', 'firstName lastName email')
+      .populate('agent', 'name email')
+      .sort({ updatedAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
-
-    const total = await AITraining.countDocuments(query);
-
+    
+    const total = await SupportConversation.countDocuments(query);
+    
     res.status(200).json({
       status: 'success',
       data: {
-        trainingData,
+        conversations,
         total,
         page: parseInt(page),
         pages: Math.ceil(total / limit)
       }
     });
   } catch (err) {
-    console.error('Get AI training data error:', err);
+    console.error('Admin get conversations error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching AI training data'
+      message: 'Failed to fetch conversations'
     });
   }
 });
 
+// Mark messages as read
+app.patch('/api/support/conversations/:conversationId/messages/read', protect, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    
+    // Verify user has access to this conversation
+    const conversation = await SupportConversation.findOne({
+      conversationId,
+      userId: req.user.id
+    });
+    
+    if (!conversation) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Conversation not found'
+      });
+    }
+    
+    // Mark all unread messages to user as read
+    await SupportMessage.updateMany({
+      conversationId,
+      recipientId: req.user.id,
+      isRead: false
+    }, {
+      $set: { isRead: true }
+    });
+    
+    res.status(200).json({
+      status: 'success',
+      message: 'Messages marked as read'
+    });
+  } catch (err) {
+    console.error('Mark messages read error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to mark messages as read'
+    });
+  }
+});
 
+// Provide feedback on AI response
+app.post('/api/support/messages/:messageId/feedback', protect, [
+  body('helpful').isBoolean().withMessage('Helpful must be a boolean'),
+  body('correction').optional().trim()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
 
+  try {
+    const { messageId } = req.params;
+    const { helpful, correction } = req.body;
+    
+    // Verify user has access to this message
+    const message = await SupportMessage.findOne({
+      _id: messageId,
+      sender: 'ai',
+      conversationId: {
+        $in: await SupportConversation.find({ userId: req.user.id }).distinct('conversationId')
+      }
+    });
+    
+    if (!message) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Message not found or not an AI message'
+      });
+    }
+    
+    // Update feedback
+    message.aiFeedback = {
+      helpful,
+      correction
+    };
+    
+    await message.save();
+    
+    res.status(200).json({
+      status: 'success',
+      message: 'Feedback submitted'
+    });
+  } catch (err) {
+    console.error('Submit feedback error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to submit feedback'
+    });
+  }
+});
 
-
+// Then modify your server startup to include WebSocket:
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  setupWebSocketServer(server);
+});
 
 
 
