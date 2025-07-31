@@ -4758,7 +4758,6 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-// Add these endpoints after your existing routes but before error handlers
 
 // Recent Transactions Endpoints
 app.get('/api/transactions/recent-withdrawals', async (req, res) => {
@@ -4772,7 +4771,7 @@ app.get('/api/transactions/recent-withdrawals', async (req, res) => {
                     createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
                 }
             },
-            { $sample: { size: 5 } }, // Get 5 random withdrawals
+            { $sample: { size: 1 } }, // Get one random withdrawal
             {
                 $lookup: {
                     from: 'users',
@@ -4789,32 +4788,41 @@ app.get('/api/transactions/recent-withdrawals', async (req, res) => {
                     method: 1,
                     reference: 1,
                     'user._id': 1,
-                    'user.email': 1
+                    'user.firstName': 1,
+                    'user.lastName': 1
                 }
             }
         ]);
 
-        // Format the data for frontend
-        const formattedWithdrawals = withdrawals.map(tx => ({
-            amount: tx.amount,
-            method: tx.method,
-            transactionId: tx.reference,
-            userId: tx.user._id,
-            maskedEmail: maskEmail(tx.user.email)
-        }));
+        if (withdrawals.length === 0) {
+            return res.status(404).json({
+                status: 'success',
+                data: null,
+                message: 'No recent withdrawals found'
+            });
+        }
 
-        // Cache in Redis for 5 minutes to prevent duplicates
-        await redis.set('recent-withdrawals', JSON.stringify(formattedWithdrawals), 'EX', 300);
+        // Format the withdrawal data
+        const withdrawal = withdrawals[0];
+        const userCode = `${withdrawal.user.firstName.substring(0, 3)}***${withdrawal.user.lastName.substring(withdrawal.user.lastName.length - 3)}`;
+        const txIdParts = withdrawal.reference.match(/.{1,4}/g) || [];
+        const maskedTxId = `${txIdParts[0]}•••${txIdParts[txIdParts.length - 1]}`;
 
         res.status(200).json({
             status: 'success',
-            data: formattedWithdrawals
+            data: {
+                title: 'Withdrawal Alert',
+                message: `User ${userCode} has withdrawn $${withdrawal.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} via ${withdrawal.method === 'btc' ? 'Bitcoin' : 'Wire Transfer'}`,
+                transactionId: maskedTxId,
+                type: 'withdrawal',
+                timestamp: new Date()
+            }
         });
     } catch (err) {
-        console.error('Error fetching recent withdrawals:', err);
+        console.error('Get recent withdrawals error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to fetch recent withdrawals'
+            message: 'An error occurred while fetching recent withdrawals'
         });
     }
 });
@@ -4828,7 +4836,7 @@ app.get('/api/transactions/recent-investments', async (req, res) => {
                     createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
                 }
             },
-            { $sample: { size: 5 } }, // Get 5 random investments
+            { $sample: { size: 1 } }, // Get one random investment
             {
                 $lookup: {
                     from: 'users',
@@ -4854,43 +4862,52 @@ app.get('/api/transactions/recent-investments', async (req, res) => {
                     'plan.name': 1,
                     reference: 1,
                     'user._id': 1,
-                    'user.email': 1
+                    'user.firstName': 1,
+                    'user.lastName': 1
                 }
             }
         ]);
 
-        // Format the data for frontend
-        const formattedInvestments = investments.map(inv => ({
-            amount: inv.amount,
-            planName: inv.plan.name,
-            transactionId: inv.reference,
-            userId: inv.user._id,
-            maskedEmail: maskEmail(inv.user.email)
-        }));
+        if (investments.length === 0) {
+            return res.status(404).json({
+                status: 'success',
+                data: null,
+                message: 'No recent investments found'
+            });
+        }
 
-        // Cache in Redis for 5 minutes to prevent duplicates
-        await redis.set('recent-investments', JSON.stringify(formattedInvestments), 'EX', 300);
+        // Format the investment data
+        const investment = investments[0];
+        const userCode = `${investment.user.firstName.substring(0, 3)}***${investment.user.lastName.substring(investment.user.lastName.length - 3)}`;
+        const txIdParts = investment.reference.match(/.{1,4}/g) || [];
+        const maskedTxId = `${txIdParts[0]}•••${txIdParts[txIdParts.length - 1]}`;
 
         res.status(200).json({
             status: 'success',
-            data: formattedInvestments
+            data: {
+                title: '💼 New Investment Alert',
+                message: `User ${userCode} invested $${investment.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} into the ${investment.plan.name.toLowerCase()} plan`,
+                transactionId: maskedTxId,
+                type: 'investment',
+                timestamp: new Date()
+            }
         });
     } catch (err) {
-        console.error('Error fetching recent investments:', err);
+        console.error('Get recent investments error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to fetch recent investments'
+            message: 'An error occurred while fetching recent investments'
         });
     }
 });
 
-// Helper function to mask email
-function maskEmail(email) {
-    if (!email) return 'Ano***User';
-    const [username, domain] = email.split('@');
-    const maskedUsername = username.substring(0, 4) + '***' + username.slice(-2);
-    return maskedUsername + (domain ? '@' + domain.split('.')[0].substring(0, 2) + '***' : '');
-}
+
+
+
+
+
+
+
 
 
 
