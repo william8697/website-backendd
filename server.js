@@ -4758,80 +4758,173 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-// Add these endpoints to server.js
+// Add these endpoints to your server.js
 
 // Recent Withdrawals Endpoint
-app.get('/api/recent-withdrawals', async (req, res) => {
+app.get('/api/transactions/recent-withdrawals', async (req, res) => {
     try {
         // Check Redis cache first
         const cachedWithdrawals = await redis.get('recent-withdrawals');
         if (cachedWithdrawals) {
-            return res.status(200).json(JSON.parse(cachedWithdrawals));
+            return res.status(200).json({
+                status: 'success',
+                data: JSON.parse(cachedWithdrawals)
+            });
         }
 
         // Generate realistic withdrawal data
         const withdrawals = Array.from({ length: 10 }, () => {
-            const amount = Math.floor(Math.random() * (2000000 - 120 + 1) + 120);
-            const userId = crypto.randomBytes(4).toString('hex');
-            const transactionId = crypto.randomBytes(8).toString('hex');
-            const method = Math.random() > 0.5 ? 'Wire Transfer' : 'BTC';
+            const amount = Math.floor(Math.random() * (2000000 - 120 + 1) + 120;
+            const userId = 'User ' + crypto.randomBytes(3).toString('hex').toUpperCase();
+            const maskedUserId = userId.slice(0, 4) + '***' + userId.slice(-4);
+            const txId = 'Tx' + crypto.randomBytes(4).toString('hex').toUpperCase();
+            const maskedTxId = txId.slice(0, 4) + '•••' + txId.slice(-4);
+            const method = Math.random() > 0.5 ? 'BTC' : 'Wire Transfer';
             
             return {
-                message: `User ${userId.slice(0, 3)}***${userId.slice(-3)} has withdrawn $${amount.toLocaleString()} via ${method}`,
-                transactionId: `${transactionId.slice(0, 3)}•••${transactionId.slice(-4)}`,
-                timestamp: new Date()
+                type: 'withdrawal',
+                user: maskedUserId,
+                amount: amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
+                method: method,
+                txId: maskedTxId,
+                timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000))
             };
         });
 
         // Cache for 1 hour
         await redis.set('recent-withdrawals', JSON.stringify(withdrawals), 'EX', 3600);
 
-        res.status(200).json(withdrawals);
+        res.status(200).json({
+            status: 'success',
+            data: withdrawals
+        });
     } catch (err) {
-        console.error('Recent withdrawals error:', err);
-        res.status(500).json({ status: 'error', message: 'Failed to fetch recent withdrawals' });
+        console.error('Error fetching recent withdrawals:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch recent withdrawals'
+        });
     }
 });
 
 // Recent Investments Endpoint
-app.get('/api/recent-investments', async (req, res) => {
+app.get('/api/transactions/recent-investments', async (req, res) => {
     try {
         // Check Redis cache first
         const cachedInvestments = await redis.get('recent-investments');
         if (cachedInvestments) {
-            return res.status(200).json(JSON.parse(cachedInvestments));
+            return res.status(200).json({
+                status: 'success',
+                data: JSON.parse(cachedInvestments)
+            });
         }
 
-        // Get all active plans from database
+        // Get plans from database to ensure valid amounts
         const plans = await Plan.find({ isActive: true });
-        if (!plans.length) {
-            return res.status(404).json({ status: 'fail', message: 'No investment plans found' });
+        if (!plans || plans.length === 0) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'No investment plans found'
+            });
         }
 
         // Generate realistic investment data
         const investments = Array.from({ length: 10 }, () => {
             const plan = plans[Math.floor(Math.random() * plans.length)];
-            const amount = Math.floor(Math.random() * (plan.maxAmount - plan.minAmount + 1) + plan.minAmount);
-            const userId = crypto.randomBytes(4).toString('hex');
-            const transactionId = crypto.randomBytes(8).toString('hex');
+            const amount = Math.floor(
+                Math.random() * (plan.maxAmount - plan.minAmount + 1) + plan.minAmount
+            );
+            const userId = 'User ' + crypto.randomBytes(3).toString('hex').toUpperCase();
+            const maskedUserId = userId.slice(0, 4) + '***' + userId.slice(-4);
+            const txId = 'Inv' + crypto.randomBytes(4).toString('hex').toUpperCase();
+            const maskedTxId = txId.slice(0, 4) + '•••' + txId.slice(-4);
             
             return {
-                message: `User ${userId.slice(0, 3)}***${userId.slice(-3)} invested $${amount.toLocaleString()} into the ${plan.name}`,
-                transactionId: `${transactionId.slice(0, 3)}•••${transactionId.slice(-4)}`,
-                timestamp: new Date()
+                type: 'investment',
+                user: maskedUserId,
+                amount: amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
+                plan: plan.name,
+                txId: maskedTxId,
+                timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000))
             };
         });
 
         // Cache for 1 hour
         await redis.set('recent-investments', JSON.stringify(investments), 'EX', 3600);
 
-        res.status(200).json(investments);
+        res.status(200).json({
+            status: 'success',
+            data: investments
+        });
     } catch (err) {
-        console.error('Recent investments error:', err);
-        res.status(500).json({ status: 'error', message: 'Failed to fetch recent investments' });
+        console.error('Error fetching recent investments:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch recent investments'
+        });
     }
 });
 
+// Add this to your existing Redis connection setup
+redis.defineCommand('getRandomTransaction', {
+    numberOfKeys: 0,
+    lua: `
+        -- Get counts
+        local withdrawalCount = redis.call('LLEN', 'withdrawal-queue')
+        local investmentCount = redis.call('LLEN', 'investment-queue')
+        
+        -- Decide which type to show (weighted 50/50)
+        local typeToShow = 'withdrawal'
+        if withdrawalCount == 0 and investmentCount > 0 then
+            typeToShow = 'investment'
+        elseif investmentCount == 0 and withdrawalCount > 0 then
+            typeToShow = 'withdrawal'
+        elseif math.random() > 0.5 and investmentCount > 0 then
+            typeToShow = 'investment'
+        end
+        
+        -- Get and return the transaction
+        if typeToShow == 'withdrawal' and withdrawalCount > 0 then
+            return {'withdrawal', redis.call('LPOP', 'withdrawal-queue')}
+        elseif typeToShow == 'investment' and investmentCount > 0 then
+            return {'investment', redis.call('LPOP', 'investment-queue')}
+        else
+            return {nil, nil}
+        end
+    `
+});
+
+// Initialize transaction queues in Redis
+async function initializeTransactionQueues() {
+    try {
+        // Check if queues already exist
+        const withdrawalsExist = await redis.exists('withdrawal-queue');
+        const investmentsExist = await redis.exists('investment-queue');
+        
+        if (!withdrawalsExist) {
+            // Get recent withdrawals and add to queue
+            const { data: withdrawals } = await axios.get('http://localhost:${PORT}/api/transactions/recent-withdrawals');
+            for (const tx of withdrawals) {
+                await redis.rpush('withdrawal-queue', JSON.stringify(tx));
+            }
+        }
+        
+        if (!investmentsExist) {
+            // Get recent investments and add to queue
+            const { data: investments } = await axios.get('http://localhost:${PORT}/api/transactions/recent-investments');
+            for (const tx of investments) {
+                await redis.rpush('investment-queue', JSON.stringify(tx));
+            }
+        }
+        
+        console.log('Transaction queues initialized');
+    } catch (err) {
+        console.error('Error initializing transaction queues:', err);
+    }
+}
+
+// Call this after Redis connection is established
+initializeTransactionQueues();
 
 
 
