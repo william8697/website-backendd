@@ -4759,79 +4759,44 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-// Add these endpoints after your existing routes in server.js
-
 // Recent Withdrawals Endpoint
-app.get('/api/transactions/recent-withdrawals', async (req, res) => {
+app.get('/api/recent/withdrawals', async (req, res) => {
     try {
-        // Check Redis cache first
-        const cachedWithdrawals = await redis.get('recent-withdrawals');
-        if (cachedWithdrawals) {
-            return res.status(200).json({
-                status: 'success',
-                data: JSON.parse(cachedWithdrawals)
-            });
-        }
+        // Generate a unique withdrawal record
+        const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
+        const formattedAmount = amount.toLocaleString('en-US', {
+            style: 'currency',
+            currency: 'USD',
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 0
+        });
 
-        // Get recent withdrawals from database
-        const withdrawals = await Transaction.aggregate([
-            { $match: { type: 'withdrawal', status: 'completed' } },
-            { $sort: { createdAt: -1 } },
-            { $limit: 50 },
-            { $sample: { size: 1 } }, // Get one random withdrawal
-            { 
-                $project: {
-                    _id: 0,
-                    userId: { $substr: ["$user", 0, 6] },
-                    amount: 1,
-                    method: 1,
-                    transactionId: { $substr: ["$reference", 0, 6] },
-                    createdAt: 1
-                }
-            }
-        ]);
+        const userId = crypto.randomBytes(6).toString('hex');
+        const maskedUserId = `${userId.substring(0, 4)}***${userId.substring(userId.length - 4)}`;
+        
+        const txId = crypto.randomBytes(8).toString('hex');
+        const maskedTxId = `${txId.substring(0, 4)}•••${txId.substring(txId.length - 4)}`;
+        
+        const methods = ['Wire Transfer', 'BTC'];
+        const method = methods[Math.floor(Math.random() * methods.length)];
 
-        if (withdrawals.length === 0) {
-            // Generate a realistic withdrawal if none exist
-            const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
-            const methods = ['btc', 'bank'];
-            const method = methods[Math.floor(Math.random() * methods.length)];
-            
-            const fakeWithdrawal = {
-                userId: crypto.randomBytes(3).toString('hex') + '***' + crypto.randomBytes(2).toString('hex').toUpperCase(),
-                amount: amount,
-                method: method === 'btc' ? 'BTC' : 'Wire Transfer',
-                transactionId: crypto.randomBytes(3).toString('hex') + '•••' + crypto.randomBytes(3).toString('hex'),
-                createdAt: new Date()
-            };
-
-            // Cache for 5 minutes
-            await redis.set('recent-withdrawals', JSON.stringify([fakeWithdrawal]), 'EX', 300);
-            
-            return res.status(200).json({
-                status: 'success',
-                data: [fakeWithdrawal]
-            });
-        }
-
-        // Format the withdrawal data
-        const formattedWithdrawal = {
-            userId: withdrawals[0].userId + '***' + crypto.randomBytes(2).toString('hex').toUpperCase(),
-            amount: withdrawals[0].amount,
-            method: withdrawals[0].method === 'btc' ? 'BTC' : 'Wire Transfer',
-            transactionId: withdrawals[0].transactionId + '•••' + crypto.randomBytes(3).toString('hex'),
-            createdAt: withdrawals[0].createdAt
+        const withdrawal = {
+            message: `User ${maskedUserId} has withdrawn ${formattedAmount} via ${method}`,
+            transactionId: maskedTxId,
+            type: 'withdrawal',
+            timestamp: new Date()
         };
 
-        // Cache for 5 minutes
-        await redis.set('recent-withdrawals', JSON.stringify([formattedWithdrawal]), 'EX', 300);
+        // Store in Redis with expiration to prevent duplicates
+        const redisKey = `withdrawal:${txId}`;
+        await redis.set(redisKey, JSON.stringify(withdrawal), 'EX', 86400); // Store for 24 hours
 
         res.status(200).json({
             status: 'success',
-            data: [formattedWithdrawal]
+            data: withdrawal
         });
     } catch (err) {
-        console.error('Error fetching recent withdrawals:', err);
+        console.error('Recent withdrawals error:', err);
         res.status(500).json({
             status: 'error',
             message: 'An error occurred while fetching recent withdrawals'
@@ -4840,92 +4805,52 @@ app.get('/api/transactions/recent-withdrawals', async (req, res) => {
 });
 
 // Recent Investments Endpoint
-app.get('/api/transactions/recent-investments', async (req, res) => {
+app.get('/api/recent/investments', async (req, res) => {
     try {
-        // Check Redis cache first
-        const cachedInvestments = await redis.get('recent-investments');
-        if (cachedInvestments) {
-            return res.status(200).json({
-                status: 'success',
-                data: JSON.parse(cachedInvestments)
+        // Get plans from database to ensure valid amounts
+        const plans = await Plan.find({ isActive: true });
+        if (!plans.length) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'No active investment plans found'
             });
         }
 
-        // Get recent investments from database
-        const investments = await Investment.aggregate([
-            { $match: { status: 'active' } },
-            { $sort: { createdAt: -1 } },
-            { $limit: 50 },
-            { $sample: { size: 1 } }, // Get one random investment
-            { 
-                $lookup: {
-                    from: 'plans',
-                    localField: 'plan',
-                    foreignField: '_id',
-                    as: 'plan'
-                }
-            },
-            { $unwind: '$plan' },
-            {
-                $project: {
-                    _id: 0,
-                    userId: { $substr: ["$user", 0, 6] },
-                    amount: 1,
-                    planName: '$plan.name',
-                    transactionId: { $substr: [crypto.randomBytes(6).toString('hex'), 0, 6] },
-                    createdAt: 1
-                }
-            }
-        ]);
+        // Select a random plan
+        const plan = plans[Math.floor(Math.random() * plans.length)];
+        
+        // Generate amount within plan limits
+        const amount = Math.floor(Math.random() * (plan.maxAmount - plan.minAmount + 1)) + plan.minAmount;
+        const formattedAmount = amount.toLocaleString('en-US', {
+            style: 'currency',
+            currency: 'USD',
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 0
+        });
 
-        if (investments.length === 0) {
-            // Generate a realistic investment if none exist
-            const plans = await Plan.find({ isActive: true });
-            if (plans.length === 0) {
-                return res.status(404).json({
-                    status: 'fail',
-                    message: 'No active investment plans found'
-                });
-            }
+        const userId = crypto.randomBytes(6).toString('hex');
+        const maskedUserId = `${userId.substring(0, 4)}***${userId.substring(userId.length - 4)}`;
+        
+        const txId = crypto.randomBytes(8).toString('hex');
+        const maskedTxId = `${txId.substring(0, 4)}•••${txId.substring(txId.length - 4)}`;
 
-            const plan = plans[Math.floor(Math.random() * plans.length)];
-            const amount = Math.floor(Math.random() * (plan.maxAmount - plan.minAmount + 1)) + plan.minAmount;
-            
-            const fakeInvestment = {
-                userId: crypto.randomBytes(3).toString('hex') + '***' + crypto.randomBytes(2).toString('hex').toUpperCase(),
-                amount: amount,
-                planName: plan.name,
-                transactionId: crypto.randomBytes(3).toString('hex') + '•••' + crypto.randomBytes(3).toString('hex'),
-                createdAt: new Date()
-            };
-
-            // Cache for 5 minutes
-            await redis.set('recent-investments', JSON.stringify([fakeInvestment]), 'EX', 300);
-            
-            return res.status(200).json({
-                status: 'success',
-                data: [fakeInvestment]
-            });
-        }
-
-        // Format the investment data
-        const formattedInvestment = {
-            userId: investments[0].userId + '***' + crypto.randomBytes(2).toString('hex').toUpperCase(),
-            amount: investments[0].amount,
-            planName: investments[0].planName,
-            transactionId: investments[0].transactionId + '•••' + crypto.randomBytes(3).toString('hex'),
-            createdAt: investments[0].createdAt
+        const investment = {
+            message: `User ${maskedUserId} invested ${formattedAmount} into the ${plan.name}`,
+            transactionId: maskedTxId,
+            type: 'investment',
+            timestamp: new Date()
         };
 
-        // Cache for 5 minutes
-        await redis.set('recent-investments', JSON.stringify([formattedInvestment]), 'EX', 300);
+        // Store in Redis with expiration to prevent duplicates
+        const redisKey = `investment:${txId}`;
+        await redis.set(redisKey, JSON.stringify(investment), 'EX', 86400); // Store for 24 hours
 
         res.status(200).json({
             status: 'success',
-            data: [formattedInvestment]
+            data: investment
         });
     } catch (err) {
-        console.error('Error fetching recent investments:', err);
+        console.error('Recent investments error:', err);
         res.status(500).json({
             status: 'error',
             message: 'An error occurred while fetching recent investments'
