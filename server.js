@@ -5899,15 +5899,6 @@ app.post('/api/support/messages/:messageId/feedback', protect, [
   }
 });
 
-// Then modify your server startup to include WebSocket:
-const server = app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  setupWebSocketServer(server);
-});
-
-
-
-
 
 
 
@@ -5928,8 +5919,9 @@ app.use((req, res) => {
   });
 });
 
-// Start server
+// Start server with WebSocket support
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  setupWebSocketServer(server);  // This initializes WebSocket
 });
