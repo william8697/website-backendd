@@ -5005,9 +5005,7 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-// Add these endpoints to your server.js
-
-// Recent Withdrawals Endpoint
+// Recent Withdrawals Endpoint - Keep exactly the same
 app.get('/api/transactions/recent-withdrawals', async (req, res) => {
     try {
         // Check Redis cache first
@@ -5054,7 +5052,7 @@ app.get('/api/transactions/recent-withdrawals', async (req, res) => {
     }
 });
 
-// Recent Investments Endpoint
+// Recent Investments Endpoint - Keep exactly the same
 app.get('/api/transactions/recent-investments', async (req, res) => {
     try {
         // Check Redis cache first
@@ -5111,67 +5109,6 @@ app.get('/api/transactions/recent-investments', async (req, res) => {
         });
     }
 });
-
-// Add this to your existing Redis connection setup
-redis.defineCommand('getRandomTransaction', {
-    numberOfKeys: 0,
-    lua: `
-        -- Get counts
-        local withdrawalCount = redis.call('LLEN', 'withdrawal-queue')
-        local investmentCount = redis.call('LLEN', 'investment-queue')
-        
-        -- Decide which type to show (weighted 50/50)
-        local typeToShow = 'withdrawal'
-        if withdrawalCount == 0 and investmentCount > 0 then
-            typeToShow = 'investment'
-        elseif investmentCount == 0 and withdrawalCount > 0 then
-            typeToShow = 'withdrawal'
-        elseif math.random() > 0.5 and investmentCount > 0 then
-            typeToShow = 'investment'
-        end
-        
-        -- Get and return the transaction
-        if typeToShow == 'withdrawal' and withdrawalCount > 0 then
-            return {'withdrawal', redis.call('LPOP', 'withdrawal-queue')}
-        elseif typeToShow == 'investment' and investmentCount > 0 then
-            return {'investment', redis.call('LPOP', 'investment-queue')}
-        else
-            return {nil, nil}
-        end
-    `
-});
-
-// Initialize transaction queues in Redis
-async function initializeTransactionQueues() {
-    try {
-        // Check if queues already exist
-        const withdrawalsExist = await redis.exists('withdrawal-queue');
-        const investmentsExist = await redis.exists('investment-queue');
-        
-        if (!withdrawalsExist) {
-            // Get recent withdrawals and add to queue
-            const { data: withdrawals } = await axios.get('http://localhost:${PORT}/api/transactions/recent-withdrawals');
-            for (const tx of withdrawals) {
-                await redis.rpush('withdrawal-queue', JSON.stringify(tx));
-            }
-        }
-        
-        if (!investmentsExist) {
-            // Get recent investments and add to queue
-            const { data: investments } = await axios.get('http://localhost:${PORT}/api/transactions/recent-investments');
-            for (const tx of investments) {
-                await redis.rpush('investment-queue', JSON.stringify(tx));
-            }
-        }
-        
-        console.log('Transaction queues initialized');
-    } catch (err) {
-        console.error('Error initializing transaction queues:', err);
-    }
-}
-
-// Call this after Redis connection is established
-initializeTransactionQueues();
 
 
 
