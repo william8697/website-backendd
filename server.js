@@ -4758,39 +4758,27 @@ app.get('/api/btc-news', async (req, res) => {
 
 
 
-
 // Recent Withdrawals Endpoint
-app.get('/api/transactions/recent-withdrawals', async (req, res) => {
+app.get('/api/recent-withdrawals', async (req, res) => {
     try {
-        // Get 5 most recent completed withdrawals
+        // Get recent completed withdrawals (last 50)
         const withdrawals = await Transaction.find({
             type: 'withdrawal',
             status: 'completed'
         })
-        .sort({ createdAt: -1 })
-        .limit(5)
-        .select('amount method createdAt reference user')
-        .populate('user', 'email');
+        .sort({ processedAt: -1 })
+        .limit(50)
+        .lean();
 
         // Format the data for frontend
-        const formattedWithdrawals = withdrawals.map(tx => {
-            const emailParts = tx.user.email.split('@');
-            const maskedEmail = emailParts[0].substring(0, 3) + '***' + 
-                              emailParts[0].substring(emailParts[0].length - 2) + 
-                              '@' + emailParts[1];
-            
-            const maskedTxId = tx.reference.substring(0, 4) + '•••' + 
-                             tx.reference.substring(tx.reference.length - 4);
-
-            return {
-                amount: tx.amount,
-                method: tx.method === 'btc' ? 'Bitcoin' : 
-                       tx.method === 'bank' ? 'Wire Transfer' : 'Card',
-                maskedEmail,
-                maskedTxId,
-                timestamp: tx.createdAt
-            };
-        });
+        const formattedWithdrawals = withdrawals.map(w => ({
+            id: w._id,
+            user: w.user ? `${w.user.toString().substring(0, 4)}***${w.user.toString().substring(w.user.toString().length - 4)}` : 'Anonymous',
+            amount: w.amount,
+            method: w.method,
+            transactionId: `${w.reference.substring(0, 4)}•••${w.reference.substring(w.reference.length - 4)}`,
+            timestamp: w.processedAt || w.createdAt
+        }));
 
         res.status(200).json({
             status: 'success',
@@ -4806,35 +4794,25 @@ app.get('/api/transactions/recent-withdrawals', async (req, res) => {
 });
 
 // Recent Investments Endpoint
-app.get('/api/transactions/recent-investments', async (req, res) => {
+app.get('/api/recent-investments', async (req, res) => {
     try {
-        // Get 5 most recent investments
+        // Get recent investments (last 50)
         const investments = await Investment.find()
             .sort({ createdAt: -1 })
-            .limit(5)
-            .select('amount plan startDate user')
-            .populate('user', 'email')
-            .populate('plan', 'name');
+            .limit(50)
+            .populate('user', '_id')
+            .populate('plan', 'name')
+            .lean();
 
         // Format the data for frontend
-        const formattedInvestments = investments.map(inv => {
-            const emailParts = inv.user.email.split('@');
-            const maskedEmail = emailParts[0].substring(0, 3) + '***' + 
-                              emailParts[0].substring(emailParts[0].length - 2) + 
-                              '@' + emailParts[1];
-            
-            const txId = inv._id.toString();
-            const maskedTxId = txId.substring(0, 4) + '•••' + 
-                             txId.substring(txId.length - 4);
-
-            return {
-                amount: inv.amount,
-                planName: inv.plan.name,
-                maskedEmail,
-                maskedTxId,
-                timestamp: inv.startDate
-            };
-        });
+        const formattedInvestments = investments.map(i => ({
+            id: i._id,
+            user: i.user ? `${i.user._id.toString().substring(0, 4)}***${i.user._id.toString().substring(i.user._id.toString().length - 4)}` : 'Anonymous',
+            amount: i.amount,
+            plan: i.plan ? i.plan.name : 'Unknown Plan',
+            transactionId: `Tx${i._id.toString().substring(0, 4)}•••${i._id.toString().substring(i._id.toString().length - 4)}`,
+            timestamp: i.createdAt
+        }));
 
         res.status(200).json({
             status: 'success',
@@ -4849,6 +4827,59 @@ app.get('/api/transactions/recent-investments', async (req, res) => {
     }
 });
 
+// Random Activity Endpoint (for popups)
+app.get('/api/random-activity', async (req, res) => {
+    try {
+        // Get random withdrawal
+        const randomWithdrawal = await Transaction.aggregate([
+            { $match: { type: 'withdrawal', status: 'completed' } },
+            { $sample: { size: 1 } }
+        ]);
+
+        // Get random investment
+        const randomInvestment = await Investment.aggregate([
+            { $sample: { size: 1 } },
+            { $lookup: {
+                from: 'plans',
+                localField: 'plan',
+                foreignField: '_id',
+                as: 'plan'
+            }},
+            { $unwind: '$plan' }
+        ]);
+
+        // Format the data
+        const formatWithdrawal = {
+            type: 'withdrawal',
+            user: randomWithdrawal[0]?.user ? `${randomWithdrawal[0].user.toString().substring(0, 4)}***${randomWithdrawal[0].user.toString().substring(randomWithdrawal[0].user.toString().length - 4)}` : 'Anonymous',
+            amount: randomWithdrawal[0]?.amount || Math.floor(Math.random() * (2000000 - 120 + 1) + 120),
+            method: randomWithdrawal[0]?.method || 'btc',
+            transactionId: randomWithdrawal[0]?.reference ? `${randomWithdrawal[0].reference.substring(0, 4)}•••${randomWithdrawal[0].reference.substring(randomWithdrawal[0].reference.length - 4)}` : `W${Math.random().toString(36).substring(2, 6)}•••${Math.random().toString(36).substring(2, 6)}`
+        };
+
+        const formatInvestment = {
+            type: 'investment',
+            user: randomInvestment[0]?.user ? `${randomInvestment[0].user.toString().substring(0, 4)}***${randomInvestment[0].user.toString().substring(randomInvestment[0].user.toString().length - 4)}` : 'Anonymous',
+            amount: randomInvestment[0]?.amount || Math.floor(Math.random() * (1000000 - 100 + 1) + 100),
+            plan: randomInvestment[0]?.plan?.name || 'Starter Plan',
+            transactionId: randomInvestment[0]?._id ? `Tx${randomInvestment[0]._id.toString().substring(0, 4)}•••${randomInvestment[0]._id.toString().substring(randomInvestment[0]._id.toString().length - 4)}` : `I${Math.random().toString(36).substring(2, 6)}•••${Math.random().toString(36).substring(2, 6)}`
+        };
+
+        // Randomly choose which to return (withdrawal or investment)
+        const randomChoice = Math.random() > 0.5 ? formatWithdrawal : formatInvestment;
+
+        res.status(200).json({
+            status: 'success',
+            data: randomChoice
+        });
+    } catch (err) {
+        console.error('Error fetching random activity:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch random activity'
+        });
+    }
+});
 
 
 
