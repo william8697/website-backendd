@@ -21,6 +21,8 @@ const { body, validationResult } = require('express-validator');
 const axios = require('axios');
 const speakeasy = require('speakeasy');
 const { v4: uuidv4 } = require('uuid');
+const { OpenAI } = require('openai');
+
 
 // Initialize Express app
 const app = express();
@@ -864,108 +866,112 @@ const verifyTOTP = (token, secret) => {
 };
 
 
-const { Configuration, OpenAIApi } = require('openai');
+// server.js - Updated OpenAI Implementation
+require('dotenv').config();
+const { OpenAI } = require('openai');
 
-const openaiConfig = new Configuration({
-  apiKey: process.env.OPENAI_API_KEY || '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'
+// Initialize OpenAI with correct modern syntax
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
 });
 
-const openai = new OpenAIApi(openaiConfig);
+// Andrea AI Assistant Configuration
+const andreaConfig = {
+  identity: {
+    name: "Andrea",
+    role: "BitHash Support Assistant",
+    tone: "friendly and professional",
+    escalationPhrase: "Let me connect you with a specialist who can better assist with this."
+  },
+  knowledgeDomains: [
+    "Account Settings & KYC Verification",
+    "Deposits & Withdrawals",
+    "Investment Plans",
+    "Security Features"
+  ],
+  limitations: [
+    "Cannot process password resets",
+    "Cannot access full account numbers",
+    "Cannot bypass security protocols"
+  ]
+};
 
-// Andrea AI System Prompt
-const andreaSystemPrompt = `
-You are Andrea, BitHash's AI support assistant. Your role is to provide professional, accurate help with:
-
-1. Account Support:
-- KYC verification: "Verification takes 24-48 hours. I can check your status if you provide your ticket number."
-- 2FA issues: "Let's reset your two-factor authentication. First, please verify your email."
-- Password resets: "For security, we'll send a reset link to your registered email."
-
-2. Transactions:
-- Deposits: "BTC requires 1-3 network confirmations (10-30 minutes). Your current transaction has [X] confirmations."
-- Withdrawals: "Withdrawals process within 4 hours after security review."
-
-3. Security:
-- Never ask for passwords/private keys
-- Always verify: "For security, may I confirm the email on your account?"
-
-Tone Guidelines:
-- Friendly but professional
-- Empathetic to frustrations
-- Clear explanations without jargon
-
-Escalate when:
-- User is angry/threatening
-- Account security concerns
-- Complex legal/compliance questions
-
-Example Responses:
-- "I understand this is urgent - let me check your transaction status."
-- "For your protection, I'll connect you to our security team."
-- "The Gold Plan yields 40% after 24 hours. Would you like details?"
-`;
-
-const generateAIResponse = async (prompt, context = '') => {
+// Generate AI Response with Andrea's personality
+async function generateAIResponse(userInput, conversationHistory = []) {
   try {
-    const response = await openai.createChatCompletion({
+    const messages = [
+      {
+        role: "system",
+        content: `You are ${andreaConfig.identity.name}, a ${andreaConfig.identity.tone} AI assistant for BitHash. 
+        Your role is to help users with: ${andreaConfig.knowledgeDomains.join(', ')}.
+        Follow these rules:
+        1. Be concise yet helpful
+        2. Never ask for sensitive information
+        3. Escalate using this phrase when needed: "${andreaConfig.identity.escalationPhrase}"
+        4. Admit when you don't know something
+        5. Current BTC price: $${getCurrentBTCPrice()}`
+      },
+      ...conversationHistory,
+      { role: "user", content: userInput }
+    ];
+
+    const response = await openai.chat.completions.create({
       model: "gpt-4",
-      messages: [
-        {
-          role: "system",
-          content: andreaSystemPrompt
-        },
-        ...(context ? [{ role: "assistant", content: context }] : []),
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
+      messages: messages,
       temperature: 0.7,
-      max_tokens: 500,
-      top_p: 1,
-      frequency_penalty: 0,
-      presence_penalty: 0
+      max_tokens: 300
     });
 
     return {
-      response: response.data.choices[0].message.content.trim(),
-      confidence: 0.9
+      text: response.choices[0].message.content,
+      shouldEscalate: await checkForEscalation(userInput, response.choices[0].message.content)
     };
-  } catch (err) {
-    console.error('OpenAI API error:', err);
-    throw new Error('Failed to generate AI response');
+  } catch (error) {
+    console.error("Andrea AI Error:", error);
+    return {
+      text: "I'm having trouble connecting to our systems. Please try again or contact live support.",
+      shouldEscalate: true
+    };
   }
-};
+}
 
-const shouldEscalateToHuman = async (message, conversationHistory) => {
+// Escalation Check Function
+async function checkForEscalation(userInput, aiResponse) {
   try {
-    const response = await openai.createChatCompletion({
+    const result = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [
         {
           role: "system",
-          content: `Analyze this support conversation and determine if it should be escalated to a human agent. 
-          Consider factors like user frustration, complexity, and whether the question requires account-specific data.
-          Respond with only "YES" or "NO".`
+          content: `Analyze if this conversation should escalate to a human agent. 
+          Consider: user frustration, complexity, or need for account access.
+          Respond ONLY with "YES" or "NO".`
         },
         {
           role: "user",
-          content: `Conversation history:\n${conversationHistory}\n\nLatest message: ${message}\n\nShould escalate?`
+          content: `User: "${userInput}"\nAI: "${aiResponse}"\n\nShould escalate?`
         }
       ],
       temperature: 0.3,
       max_tokens: 1
     });
 
-    return response.data.choices[0].message.content.trim().toUpperCase() === 'YES';
-  } catch (err) {
-    console.error('OpenAI escalation check error:', err);
-    return true;
+    return result.choices[0].message.content.trim().toUpperCase() === 'YES';
+  } catch (error) {
+    console.error("Escalation Check Error:", error);
+    return true; // Default to escalation on error
   }
+}
+
+// Helper function - replace with actual BTC price API call
+function getCurrentBTCPrice() {
+  return "118,396.00"; // Example price, implement live fetching
+}
+
+module.exports = {
+  generateAIResponse,
+  checkForEscalation
 };
-
-module.exports = { generateAIResponse, shouldEscalateToHuman };
-
 
 // Initialize default admin and plans
 const initializeAdmin = async () => {
