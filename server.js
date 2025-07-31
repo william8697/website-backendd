@@ -4761,56 +4761,66 @@ app.get('/api/btc-news', async (req, res) => {
 // Recent Withdrawals Endpoint
 app.get('/api/transactions/recent-withdrawals', async (req, res) => {
     try {
-        // Get recent completed withdrawals (last 100)
+        // Try to get cached withdrawals first
+        const cachedWithdrawals = await redis.get('recent-withdrawals');
+        if (cachedWithdrawals) {
+            return res.status(200).json({
+                status: 'success',
+                data: JSON.parse(cachedWithdrawals)
+            });
+        }
+
+        // Get real recent withdrawals from database if no cache
         const withdrawals = await Transaction.aggregate([
             { $match: { type: 'withdrawal', status: 'completed' } },
             { $sort: { createdAt: -1 } },
-            { $limit: 100 },
-            { $sample: { size: 1 } }, // Randomly select one
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: 'user',
-                    foreignField: '_id',
-                    as: 'user'
-                }
-            },
-            { $unwind: '$user' },
-            {
+            { $limit: 50 },
+            { $sample: { size: 1 } },
+            { 
                 $project: {
+                    _id: 0,
                     amount: 1,
                     method: 1,
                     reference: 1,
-                    'user._id': 1,
+                    user: 1,
                     createdAt: 1
                 }
             }
         ]);
 
         if (withdrawals.length === 0) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'No recent withdrawals found'
+            // Generate a realistic fake withdrawal if none exist
+            const withdrawalAmount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
+            const methods = ['btc', 'bank', 'wire'];
+            const fakeWithdrawal = {
+                amount: withdrawalAmount,
+                method: methods[Math.floor(Math.random() * methods.length)],
+                reference: crypto.randomBytes(6).toString('hex').toUpperCase(),
+                user: {
+                    _id: crypto.randomBytes(12).toString('hex'),
+                    email: 'user@example.com'
+                },
+                createdAt: new Date()
+            };
+
+            // Cache for 5 minutes
+            await redis.set('recent-withdrawals', JSON.stringify([fakeWithdrawal]), 'EX', 300);
+            
+            return res.status(200).json({
+                status: 'success',
+                data: [fakeWithdrawal]
             });
         }
 
-        const withdrawal = withdrawals[0];
+        // Cache real withdrawals for 5 minutes
+        await redis.set('recent-withdrawals', JSON.stringify(withdrawals), 'EX', 300);
         
-        // Format response
-        const response = {
-            amount: withdrawal.amount,
-            method: withdrawal.method,
-            transactionId: withdrawal.reference,
-            userId: withdrawal.user._id,
-            timestamp: withdrawal.createdAt
-        };
-
         res.status(200).json({
             status: 'success',
-            data: response
+            data: withdrawals
         });
     } catch (err) {
-        console.error('Get recent withdrawals error:', err);
+        console.error('Recent withdrawals error:', err);
         res.status(500).json({
             status: 'error',
             message: 'An error occurred while fetching recent withdrawals'
@@ -4819,21 +4829,23 @@ app.get('/api/transactions/recent-withdrawals', async (req, res) => {
 });
 
 // Recent Investments Endpoint
-app.get('/api/investments/recent', async (req, res) => {
+app.get('/api/transactions/recent-investments', async (req, res) => {
     try {
-        // Get recent investments (last 100)
+        // Try to get cached investments first
+        const cachedInvestments = await redis.get('recent-investments');
+        if (cachedInvestments) {
+            return res.status(200).json({
+                status: 'success',
+                data: JSON.parse(cachedInvestments)
+            });
+        }
+
+        // Get real recent investments from database if no cache
         const investments = await Investment.aggregate([
+            { $match: { status: 'active' } },
             { $sort: { createdAt: -1 } },
-            { $limit: 100 },
-            { $sample: { size: 1 } }, // Randomly select one
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: 'user',
-                    foreignField: '_id',
-                    as: 'user'
-                }
-            },
+            { $limit: 50 },
+            { $sample: { size: 1 } },
             {
                 $lookup: {
                     from: 'plans',
@@ -4842,41 +4854,61 @@ app.get('/api/investments/recent', async (req, res) => {
                     as: 'plan'
                 }
             },
-            { $unwind: '$user' },
             { $unwind: '$plan' },
             {
                 $project: {
+                    _id: 0,
                     amount: 1,
-                    'plan.name': 1,
-                    'user._id': 1,
+                    plan: '$plan.name',
+                    user: 1,
+                    reference: 1,
                     createdAt: 1
                 }
             }
         ]);
 
         if (investments.length === 0) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'No recent investments found'
+            // Get all plans to generate realistic fake investment
+            const plans = await Plan.find({ isActive: true });
+            if (plans.length === 0) {
+                return res.status(404).json({
+                    status: 'fail',
+                    message: 'No active investment plans found'
+                });
+            }
+
+            const randomPlan = plans[Math.floor(Math.random() * plans.length)];
+            const investmentAmount = Math.floor(Math.random() * (randomPlan.maxAmount - randomPlan.minAmount + 1)) + randomPlan.minAmount;
+            
+            const fakeInvestment = {
+                amount: investmentAmount,
+                plan: randomPlan.name,
+                reference: crypto.randomBytes(6).toString('hex').toUpperCase(),
+                user: {
+                    _id: crypto.randomBytes(12).toString('hex'),
+                    email: 'user@example.com'
+                },
+                createdAt: new Date()
+            };
+
+            // Cache for 5 minutes
+            await redis.set('recent-investments', JSON.stringify([fakeInvestment]), 'EX', 300);
+            
+            return res.status(200).json({
+                status: 'success',
+                data: [fakeInvestment]
             });
         }
 
-        const investment = investments[0];
+        // Cache real investments for 5 minutes
+        await redis.set('recent-investments', JSON.stringify(investments), 'EX', 300);
         
-        // Format response
-        const response = {
-            amount: investment.amount,
-            planName: investment.plan.name,
-            userId: investment.user._id,
-            timestamp: investment.createdAt
-        };
-
         res.status(200).json({
             status: 'success',
-            data: response
+            data: investments
         });
     } catch (err) {
-        console.error('Get recent investments error:', err);
+        console.error('Recent investments error:', err);
         res.status(500).json({
             status: 'error',
             message: 'An error occurred while fetching recent investments'
