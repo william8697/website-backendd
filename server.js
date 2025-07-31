@@ -4916,7 +4916,7 @@ app.get('/api/transactions/recent-withdrawals', async (req, res) => {
 
         // Generate realistic withdrawal data
         const withdrawals = Array.from({ length: 10 }, () => {
-            const amount = Math.floor(Math.random() * (2000000 - 120 + 1) + 120;
+            const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
             const userId = 'User ' + crypto.randomBytes(3).toString('hex').toUpperCase();
             const maskedUserId = userId.slice(0, 4) + '***' + userId.slice(-4);
             const txId = 'Tx' + crypto.randomBytes(4).toString('hex').toUpperCase();
