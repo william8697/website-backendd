@@ -600,6 +600,142 @@ NewsletterSubscriberSchema.index({ isActive: 1 });
 
 const NewsletterSubscriber = mongoose.model('NewsletterSubscriber', NewsletterSubscriberSchema);
 
+// Add to your existing models section (after NewsletterSubscriberSchema)
+
+const SupportMessageSchema = new mongoose.Schema({
+  conversationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'SupportConversation',
+    required: true,
+    index: true
+  },
+  sender: {
+    type: mongoose.Schema.Types.ObjectId,
+    refPath: 'senderModel',
+    required: true
+  },
+  senderModel: {
+    type: String,
+    required: true,
+    enum: ['User', 'Admin']
+  },
+  content: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  attachments: [{
+    url: String,
+    name: String,
+    type: String,
+    size: Number
+  }],
+  metadata: {
+    isAI: {
+      type: Boolean,
+      default: false
+    },
+    aiConfidence: {
+      type: Number,
+      min: 0,
+      max: 1
+    },
+    suggestedResponse: {
+      type: String,
+      trim: true
+    }
+  }
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+const SupportConversationSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true
+  },
+  agent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    index: true
+  },
+  status: {
+    type: String,
+    enum: ['open', 'waiting', 'active', 'resolved', 'closed'],
+    default: 'open',
+    index: true
+  },
+  subject: {
+    type: String,
+    trim: true
+  },
+  category: {
+    type: String,
+    enum: ['general', 'account', 'investment', 'withdrawal', 'kyc', 'technical', 'other'],
+    default: 'general',
+    index: true
+  },
+  priority: {
+    type: String,
+    enum: ['low', 'medium', 'high', 'critical'],
+    default: 'medium',
+    index: true
+  },
+  lastMessageAt: {
+    type: Date,
+    index: true
+  },
+  resolvedAt: {
+    type: Date
+  },
+  aiHandoff: {
+    initiated: {
+      type: Boolean,
+      default: false
+    },
+    reason: {
+      type: String,
+      trim: true
+    },
+    timestamp: {
+      type: Date
+    }
+  },
+  rating: {
+    score: {
+      type: Number,
+      min: 1,
+      max: 5
+    },
+    feedback: {
+      type: String,
+      trim: true
+    }
+  }
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+SupportConversationSchema.virtual('messages', {
+  ref: 'SupportMessage',
+  localField: '_id',
+  foreignField: 'conversationId'
+});
+
+SupportConversationSchema.index({ user: 1, status: 1 });
+SupportConversationSchema.index({ agent: 1, status: 1 });
+SupportConversationSchema.index({ lastMessageAt: -1 });
+
+const SupportMessage = mongoose.model('SupportMessage', SupportMessageSchema);
+const SupportConversation = mongoose.model('SupportConversation', SupportConversationSchema);
+
+
 module.exports = {
   User,
   Admin,
@@ -610,7 +746,9 @@ module.exports = {
   KYC,
   SystemLog,
   NewsletterSubscriber,
-  Card // Add this after you've defined the Card model
+  Card,
+  SupportMessage,
+  SupportConversation
 };
 
 // Helper functions with enhanced error handling
@@ -723,6 +861,135 @@ const verifyTOTP = (token, secret) => {
     token,
     window: 2
   });
+};
+
+// Add this near your other helper functions (like generateJWT, etc.)
+
+const { Configuration, OpenAIApi } = require('openai');
+
+const openaiConfig = new Configuration({
+  apiKey: process.env.OPENAI_API_KEY || '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'
+});
+
+const openai = new OpenAIApi(openaiConfig);
+
+const generateAIResponse = async (prompt, context = '') => {
+  try {
+    Role: Andrea is BitHash’s AI support assistant, providing instant, secure, and professional help via live chat. She handles account inquiries, transactions, security, and investment guidance while maintaining a natural, friendly tone. Escalate complex or sensitive issues to human agents seamlessly.
+
+Core Guidelines
+Introduction & Tone
+
+Start with: "Hello! I’m Andrea, here to assist with your BitHash account. How can I help you today?"
+
+Use clear, conversational language—avoid jargon unless explained.
+
+Be empathetic (e.g., "I understand this is frustrating—let’s resolve it together!").
+
+Key Responsibilities
+
+Account Support: KYC, 2FA, password resets, profile updates.
+
+Transactions: Explain delays, fees, or errors (e.g., *"BTC deposits need 1-3 confirmations (~10-30 min). Want me to check yours?"*).
+
+Security: Guide users on best practices (e.g., "Never share private keys! Enable 2FA here: [link].").
+
+Investments/Loans: Clarify terms (e.g., "Gold Plan yields 40% after 24 hours—need details?").
+
+Escalation Protocol
+
+Triggers: Anger, fraud suspicions, technical failures.
+
+Handoff: "Let me connect you to a live agent for further help. One moment!"
+
+Proactive Support
+
+Offer next steps: "After submitting your ID, check email for updates!"
+
+Share resources: "Here’s our [AML policy] for reference."
+
+Security & Compliance
+
+Never request passwords/private keys.
+
+Verify identity subtly: "May I confirm your account email?"
+
+Cite policies when needed: "Per security rules, withdrawals require 2FA."
+
+Example Responses
+User: "My deposit isn’t showing up!"
+Andrea: *"I’d be happy to check! Could you share the transaction ID? Typically, deposits take 10-30 minutes. Let me verify yours."*
+
+User: "Your KYC process is too slow!"
+Andrea: "I apologize for the delay. Let me check your submission status—could you confirm your ticket number?"
+
+User: "I lost my 2FA device."
+Andrea: *"No worries! To reset it:
+
+Email verification@bithash.com from your registered address.
+
+Attach a photo of your ID.
+Need help with these steps?"*
+
+Enterprise Note: Andrea integrates with CRM/APIs for institutional queries but maintains the same approachable tone.
+
+Close: "Is there anything else I can help with?" before ending chat.
+    const fullPrompt = `${context}\n\n${prompt}`;
+    
+    const response = await openai.createChatCompletion({
+      model: "gpt-4",
+      messages: [
+        {
+          role: "system",
+          content: "You are a knowledgeable support agent for BitHash, a cryptocurrency investment platform. Provide accurate, helpful responses while maintaining a professional tone."
+        },
+        {
+          role: "user",
+          content: fullPrompt
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 500,
+      top_p: 1,
+      frequency_penalty: 0,
+      presence_penalty: 0
+    });
+
+    return {
+      response: response.data.choices[0].message.content.trim(),
+      confidence: 0.9 // Placeholder - you could implement actual confidence scoring
+    };
+  } catch (err) {
+    console.error('OpenAI API error:', err);
+    throw new Error('Failed to generate AI response');
+  }
+};
+
+const shouldEscalateToHuman = async (message, conversationHistory) => {
+  try {
+    const response = await openai.createChatCompletion({
+      model: "gpt-4",
+      messages: [
+        {
+          role: "system",
+          content: `Analyze this support conversation and determine if it should be escalated to a human agent. 
+          Consider factors like user frustration, complexity, and whether the question requires account-specific data.
+          Respond with only "YES" or "NO".`
+        },
+        {
+          role: "user",
+          content: `Conversation history:\n${conversationHistory}\n\nLatest message: ${message}\n\nShould escalate?`
+        }
+      ],
+      temperature: 0.3,
+      max_tokens: 1
+    });
+
+    return response.data.choices[0].message.content.trim().toUpperCase() === 'YES';
+  } catch (err) {
+    console.error('OpenAI escalation check error:', err);
+    return true; // Default to escalation if there's an error
+  }
 };
 
 // Initialize default admin and plans
