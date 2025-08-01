@@ -6276,79 +6276,66 @@ app.post('/api/support/messages/:messageId/feedback', protect, [
 
 
 
-// Eligibility Endpoint
-app.post('/api/loans/eligibility', authenticateUser, async (req, res) => {
+// Eligibility endpoint
+app.post('/api/loans/check-eligibility', authenticateUser, async (req, res) => {
   try {
     const userId = req.user.id;
     
-    // Get user data from database
-    const user = await User.findById(userId)
-      .populate('transactions')
-      .populate('kycVerification');
+    // Get user's transaction history and KYC status
+    const [transactions, user] = await Promise.all([
+      Transaction.find({ userId }).sort({ createdAt: -1 }),
+      User.findById(userId)
+    ]);
     
-    if (!user) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'User not found' 
-      });
-    }
+    // Calculate total transaction amount
+    const totalTransacted = transactions.reduce((sum, tx) => sum + tx.amount, 0);
     
-    // Check transaction history
-    const totalTransacted = user.transactions.reduce((sum, tx) => {
-      return sum + (tx.status === 'completed' ? tx.amount : 0);
-    }, 0);
+    // Check eligibility criteria
+    const isEligible = totalTransacted >= 5000 && user.kycStatus === 'verified';
     
-    // Check KYC status
-    const kycVerified = user.kycVerification && 
-                        user.kycVerification.status === 'verified';
-    
-    // Check account age (at least 30 days old)
-    const accountAgeDays = (new Date() - user.createdAt) / (1000 * 60 * 60 * 24);
-    const accountMature = accountAgeDays >= 30;
-    
-    // Check if user has active investments
-    const hasActiveInvestments = await Investment.exists({ 
-      userId, 
-      status: 'active' 
-    });
-    
-    // Determine eligibility
-    const eligible = totalTransacted >= 5000 && 
-                    kycVerified && 
-                    accountMature &&
-                    hasActiveInvestments;
-    
-    // Prepare response
-    const response = {
-      success: true,
-      data: {
-        eligible,
-        requirements: {
-          minTransactionAmount: 5000,
-          totalTransacted,
-          kycVerified,
-          accountAgeDays: Math.floor(accountAgeDays),
-          minAccountAgeDays: 30,
-          hasActiveInvestments
-        },
-        message: eligible 
-          ? 'Congratulations! You qualify for a loan.' 
-          : 'You do not currently meet all loan requirements.'
-      }
+    // Additional eligibility factors could be added here
+    const eligibilityFactors = {
+      totalTransacted,
+      kycVerified: user.kycStatus === 'verified',
+      accountAge: Math.floor((Date.now() - new Date(user.createdAt).getTime()) / (1000 * 60 * 60 * 24), // in days
+      activeDays: transactions.length > 0 ? 
+        (new Date() - new Date(transactions[0].createdAt)) / (1000 * 60 * 60 * 24) : 0
     };
     
-    res.json(response);
+    res.json({
+      success: true,
+      eligible: isEligible,
+      message: isEligible ? 
+        'You qualify for a loan based on your transaction history and KYC status' :
+        'You do not currently qualify for a loan. You need to transact at least $5000 and complete KYC verification.',
+      factors: eligibilityFactors
+    });
     
   } catch (error) {
-    console.error('Eligibility check error:', error);
-    res.status(500).json({ 
+    console.error('Error checking loan eligibility:', error);
+    res.status(500).json({
       success: false,
-      message: 'Failed to check eligibility' 
+      message: 'Failed to check loan eligibility'
     });
   }
 });
 
-
+// Helper middleware to authenticate user
+function authenticateUser(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ message: 'Authentication required' });
+  }
+  
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ message: 'Invalid token' });
+  }
+}
 
 
 
