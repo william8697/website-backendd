@@ -6386,6 +6386,99 @@ app.get('/api/recent-investments', async (req, res) => {
 
 
 
+// Loan Qualification and Limit Calculation Endpoint
+app.get('/api/loans/limit', protect, async (req, res) => {
+    try {
+        // Check for outstanding loan balance first
+        const outstandingLoan = await Loan.findOne({
+            user: req.user.id,
+            status: { $in: ['active', 'pending', 'defaulted'] }
+        });
+
+        if (outstandingLoan) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'You have an outstanding loan balance. Please repay your existing loan before applying for a new one.'
+            });
+        }
+
+        // Calculate total transaction volume (completed deposits + withdrawals)
+        const [depositsResult, withdrawalsResult] = await Promise.all([
+            Transaction.aggregate([
+                {
+                    $match: {
+                        user: req.user._id,
+                        type: 'deposit',
+                        status: 'completed'
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        total: { $sum: '$amount' }
+                    }
+                }
+            ]),
+            Transaction.aggregate([
+                {
+                    $match: {
+                        user: req.user._id,
+                        type: 'withdrawal',
+                        status: 'completed'
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        total: { $sum: '$amount' }
+                    }
+                }
+            ])
+        ]);
+
+        const totalDeposits = depositsResult[0]?.total || 0;
+        const totalWithdrawals = withdrawalsResult[0]?.total || 0;
+        const totalTransactions = totalDeposits + totalWithdrawals;
+
+        // Check if user meets minimum transaction requirement ($5000)
+        const meetsMinimum = totalTransactions >= 5000;
+
+        // Calculate loan limit (20% of total transaction volume, capped at $50,000)
+        let loanLimit = Math.min(totalTransactions * 0.2, 50000);
+        loanLimit = Math.floor(loanLimit / 100) * 100; // Round down to nearest $100
+
+        // Check KYC status
+        const user = await User.findById(req.user.id);
+        const fullKycVerified = user.kycStatus.identity === 'verified' && 
+                               user.kycStatus.address === 'verified' &&
+                               user.kycStatus.facial === 'verified';
+
+        // Return loan qualification data
+        res.status(200).json({
+            status: 'success',
+            data: {
+                qualified: meetsMinimum && fullKycVerified,
+                limit: loanLimit,
+                totalTransactions: totalTransactions,
+                meetsMinimumRequirement: meetsMinimum,
+                kycVerified: fullKycVerified,
+                reasons: !meetsMinimum ? ['Minimum transaction requirement not met ($5,000 needed)'] : 
+                          !fullKycVerified ? ['Full KYC verification required'] : []
+            }
+        });
+
+        await logActivity('check-loan-eligibility', 'loan', null, req.user._id, 'User', req);
+    } catch (err) {
+        console.error('Loan qualification error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while checking loan eligibility'
+        });
+    }
+});
+
+
+
 
 
 
