@@ -6629,13 +6629,13 @@ app.get('/api/users/me/referrals', protect, async (req, res) => {
 
 
 
-// Mining Data Endpoint - Matches Frontend 100%
-app.get('/api/mining/data', protect, async (req, res) => {
+// Add this to your server.js
+app.get('/api/mining', protect, async (req, res) => {
   try {
     const userId = req.user.id;
-    const cacheKey = `mining-data:${userId}`;
+    const cacheKey = `mining-stats:${userId}`;
     
-    // Check Redis cache first
+    // Try to get cached data first
     const cachedData = await redis.get(cacheKey);
     if (cachedData) {
       return res.status(200).json({
@@ -6644,66 +6644,74 @@ app.get('/api/mining/data', protect, async (req, res) => {
       });
     }
 
-    // Get user's active investments with plans
+    // Get user's active investments
     const activeInvestments = await Investment.find({
       user: userId,
       status: 'active'
     }).populate('plan');
 
+    // Default response if no active investments
     if (activeInvestments.length === 0) {
-      const miningData = {
-        hashRate: '0 TH/s',
-        btcMined: '0 BTC',
-        miningPower: '0%',
-        estimatedDaily: '$0.00',
-        progress: 0,
-        planName: 'No Active Plan'
+      const defaultData = {
+        hashRate: "0 TH/s",
+        btcMined: "0 BTC",
+        miningPower: "0%",
+        estimatedDaily: "$0.00",
+        progress: 0
       };
       
-      await redis.set(cacheKey, JSON.stringify(miningData), 'EX', 60);
+      await redis.set(cacheKey, JSON.stringify(defaultData), 'EX', 300);
       return res.status(200).json({
         status: 'success',
-        data: miningData
+        data: defaultData
       });
     }
 
-    // Calculate totals
-    let totalInvested = 0;
-    let totalExpectedReturn = 0;
-    let highestPlan = activeInvestments[0].plan;
+    // Calculate stats based on highest investment
+    const highestInvestment = activeInvestments.reduce((prev, current) => 
+      (prev.amount > current.amount) ? prev : current
+    );
     
-    activeInvestments.forEach(inv => {
-      totalInvested += inv.amount;
-      totalExpectedReturn += inv.expectedReturn;
-      if (inv.plan.percentage > highestPlan.percentage) {
-        highestPlan = inv.plan;
-      }
-    });
+    const plan = highestInvestment.plan;
+    const amountInvested = highestInvestment.amount;
+    const expectedReturn = highestInvestment.expectedReturn;
+    const startDate = highestInvestment.createdAt;
+    const endDate = highestInvestment.endDate;
+    
+    // Calculate progress (0-100)
+    const totalDuration = endDate - startDate;
+    const elapsed = Date.now() - startDate;
+    const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
+    
+    // Get BTC price from CoinGecko
+    let btcPrice = 60000; // Default if API fails
+    try {
+      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+      btcPrice = response.data.bitcoin.usd;
+    } catch (error) {
+      console.error('CoinGecko API error:', error);
+    }
 
-    // Get BTC price
-    const btcPrice = await getBTCPrice();
+    // Calculate mining stats
+    const planMultiplier = {
+      'Starter Plan': 1,
+      'Gold Plan': 2,
+      'Advance Plan': 3,
+      'Exclusive Plan': 4,
+      'Expert Plan': 5
+    }[plan.name] || 1;
     
-    // Calculate daily earnings based on plan terms
-    const dailyROI = (highestPlan.percentage / highestPlan.duration) / 100;
-    const estimatedDailyUSD = (totalInvested * dailyROI).toFixed(2);
-    const btcMined = (estimatedDailyUSD / btcPrice).toFixed(8);
+    const hashRate = (amountInvested * 0.1 * planMultiplier).toFixed(2);
+    const miningPower = Math.min(100, planMultiplier * 20).toFixed(2);
+    const dailyReturn = ((expectedReturn - amountInvested) / (plan.duration / 24)).toFixed(2);
+    const btcMined = (dailyReturn / btcPrice).toFixed(8);
     
-    // Calculate progress (time-based)
-    const now = new Date();
-    const startDate = new Date(activeInvestments[0].createdAt);
-    const endDate = new Date(activeInvestments[0].endDate);
-    const progress = Math.min(100, Math.max(0, 
-      ((now - startDate) / (endDate - startDate)) * 100
-    ));
-
-    // Prepare response
     const miningData = {
-      hashRate: `${(highestPlan.percentage * 1.5).toFixed(2)} TH/s`,
+      hashRate: `${hashRate} TH/s`,
       btcMined: `${btcMined} BTC`,
-      miningPower: `${highestPlan.percentage}%`,
-      estimatedDaily: `$${estimatedDailyUSD}`,
-      progress: Math.floor(progress),
-      planName: highestPlan.name
+      miningPower: `${miningPower}%`,
+      estimatedDaily: `$${dailyReturn}`,
+      progress: parseFloat(progress.toFixed(2))
     };
     
     // Cache for 5 minutes
@@ -6713,18 +6721,15 @@ app.get('/api/mining/data', protect, async (req, res) => {
       status: 'success',
       data: miningData
     });
-    
+
   } catch (error) {
-    console.error('Mining data error:', error);
+    console.error('Mining endpoint error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to load mining data'
+      message: 'Failed to fetch mining data'
     });
   }
 });
-
-
-
 
 
 
