@@ -6293,21 +6293,28 @@ app.post('/api/loans/check-eligibility', authenticateUser, async (req, res) => {
     // Check eligibility criteria
     const isEligible = totalTransacted >= 5000 && user.kycStatus === 'verified';
     
-    // Additional eligibility factors could be added here
+    // Calculate account age in days
+    const accountAgeDays = Math.floor((Date.now() - new Date(user.createdAt).getTime()) / (1000 * 60 * 60 * 24);
+    
+    // Calculate active days (time since first transaction)
+    const activeDays = transactions.length > 0 
+      ? Math.floor((Date.now() - new Date(transactions[0].createdAt).getTime()) / (1000 * 60 * 60 * 24)
+      : 0;
+    
+    // Additional eligibility factors
     const eligibilityFactors = {
       totalTransacted,
       kycVerified: user.kycStatus === 'verified',
-      accountAge: Math.floor((Date.now() - new Date(user.createdAt).getTime()) / (1000 * 60 * 60 * 24), // in days
-      activeDays: transactions.length > 0 ? 
-        (new Date() - new Date(transactions[0].createdAt)) / (1000 * 60 * 60 * 24) : 0
+      accountAge: accountAgeDays,
+      activeDays: activeDays
     };
     
     res.json({
       success: true,
       eligible: isEligible,
-      message: isEligible ? 
-        'You qualify for a loan based on your transaction history and KYC status' :
-        'You do not currently qualify for a loan. You need to transact at least $5000 and complete KYC verification.',
+      message: isEligible 
+        ? 'You qualify for a loan based on your transaction history and KYC status' 
+        : 'You do not currently qualify for a loan. You need to transact at least $5000 and complete KYC verification.',
       factors: eligibilityFactors
     });
     
@@ -6336,7 +6343,6 @@ function authenticateUser(req, res, next) {
     return res.status(401).json({ message: 'Invalid token' });
   }
 }
-
 
 
 
