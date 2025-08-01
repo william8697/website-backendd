@@ -23,6 +23,7 @@ const speakeasy = require('speakeasy');
 const { v4: uuidv4 } = require('uuid');
 const WebSocket = require('ws');
 const OpenAI = require('openai');
+const moment = require('moment');
 // Initialize Express app
 const app = express();
 
@@ -6624,6 +6625,118 @@ app.get('/api/users/me/referrals', protect, async (req, res) => {
     }
 });
 
+
+
+
+
+app.get('/api/mining', protect, async (req, res) => {
+    try {
+        const cacheKey = `user:${req.user.id}:mining`;
+        
+        // Check Redis cache first
+        const cachedData = await redis.get(cacheKey);
+        if (cachedData) {
+            return res.status(200).json(JSON.parse(cachedData));
+        }
+
+        // Get user's active investment
+        const activeInvestment = await Investment.findOne({
+            user: req.user.id,
+            status: 'active'
+        }).populate('plan');
+
+        if (!activeInvestment) {
+            return res.status(200).json({
+                status: 'success',
+                data: {
+                    hashRate: 0,
+                    btcMined: 0,
+                    miningPower: 0,
+                    estimatedDaily: 0,
+                    btcPrice: 0,
+                    status: 'inactive',
+                    endDate: null,
+                    progress: 0
+                }
+            });
+        }
+
+        // Get current BTC price from Coingecko
+        let btcPrice = 50000; // Default fallback price
+        try {
+            const coingeckoResponse = await axios.get(
+                'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd',
+                { timeout: 3000 }
+            );
+            btcPrice = coingeckoResponse.data.bitcoin.usd;
+        } catch (coingeckoError) {
+            console.warn('Failed to fetch BTC price from Coingecko, using fallback:', coingeckoError);
+        }
+
+        // Calculate mining stats based on plan
+        const plan = activeInvestment.plan;
+        const now = new Date();
+        const startDate = activeInvestment.startDate;
+        const endDate = activeInvestment.endDate;
+        const totalHours = plan.duration;
+        const elapsedHours = moment().diff(startDate, 'hours');
+        const remainingHours = moment(endDate).diff(now, 'hours');
+        const progress = Math.min(100, Math.max(0, (elapsedHours / totalHours) * 100));
+
+        // Base values scaled by investment amount and plan
+        const baseHashRate = 10; // Base 10 TH/s for $100 investment
+        const hashRate = Math.round(
+            (activeInvestment.amount / 100) * baseHashRate * (plan.percentage / 20)
+        );
+
+        // Calculate estimated total return (principal + profit)
+        const totalReturn = activeInvestment.amount + 
+                          (activeInvestment.amount * (plan.percentage / 100));
+
+        // Calculate daily estimated earnings
+        const estimatedDaily = totalReturn / plan.duration * 24;
+
+        // Calculate BTC mined based on progress
+        const btcMinedValue = (progress / 100) * totalReturn;
+        const btcMined = btcMinedValue / btcPrice;
+
+        // Mining power based on plan tier (scaled 0-100%)
+        const miningPower = Math.min(100, 
+            Math.round(
+                (activeInvestment.amount / plan.maxAmount) * 100 * 
+                (1 + (plan.percentage - 20) / 80) // Boost based on plan ROI
+            )
+        );
+
+        // Prepare response
+        const response = {
+            status: 'success',
+            data: {
+                hashRate,
+                btcMined: parseFloat(btcMined.toFixed(8)),
+                miningPower,
+                estimatedDaily: parseFloat(estimatedDaily.toFixed(2)),
+                btcPrice: parseFloat(btcPrice.toFixed(2)),
+                status: 'active',
+                endDate: endDate.toISOString(),
+                progress: parseFloat(progress.toFixed(2))
+            }
+        };
+
+        // Cache for 5 minutes (300 seconds)
+        await redis.set(cacheKey, JSON.stringify(response), 'EX', 300);
+
+        res.status(200).json(response);
+
+        await logActivity('view-mining-stats', 'mining', req.user.id, req.user.id, 'User', req);
+    } catch (err) {
+        console.error('Get mining stats error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching mining stats'
+        });
+    }
+});
 
 
 
