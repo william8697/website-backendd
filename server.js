@@ -6275,7 +6275,99 @@ app.post('/api/support/messages/:messageId/feedback', protect, [
 
 
 
+// Loan eligibility check endpoint
+app.post('/api/loans/limit', protect, [
+  body('loanAmount').isFloat({ gt: 0 }).withMessage('Loan amount must be greater than 0'),
+  body('term').isInt({ gt: 0 }).withMessage('Term must be greater than 0')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
 
+  try {
+    const { loanAmount, term } = req.body;
+    const user = await User.findById(req.user.id);
+
+    // Check KYC status - all three must be verified
+    if (user.kycStatus.identity !== 'verified' || 
+        user.kycStatus.address !== 'verified' || 
+        user.kycStatus.facial !== 'verified') {
+      return res.status(200).json({
+        qualified: false,
+        message: 'You must complete all KYC verifications to qualify for a loan'
+      });
+    }
+
+    // Check for outstanding loans
+    const activeLoan = await Loan.findOne({ 
+      user: req.user.id,
+      status: { $in: ['active', 'pending'] }
+    });
+
+    if (activeLoan) {
+      return res.status(200).json({
+        qualified: false,
+        message: 'You have an outstanding loan. Please repay it before applying for a new one.'
+      });
+    }
+
+    // Calculate total transaction amount (completed deposits and withdrawals)
+    const transactionStats = await Transaction.aggregate([
+      {
+        $match: { 
+          user: req.user._id,
+          status: 'completed',
+          type: { $in: ['deposit', 'withdrawal'] }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalAmount: { $sum: '$amount' }
+        }
+      }
+    ]);
+
+    const totalTransactions = transactionStats.length > 0 ? transactionStats[0].totalAmount : 0;
+
+    // Check if user meets minimum transaction requirement ($5000)
+    if (totalTransactions < 5000) {
+      return res.status(200).json({
+        qualified: false,
+        message: `You need at least $5,000 in transaction history to qualify. Your current total is $${totalTransactions.toFixed(2)}.`
+      });
+    }
+
+    // Calculate maximum eligible loan amount (50% of total transactions)
+    const maxEligibleAmount = totalTransactions * 0.5;
+
+    if (loanAmount > maxEligibleAmount) {
+      return res.status(200).json({
+        qualified: false,
+        message: `Your maximum eligible loan amount is $${maxEligibleAmount.toFixed(2)} based on your transaction history.`
+      });
+    }
+
+    // If all checks pass, user is eligible
+    res.status(200).json({
+      qualified: true,
+      message: 'You qualify for this loan amount based on your transaction history.',
+      maxEligibleAmount,
+      currentLoanAmount: loanAmount
+    });
+
+  } catch (err) {
+    console.error('Loan eligibility check error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while checking loan eligibility'
+    });
+  }
+});
 
 
 
