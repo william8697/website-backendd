@@ -2151,17 +2151,54 @@ app.post('/api/auth/reset-password', [
 });
 
 // User Endpoints
+// Enhanced GET /api/users/me endpoint
 app.get('/api/users/me', protect, async (req, res) => {
   try {
+    // Include cache control headers for performance
+    res.set('Cache-Control', 'private, max-age=60');
+    
     const user = await User.findById(req.user.id)
-      .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v -twoFactorAuth.secret');
+      .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v -twoFactorAuth.secret')
+      .lean();
 
-    res.status(200).json({
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Standardize response format
+    const responseData = {
       status: 'success',
       data: {
-        user
+        user: {
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          fullName: user.fullName,
+          phone: user.phone,
+          country: user.country,
+          city: user.city,
+          address: user.address,
+          kycStatus: user.kycStatus,
+          balances: user.balances,
+          referralCode: user.referralCode,
+          isVerified: user.isVerified,
+          status: user.status,
+          twoFactorEnabled: user.twoFactorAuth?.enabled || false,
+          preferences: user.preferences,
+          createdAt: user.createdAt
+        }
       }
-    });
+    };
+
+    // Cache the response in Redis for 60 seconds
+    const cacheKey = `user:${req.user.id}`;
+    await redis.setex(cacheKey, 60, JSON.stringify(responseData));
+
+    res.status(200).json(responseData);
   } catch (err) {
     console.error('Get user error:', err);
     res.status(500).json({
