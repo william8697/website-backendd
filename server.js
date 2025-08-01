@@ -3070,6 +3070,62 @@ app.delete('/api/users/api-keys/:id', protect, async (req, res) => {
   }
 });
 
+
+
+
+
+
+// Add this to your server.js in the User Endpoints section
+app.get('/api/users/balances', protect, async (req, res) => {
+  try {
+    // Get current BTC price
+    let btcPrice = 50000; // Default value
+    try {
+      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+      btcPrice = response.data.bitcoin.usd;
+    } catch (err) {
+      console.error('Failed to fetch BTC price:', err);
+    }
+
+    const user = await User.findById(req.user.id).select('balances');
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        balances: user.balances,
+        btcPrice,
+        btcValues: {
+          main: user.balances.main / btcPrice,
+          active: user.balances.active / btcPrice,
+          matured: user.balances.matured / btcPrice,
+          savings: user.balances.savings / btcPrice,
+          loan: user.balances.loan / btcPrice
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Get user balances error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching user balances'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
 // Admin Authentication
 app.get('/api/admin/auth/verify', async (req, res) => {
   try {
