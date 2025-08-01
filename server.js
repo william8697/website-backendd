@@ -5795,110 +5795,138 @@ app.post('/api/support/messages/:messageId/feedback', protect, [
 
 
 
-// Recent Withdrawals Endpoint
-app.get('/api/recent-withdrawals', async (req, res) => {
-  try {
-    // Get recent withdrawals from Redis cache if available
-    const cachedWithdrawals = await redis.get('recent-withdrawals');
-    if (cachedWithdrawals) {
-      return res.status(200).json({
-        status: 'success',
-        data: JSON.parse(cachedWithdrawals)
-      });
+class TransactionPopupSystem {
+    constructor() {
+        this.popupQueue = [];
+        this.isShowingPopup = false;
+        this.container = document.getElementById('transaction-popup-container');
+        this.withdrawalData = [];
+        this.investmentData = [];
+        this.minDelay = 3000;
+        this.maxDelay = 600000;
+        this.popupDuration = 10000;
+        this.maxConcurrentPopups = Math.random() > 0.8 ? 2 : 1;
+        this.currentPopups = 0;
+        this.init();
     }
 
-    // Generate realistic withdrawal data with mixed large and small amounts
-    const withdrawals = Array.from({ length: 50 }, (_, i) => {
-      // Alternate between large and small amounts
-      const isLarge = Math.random() > 0.5;
-      const amount = isLarge 
-        ? Math.floor(Math.random() * (2000000 - 50000 + 1)) + 50000
-        : Math.floor(Math.random() * (50000 - 120 + 1)) + 120;
-      
-      const userCode = `Jt${crypto.randomBytes(2).toString('hex').slice(0, 3)}***${crypto.randomBytes(2).toString('hex').slice(0, 4)}`;
-      const txId = `Ki${crypto.randomBytes(3).toString('hex').slice(0, 3)}***${crypto.randomBytes(2).toString('hex').slice(0, 3)}`;
-      const methods = ['btc', 'wire'];
-      const method = methods[Math.floor(Math.random() * methods.length)];
-      
-      return {
-        id: crypto.randomBytes(8).toString('hex'),
-        user: userCode,
-        amount: amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
-        method: method === 'btc' ? 'BTC' : 'Wire Transfer',
-        txId: txId,
-        timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000)).toISOString(),
-        status: 'Completed'
-      };
-    });
-
-    // Cache for 1 hour
-    await redis.set('recent-withdrawals', JSON.stringify(withdrawals), 'EX', 3600);
-
-    res.status(200).json({
-      status: 'success',
-      data: withdrawals
-    });
-  } catch (err) {
-    console.error('Error fetching recent withdrawals:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch recent withdrawals'
-    });
-  }
-});
-
-// Recent Investments Endpoint
-app.get('/api/recent-investments', async (req, res) => {
-  try {
-    // Get recent investments from Redis cache if available
-    const cachedInvestments = await redis.get('recent-investments');
-    if (cachedInvestments) {
-      return res.status(200).json({
-        status: 'success',
-        data: JSON.parse(cachedInvestments)
-      });
+    async init() {
+        await this.loadData();
+        this.startPopupCycle();
     }
 
-    // Get investment plans for validation
-    const plans = await Plan.find({ isActive: true });
-    
-    // Generate realistic investment data with mixed large and small amounts
-    const investments = Array.from({ length: 50 }, (_, i) => {
-      const plan = plans[Math.floor(Math.random() * plans.length)];
-      // Alternate between large and small amounts within plan limits
-      const isLarge = Math.random() > 0.5;
-      const amount = isLarge
-        ? Math.floor(Math.random() * (plan.maxAmount - (plan.maxAmount * 0.7) + 1)) + (plan.maxAmount * 0.7)
-        : Math.floor(Math.random() * ((plan.minAmount * 2) - plan.minAmount + 1)) + plan.minAmount;
-      
-      const userCode = `Jt${crypto.randomBytes(2).toString('hex').slice(0, 3)}***${crypto.randomBytes(2).toString('hex').slice(0, 4)}`;
-      const txId = `Ki${crypto.randomBytes(3).toString('hex').slice(0, 3)}***${crypto.randomBytes(2).toString('hex').slice(0, 3)}`;
-      
-      return {
-        id: crypto.randomBytes(8).toString('hex'),
-        user: userCode,
-        amount: amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
-        plan: plan.name,
-        txId: txId,
-        timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000)).toISOString(),
-        status: 'Active'
-      };
-    });
+    async loadData() {
+        try {
+            const [withdrawalResponse, investmentResponse] = await Promise.all([
+                fetch('https://website-backendd-1.onrender.com/api/recent-withdrawals'),
+                fetch('https://website-backendd-1.onrender.com/api/recent-investments')
+            ]);
 
-    // Cache for 1 hour
-    await redis.set('recent-investments', JSON.stringify(investments), 'EX', 3600);
+            if (withdrawalResponse.ok) {
+                const data = await withdrawalResponse.json();
+                this.withdrawalData = data.data.filter(item => item.txId); // Only include items with txId
+            }
 
-    res.status(200).json({
-      status: 'success',
-      data: investments
-    });
-  } catch (err) {
-    console.error('Error fetching recent investments:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch recent investments'
-    });
-  }
+            if (investmentResponse.ok) {
+                const data = await investmentResponse.json();
+                this.investmentData = data.data.filter(item => item.txId); // Only include items with txId
+            }
+        } catch (error) {
+            console.error('Error loading transaction data:', error);
+        }
+    }
+
+    startPopupCycle() {
+        const showNextPopup = () => {
+            if (this.popupQueue.length > 0 && this.currentPopups < this.maxConcurrentPopups) {
+                const nextPopup = this.popupQueue.shift();
+                if (nextPopup.data.txId) { // Only show if txId exists
+                    this.showPopup(nextPopup);
+                    this.currentPopups++;
+                }
+            }
+        };
+
+        this.scheduleRandomPopup();
+        setInterval(showNextPopup, 1000);
+    }
+
+    scheduleRandomPopup() {
+        if (this.currentPopups >= this.maxConcurrentPopups) return;
+
+        const delay = Math.floor(Math.random() * (this.maxDelay - this.minDelay + 1)) + this.minDelay;
+        
+        setTimeout(() => {
+            const shouldShowWithdrawal = Math.random() > 0.5;
+            const dataArray = shouldShowWithdrawal ? this.withdrawalData : this.investmentData;
+            
+            if (dataArray.length > 0) {
+                const data = dataArray[Math.floor(Math.random() * dataArray.length)];
+                if (data.txId) { // Only add to queue if txId exists
+                    this.addToQueue(data, shouldShowWithdrawal ? 'withdrawal' : 'investment');
+                }
+            }
+            
+            this.scheduleRandomPopup();
+        }, delay);
+    }
+
+    addToQueue(data, type) {
+        this.popupQueue.push({ data, type });
+    }
+
+    showPopup({ data, type }) {
+        const popup = document.createElement('div');
+        popup.className = `transaction-popup ${type}`;
+        
+        const iconClass = type === 'withdrawal' ? 'fa-arrow-up-from-bracket' : 'fa-chart-line';
+        const title = type === 'withdrawal' ? 'Withdrawal Processed' : 'New Investment';
+        
+        popup.innerHTML = `
+            <div class="transaction-icon ${type}">
+                <i class="fas ${iconClass}"></i>
+            </div>
+            <div class="transaction-content">
+                <div class="transaction-title">${title}</div>
+                <div class="transaction-details">
+                    ${type === 'investment' 
+                        ? `User ${data.user} invested ${data.amount} in the ${data.plan}`
+                        : `User ${data.user} withdrew ${data.amount} via ${data.method}`}
+                </div>
+                <div class="transaction-txid">TX ID: ${data.txId}</div>
+            </div>
+            <div class="transaction-close">&times;</div>
+        `;
+        
+        this.container.appendChild(popup);
+        void popup.offsetWidth;
+        popup.classList.add('show');
+        
+        popup.querySelector('.transaction-close').addEventListener('click', () => {
+            this.closePopup(popup);
+        });
+        
+        setTimeout(() => {
+            if (popup.parentNode) {
+                this.closePopup(popup);
+            }
+        }, this.popupDuration);
+    }
+
+    closePopup(popup) {
+        popup.classList.remove('show');
+        setTimeout(() => {
+            if (popup.parentNode) {
+                popup.parentNode.removeChild(popup);
+            }
+            this.currentPopups--;
+            this.isShowingPopup = this.currentPopups > 0;
+        }, 400);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    new TransactionPopupSystem();
 });
 
 
