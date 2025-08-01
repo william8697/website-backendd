@@ -6273,130 +6273,6 @@ app.post('/api/support/messages/:messageId/feedback', protect, [
 });
 
 
-
-
-
-// Recent Investments Endpoint
-app.get('/api/recent-investments', async (req, res) => {
-    try {
-        // Get all active plans from database
-        const plans = await Plan.find({ isActive: true });
-        
-        // Generate 10 random recent investments
-        const recentInvestments = [];
-        const users = await User.find().select('email').limit(100);
-        
-        for (let i = 0; i < 10; i++) {
-            const randomPlan = plans[Math.floor(Math.random() * plans.length)];
-            const randomUser = users[Math.floor(Math.random() * users.length)];
-            
-            // Generate amount within plan limits
-            const amount = Math.floor(
-                Math.random() * (randomPlan.maxAmount - randomPlan.minAmount + 1) + randomPlan.minAmount
-            );
-            
-            // Generate obfuscated user ID
-            const userId = obfuscateId(randomUser._id.toString());
-            
-            // Generate random TX ID
-            const txId = generateTxId();
-            
-            recentInvestments.push({
-                user: `user ${userId} invested`,
-                amount: `$${amount.toLocaleString()}`,
-                plan: randomPlan.name,
-                txId: `TX ID: ${txId}`,
-                timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000))
-            });
-        }
-        
-        // Sort by most recent
-        recentInvestments.sort((a, b) => b.timestamp - a.timestamp);
-        
-        res.status(200).json({
-            status: 'success',
-            data: recentInvestments
-        });
-    } catch (err) {
-        console.error('Error fetching recent investments:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch recent investments'
-        });
-    }
-});
-
-// Recent Withdrawals Endpoint
-app.get('/api/recent-withdrawals', async (req, res) => {
-    try {
-        // Generate 10 random recent withdrawals
-        const recentWithdrawals = [];
-        const users = await User.find().select('email').limit(100);
-        
-        for (let i = 0; i < 10; i++) {
-            const randomUser = users[Math.floor(Math.random() * users.length)];
-            
-            // Generate amount between $120 and $2,000,000
-            const minWithdrawal = 120;
-            const maxWithdrawal = 2000000;
-            const amount = Math.floor(
-                Math.random() * (maxWithdrawal - minWithdrawal + 1) + minWithdrawal
-            );
-            
-            // Generate obfuscated user ID
-            const userId = obfuscateId(randomUser._id.toString());
-            
-            // Generate random TX ID
-            const txId = generateTxId();
-            
-            // Random method (BTC or Wire)
-            const method = Math.random() > 0.5 ? 'BTC' : 'Wire Transfer';
-            
-            recentWithdrawals.push({
-                user: `user ${userId} withdrew`,
-                amount: `$${amount.toLocaleString()}`,
-                method: method,
-                txId: `TX ID: ${txId}`,
-                timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000))
-            });
-        }
-        
-        // Sort by most recent
-        recentWithdrawals.sort((a, b) => b.timestamp - a.timestamp);
-        
-        res.status(200).json({
-            status: 'success',
-            data: recentWithdrawals
-        });
-    } catch (err) {
-        console.error('Error fetching recent withdrawals:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch recent withdrawals'
-        });
-    }
-});
-
-// Helper functions
-function obfuscateId(id) {
-    if (id.length < 8) return id;
-    return `${id.substring(0, 4)}***${id.substring(id.length - 4)}`;
-}
-
-function generateTxId() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let result = '';
-    for (let i = 0; i < 10; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return `${result.substring(0, 5)}•••${result.substring(7)}`;
-}
-
-
-
-
-
-
 // Loan Qualification and Limit Calculation Endpoint
 app.get('/api/loans/limit', protect, async (req, res) => {
     try {
@@ -6488,6 +6364,90 @@ app.get('/api/loans/limit', protect, async (req, res) => {
     }
 });
 
+
+
+// Recent Withdrawals Endpoint
+app.get('/api/transactions/recent-withdrawals', async (req, res) => {
+    try {
+        // Get all active plans from database to validate amounts
+        const plans = await Plan.find({ isActive: true });
+        
+        // Generate realistic withdrawal data
+        const withdrawals = Array.from({ length: 50 }, () => {
+            const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
+            const userId = `user_${crypto.randomBytes(4).toString('hex')}`;
+            const txId = `tx_${crypto.randomBytes(8).toString('hex')}`;
+            
+            return {
+                userId: userId,
+                maskedUserId: `${userId.substring(0, 4)}***${userId.substring(userId.length - 4)}`,
+                amount: amount,
+                currency: 'USD',
+                method: Math.random() > 0.5 ? 'btc' : 'wire',
+                txId: txId,
+                maskedTxId: `${txId.substring(0, 4)}•••${txId.substring(txId.length - 4)}`,
+                timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000))
+            };
+        });
+
+        // Cache in Redis for 1 hour
+        await redis.set('recent-withdrawals', JSON.stringify(withdrawals), 'EX', 3600);
+        
+        res.status(200).json({
+            status: 'success',
+            data: withdrawals
+        });
+    } catch (err) {
+        console.error('Error generating recent withdrawals:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to generate recent withdrawals'
+        });
+    }
+});
+
+// Recent Investments Endpoint
+app.get('/api/transactions/recent-investments', async (req, res) => {
+    try {
+        // Get all active plans from database to validate amounts
+        const plans = await Plan.find({ isActive: true });
+        
+        // Generate realistic investment data based on actual plans
+        const investments = Array.from({ length: 50 }, () => {
+            const plan = plans[Math.floor(Math.random() * plans.length)];
+            const amount = Math.floor(
+                Math.random() * (plan.maxAmount - plan.minAmount + 1) + plan.minAmount
+            );
+            const userId = `user_${crypto.randomBytes(4).toString('hex')}`;
+            const txId = `tx_${crypto.randomBytes(8).toString('hex')}`;
+            
+            return {
+                userId: userId,
+                maskedUserId: `${userId.substring(0, 4)}***${userId.substring(userId.length - 4)}`,
+                amount: amount,
+                currency: 'USD',
+                plan: plan.name,
+                txId: txId,
+                maskedTxId: `${txId.substring(0, 4)}•••${txId.substring(txId.length - 4)}`,
+                timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000))
+            };
+        });
+
+        // Cache in Redis for 1 hour
+        await redis.set('recent-investments', JSON.stringify(investments), 'EX', 3600);
+        
+        res.status(200).json({
+            status: 'success',
+            data: investments
+        });
+    } catch (err) {
+        console.error('Error generating recent investments:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to generate recent investments'
+        });
+    }
+});
 
 
 
