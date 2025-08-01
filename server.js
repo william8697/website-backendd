@@ -6273,6 +6273,89 @@ app.post('/api/support/messages/:messageId/feedback', protect, [
 });
 
 
+
+
+
+// Eligibility Endpoint
+app.post('/api/loans/eligibility', authenticateUser, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Get user data from database
+    const user = await User.findById(userId)
+      .populate('transactions')
+      .populate('kycVerification');
+    
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'User not found' 
+      });
+    }
+    
+    // Check transaction history
+    const totalTransacted = user.transactions.reduce((sum, tx) => {
+      return sum + (tx.status === 'completed' ? tx.amount : 0);
+    }, 0);
+    
+    // Check KYC status
+    const kycVerified = user.kycVerification && 
+                        user.kycVerification.status === 'verified';
+    
+    // Check account age (at least 30 days old)
+    const accountAgeDays = (new Date() - user.createdAt) / (1000 * 60 * 60 * 24);
+    const accountMature = accountAgeDays >= 30;
+    
+    // Check if user has active investments
+    const hasActiveInvestments = await Investment.exists({ 
+      userId, 
+      status: 'active' 
+    });
+    
+    // Determine eligibility
+    const eligible = totalTransacted >= 5000 && 
+                    kycVerified && 
+                    accountMature &&
+                    hasActiveInvestments;
+    
+    // Prepare response
+    const response = {
+      success: true,
+      data: {
+        eligible,
+        requirements: {
+          minTransactionAmount: 5000,
+          totalTransacted,
+          kycVerified,
+          accountAgeDays: Math.floor(accountAgeDays),
+          minAccountAgeDays: 30,
+          hasActiveInvestments
+        },
+        message: eligible 
+          ? 'Congratulations! You qualify for a loan.' 
+          : 'You do not currently meet all loan requirements.'
+      }
+    };
+    
+    res.json(response);
+    
+  } catch (error) {
+    console.error('Eligibility check error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to check eligibility' 
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
 // Loan Qualification and Limit Calculation Endpoint
 app.get('/api/loans/limit', protect, async (req, res) => {
     try {
@@ -6360,91 +6443,6 @@ app.get('/api/loans/limit', protect, async (req, res) => {
         res.status(500).json({
             status: 'error',
             message: 'An error occurred while checking loan eligibility'
-        });
-    }
-});
-
-
-
-// Recent Withdrawals Endpoint
-app.get('/api/transactions/recent-withdrawals', async (req, res) => {
-    try {
-        // Get all active plans from database to validate amounts
-        const plans = await Plan.find({ isActive: true });
-        
-        // Generate realistic withdrawal data
-        const withdrawals = Array.from({ length: 50 }, () => {
-            const amount = Math.floor(Math.random() * (2000000 - 120 + 1)) + 120;
-            const userId = `user_${crypto.randomBytes(4).toString('hex')}`;
-            const txId = `tx_${crypto.randomBytes(8).toString('hex')}`;
-            
-            return {
-                userId: userId,
-                maskedUserId: `${userId.substring(0, 4)}***${userId.substring(userId.length - 4)}`,
-                amount: amount,
-                currency: 'USD',
-                method: Math.random() > 0.5 ? 'btc' : 'wire',
-                txId: txId,
-                maskedTxId: `${txId.substring(0, 4)}•••${txId.substring(txId.length - 4)}`,
-                timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000))
-            };
-        });
-
-        // Cache in Redis for 1 hour
-        await redis.set('recent-withdrawals', JSON.stringify(withdrawals), 'EX', 3600);
-        
-        res.status(200).json({
-            status: 'success',
-            data: withdrawals
-        });
-    } catch (err) {
-        console.error('Error generating recent withdrawals:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to generate recent withdrawals'
-        });
-    }
-});
-
-// Recent Investments Endpoint
-app.get('/api/transactions/recent-investments', async (req, res) => {
-    try {
-        // Get all active plans from database to validate amounts
-        const plans = await Plan.find({ isActive: true });
-        
-        // Generate realistic investment data based on actual plans
-        const investments = Array.from({ length: 50 }, () => {
-            const plan = plans[Math.floor(Math.random() * plans.length)];
-            const amount = Math.floor(
-                Math.random() * (plan.maxAmount - plan.minAmount + 1) + plan.minAmount
-            );
-            const userId = `user_${crypto.randomBytes(4).toString('hex')}`;
-            const txId = `tx_${crypto.randomBytes(8).toString('hex')}`;
-            
-            return {
-                userId: userId,
-                maskedUserId: `${userId.substring(0, 4)}***${userId.substring(userId.length - 4)}`,
-                amount: amount,
-                currency: 'USD',
-                plan: plan.name,
-                txId: txId,
-                maskedTxId: `${txId.substring(0, 4)}•••${txId.substring(txId.length - 4)}`,
-                timestamp: new Date(Date.now() - Math.floor(Math.random() * 7 * 24 * 60 * 60 * 1000))
-            };
-        });
-
-        // Cache in Redis for 1 hour
-        await redis.set('recent-investments', JSON.stringify(investments), 'EX', 3600);
-        
-        res.status(200).json({
-            status: 'success',
-            data: investments
-        });
-    } catch (err) {
-        console.error('Error generating recent investments:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to generate recent investments'
         });
     }
 });
