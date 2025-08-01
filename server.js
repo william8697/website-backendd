@@ -6503,225 +6503,235 @@ app.get('/api/loans/limit', protect, async (req, res) => {
 
 
 
+// Add this to your server.js file in the routes section
 
-// Investment Endpoints
-app.get('/api/investments', protect, async (req, res) => {
-  try {
-    const investments = await Investment.find({ user: req.user.id })
-      .populate('plan')
-      .sort({ createdAt: -1 });
-
-    // Format for frontend
-    const formattedInvestments = investments.map(inv => ({
-      id: inv._id,
-      plan: inv.plan.name,
-      amount: inv.amount,
-      duration: `${inv.plan.duration} hours`,
-      dailyROI: inv.plan.percentage / (inv.plan.duration / 24), // Daily ROI based on plan duration
-      maturityDate: inv.endDate,
-      status: inv.status,
-      daysLeft: Math.max(0, Math.ceil((inv.endDate - Date.now()) / (1000 * 60 * 60 * 24)))
-    }));
-
-    res.status(200).json({
-      status: 'success',
-      data: formattedInvestments
-    });
-  } catch (err) {
-    console.error('Get investments error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching investments'
-    });
-  }
-});
-
-app.post('/api/investments', protect, [
-  body('plan').isMongoId().withMessage('Invalid plan ID'),
-  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { plan, amount } = req.body;
-    const user = await User.findById(req.user.id);
-    const investmentPlan = await Plan.findById(plan);
-
-    if (!investmentPlan) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Investment plan not found'
-      });
-    }
-
-    if (amount < investmentPlan.minAmount || amount > investmentPlan.maxAmount) {
-      return res.status(400).json({
-        status: 'fail',
-        message: `Amount must be between $${investmentPlan.minAmount} and $${investmentPlan.maxAmount} for this plan`
-      });
-    }
-
-    if (user.balances.main < amount) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Insufficient balance for investment'
-      });
-    }
-
-    // Deduct from main balance and add to active balance
-    user.balances.main -= amount;
-    user.balances.active += amount;
-    await user.save();
-
-    // Calculate end date and expected return
-    const endDate = new Date(Date.now() + investmentPlan.duration * 60 * 60 * 1000);
-    const expectedReturn = amount + (amount * investmentPlan.percentage / 100);
-
-    // Create investment
-    const investment = await Investment.create({
-      user: req.user.id,
-      plan,
-      amount,
-      expectedReturn,
-      startDate: new Date(),
-      endDate,
-      status: 'active'
-    });
-
-    // Create transaction record
-    const reference = `INV-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-    await Transaction.create({
-      user: req.user.id,
-      type: 'investment',
-      amount,
-      currency: 'USD',
-      status: 'completed',
-      method: 'internal',
-      reference,
-      netAmount: amount,
-      details: `Investment of $${amount} in ${investmentPlan.name}`
-    });
-
-    // Process referral bonus if applicable
-    if (user.referredBy) {
-      const referringUser = await User.findById(user.referredBy);
-      if (referringUser) {
-        const bonusAmount = amount * 0.05; // 5% referral bonus
+/**
+ * @api {get} /api/referrals Get Referral Data
+ * @apiName GetReferrals
+ * @apiGroup Referral
+ * @apiHeader {String} Authorization User's JWT token
+ * 
+ * @apiSuccess {String} code Referral code
+ * @apiSuccess {Number} totalReferrals Total number of referrals
+ * @apiSuccess {Number} totalEarnings Total earnings from referrals
+ * @apiSuccess {Number} pendingEarnings Pending referral earnings
+ * @apiSuccess {Array} recentReferrals List of recent referrals
+ */
+app.get('/api/referrals', protect, async (req, res) => {
+    try {
+        // Get the current user's referral data
+        const user = await User.findById(req.user.id)
+            .populate({
+                path: 'referredBy',
+                select: 'firstName lastName'
+            })
+            .select('referralCode referredBy');
         
-        // Check if this is within first 3 rounds
-        const referralRounds = await Investment.countDocuments({
-          user: req.user.id,
-          referralBonusPaid: true
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Get all users referred by this user (first level)
+        const referredUsers = await User.find({ referredBy: req.user.id })
+            .select('firstName lastName createdAt');
+        
+        // Get all investments made by referred users
+        const referredInvestments = await Investment.find({
+            user: { $in: referredUsers.map(u => u._id) }
+        })
+        .populate('plan', 'referralBonus')
+        .populate('user', 'firstName lastName')
+        .sort({ createdAt: -1 });
+
+        // Calculate total and pending earnings
+        let totalEarnings = 0;
+        let pendingEarnings = 0;
+        const roundsToPay = 3; // Pay for first 3 rounds
+        
+        referredInvestments.forEach(investment => {
+            // Calculate 5% of the principal for each investment
+            const bonusAmount = investment.amount * (investment.plan.referralBonus / 100);
+            
+            if (investment.referralBonusPaid) {
+                totalEarnings += bonusAmount;
+            } else {
+                // Check if this is within the first 3 rounds
+                const userInvestments = referredInvestments.filter(
+                    inv => inv.user._id.equals(investment.user._id)
+                );
+                const investmentRound = userInvestments.findIndex(
+                    inv => inv._id.equals(investment._id)
+                ) + 1;
+                
+                if (investmentRound <= roundsToPay) {
+                    pendingEarnings += bonusAmount;
+                }
+            }
         });
 
-        if (referralRounds < 3) {
-          referringUser.balances.main += bonusAmount;
-          await referringUser.save();
+        // Format recent referrals (last 5)
+        const recentReferrals = referredUsers
+            .slice(0, 5)
+            .map(user => ({
+                name: `${user.firstName} ${user.lastName}`,
+                date: user.createdAt.toLocaleDateString(),
+                amount: referredInvestments
+                    .filter(inv => inv.user._id.equals(user._id))
+                    .reduce((sum, inv) => sum + inv.amount, 0)
+            }));
 
-          // Mark bonus as paid
-          investment.referralBonusPaid = true;
-          investment.referralBonusAmount = bonusAmount;
-          investment.referralBonusRounds = referralRounds + 1;
-          await investment.save();
+        res.status(200).json({
+            status: 'success',
+            data: {
+                code: user.referralCode,
+                totalReferrals: referredUsers.length,
+                totalEarnings,
+                pendingEarnings,
+                recentReferrals,
+                referredBy: user.referredBy ? {
+                    name: `${user.referredBy.firstName} ${user.referredBy.lastName}`,
+                    code: user.referredBy.referralCode
+                } : null
+            }
+        });
 
-          // Create transaction record for referral bonus
-          await Transaction.create({
+        await logActivity('view-referrals', 'user', req.user.id, req.user.id, 'User', req);
+    } catch (err) {
+        console.error('Get referrals error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching referral data'
+        });
+    }
+});
+
+/**
+ * @api {post} /api/investments/process-referral Process Referral Bonus
+ * @apiName ProcessReferralBonus
+ * @apiGroup Referral
+ * @apiDescription This endpoint is called when a new investment is made to process referral bonuses
+ * @apiHeader {String} Authorization User's JWT token
+ * 
+ * @apiParam {String} investmentId The ID of the new investment
+ * @apiParam {String} userId The ID of the user who made the investment
+ */
+app.post('/api/investments/process-referral', protect, [
+    body('investmentId').isMongoId().withMessage('Invalid investment ID'),
+    body('userId').isMongoId().withMessage('Invalid user ID')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({
+            status: 'fail',
+            errors: errors.array()
+        });
+    }
+
+    try {
+        const { investmentId, userId } = req.body;
+        const roundsToPay = 3; // Pay for first 3 rounds
+
+        // Get the investment and plan details
+        const investment = await Investment.findById(investmentId)
+            .populate('plan', 'referralBonus');
+        
+        if (!investment) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'Investment not found'
+            });
+        }
+
+        // Get the user who made the investment
+        const investingUser = await User.findById(userId)
+            .select('referredBy');
+        
+        if (!investingUser || !investingUser.referredBy) {
+            return res.status(200).json({
+                status: 'success',
+                message: 'No referral to process'
+            });
+        }
+
+        // Check if this is within the first 3 investments for this user
+        const userInvestments = await Investment.find({
+            user: userId
+        }).sort({ createdAt: 1 });
+
+        const investmentRound = userInvestments.findIndex(
+            inv => inv._id.equals(investmentId)
+        ) + 1;
+
+        if (investmentRound > roundsToPay) {
+            return res.status(200).json({
+                status: 'success',
+                message: 'Not eligible for referral bonus (beyond 3 rounds)'
+            });
+        }
+
+        // Calculate 5% of the principal
+        const bonusAmount = investment.amount * (investment.plan.referralBonus / 100);
+
+        // Update referring user's balance
+        const referringUser = await User.findByIdAndUpdate(
+            investingUser.referredBy,
+            { $inc: { 'balances.main': bonusAmount } },
+            { new: true }
+        );
+
+        // Mark the bonus as paid in the investment
+        investment.referralBonusPaid = true;
+        investment.referralBonusAmount = bonusAmount;
+        await investment.save();
+
+        // Create a transaction record for the referral bonus
+        await Transaction.create({
             user: referringUser._id,
             type: 'referral',
             amount: bonusAmount,
             currency: 'USD',
             status: 'completed',
             method: 'internal',
-            reference: `REF-${reference}`,
+            reference: `REF-${investment._id.toString().slice(-6).toUpperCase()}`,
             netAmount: bonusAmount,
-            details: `Referral bonus from ${user.firstName} ${user.lastName}'s investment`
-          });
+            details: `Referral bonus for ${investingUser.firstName} ${investingUser.lastName}'s investment of $${investment.amount}`
+        });
 
-          // Send notification to referring user
-          referringUser.notifications.push({
+        // Send notification to referring user
+        referringUser.notifications.push({
             title: 'Referral Bonus',
-            message: `You've earned $${bonusAmount.toFixed(2)} from ${user.firstName} ${user.lastName}'s investment.`,
+            message: `You've earned $${bonusAmount.toFixed(2)} from ${investingUser.firstName} ${investingUser.lastName}'s investment.`,
             type: 'success'
-          });
-          await referringUser.save();
-        }
-      }
-    }
+        });
+        await referringUser.save();
 
-    res.status(201).json({
-      status: 'success',
-      data: {
-        investment,
-        newBalance: user.balances.main
-      }
-    });
-  } catch (err) {
-    console.error('Create investment error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while creating investment'
-    });
-  }
+        res.status(200).json({
+            status: 'success',
+            message: 'Referral bonus processed successfully',
+            data: {
+                bonusAmount,
+                referringUser: referringUser._id,
+                investmentRound
+            }
+        });
+
+        await logActivity('process-referral', 'referral', investment._id, req.user.id, 'User', req, {
+            bonusAmount,
+            referringUser: referringUser._id,
+            investmentId
+        });
+    } catch (err) {
+        console.error('Process referral error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while processing referral bonus'
+        });
+    }
 });
 
-// Cron job to complete matured investments
-async function processMaturedInvestments() {
-  try {
-    const now = new Date();
-    const maturedInvestments = await Investment.find({
-      endDate: { $lte: now },
-      status: 'active'
-    }).populate('user plan');
-
-    for (const investment of maturedInvestments) {
-      const user = await User.findById(investment.user._id);
-      
-      // Move from active to matured balance
-      user.balances.active -= investment.amount;
-      user.balances.matured += investment.expectedReturn;
-      await user.save();
-
-      // Update investment status
-      investment.status = 'completed';
-      await investment.save();
-
-      // Create transaction record
-      await Transaction.create({
-        user: user._id,
-        type: 'interest',
-        amount: investment.expectedReturn - investment.amount,
-        currency: 'USD',
-        status: 'completed',
-        method: 'internal',
-        reference: `MAT-${investment._id.toString().slice(-6).toUpperCase()}`,
-        netAmount: investment.expectedReturn - investment.amount,
-        details: `Investment maturity from ${investment.plan.name} plan`
-      });
-
-      // Send notification to user
-      user.notifications.push({
-        title: 'Investment Matured',
-        message: `Your investment in ${investment.plan.name} has matured. $${(investment.expectedReturn - investment.amount).toFixed(2)} profit has been credited to your account.`,
-        type: 'success'
-      });
-      await user.save();
-    }
-
-    console.log(`Processed ${maturedInvestments.length} matured investments`);
-  } catch (err) {
-    console.error('Process matured investments error:', err);
-  }
-}
-
-// Run every hour
-setInterval(processMaturedInvestments, 60 * 60 * 1000);
-processMaturedInvestments(); // Run immediately on startup
 
 
 
