@@ -284,8 +284,8 @@ PlanSchema.index({ name: 1 });
 PlanSchema.index({ isActive: 1 });
 
 const Plan = mongoose.model('Plan', PlanSchema);
-
 const InvestmentSchema = new mongoose.Schema({
+  // Core investment information
   user: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'User', 
@@ -295,41 +295,300 @@ const InvestmentSchema = new mongoose.Schema({
   plan: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'Plan', 
-    required: [true, 'Plan is required'] 
+    required: [true, 'Plan is required'],
+    index: true 
   },
   amount: { 
     type: Number, 
     required: [true, 'Amount is required'], 
-    min: [0, 'Amount cannot be negative'] 
+    min: [0, 'Amount cannot be negative'],
+    set: v => parseFloat(v.toFixed(8)) // Ensure proper decimal handling
   },
+  currency: {
+    type: String,
+    enum: ['USD', 'BTC', 'ETH', 'USDT'],
+    default: 'USD',
+    index: true
+  },
+  originalAmount: { // Store original amount in case of currency conversion
+    type: Number,
+    required: true
+  },
+  originalCurrency: {
+    type: String,
+    required: true
+  },
+
+  // Investment performance tracking
   expectedReturn: { 
     type: Number, 
     required: [true, 'Expected return is required'], 
     min: [0, 'Expected return cannot be negative'] 
   },
-  startDate: { type: Date, default: Date.now },
-  endDate: { type: Date, required: [true, 'End date is required'] },
+  actualReturn: {
+    type: Number,
+    default: 0,
+    min: [0, 'Actual return cannot be negative']
+  },
+  returnPercentage: {
+    type: Number,
+    required: true,
+    min: [0, 'Return percentage cannot be negative'],
+    max: [1000, 'Return percentage too high'] // Adjust based on business rules
+  },
+  dailyEarnings: [{
+    date: { type: Date, required: true },
+    amount: { type: Number, required: true, min: 0 },
+    btcValue: { type: Number, min: 0 } // Optional: Store BTC equivalent
+  }],
+
+  // Timeline tracking
+  startDate: { 
+    type: Date, 
+    default: Date.now,
+    index: true 
+  },
+  endDate: { 
+    type: Date, 
+    required: [true, 'End date is required'],
+    index: true,
+    validate: {
+      validator: function(v) {
+        return v > this.startDate;
+      },
+      message: 'End date must be after start date'
+    }
+  },
+  lastPayoutDate: Date,
+  nextPayoutDate: Date,
+  completionDate: Date,
+
+  // Status and lifecycle
   status: { 
     type: String, 
-    enum: ['active', 'completed', 'cancelled'], 
-    default: 'active',
+    enum: ['pending', 'active', 'completed', 'cancelled', 'paused', 'disputed'],
+    default: 'pending',
     index: true
   },
-  referralBonusPaid: { type: Boolean, default: false },
-  referralBonusAmount: { type: Number, default: 0, min: [0, 'Bonus amount cannot be negative'] }
+  statusHistory: [{
+    status: { type: String, required: true },
+    changedAt: { type: Date, default: Date.now },
+    changedBy: { type: mongoose.Schema.Types.ObjectId, refPath: 'statusHistory.changedByModel' },
+    changedByModel: { type: String, enum: ['User', 'Admin', 'System'] },
+    reason: String
+  }],
+
+  // Referral program
+  referredBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    index: true
+  },
+  referralBonusPaid: { 
+    type: Boolean, 
+    default: false,
+    index: true 
+  },
+  referralBonusAmount: { 
+    type: Number, 
+    default: 0, 
+    min: [0, 'Bonus amount cannot be negative'] 
+  },
+  referralBonusDetails: {
+    percentage: Number,
+    payoutDate: Date,
+    transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' }
+  },
+
+  // Risk management
+  riskLevel: {
+    type: String,
+    enum: ['low', 'medium', 'high'],
+    default: 'medium'
+  },
+  insuranceCoverage: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 100 // Percentage of coverage
+  },
+
+  // Financial tracking
+  transactions: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Transaction'
+  }],
+  payoutSchedule: {
+    type: String,
+    enum: ['daily', 'weekly', 'monthly', 'end_term'],
+    required: true
+  },
+  totalPayouts: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+
+  // Metadata
+  ipAddress: String,
+  userAgent: String,
+  deviceInfo: {
+    type: String,
+    enum: ['desktop', 'mobile', 'tablet', 'unknown']
+  },
+  notes: [{
+    content: String,
+    createdBy: { type: mongoose.Schema.Types.ObjectId, refPath: 'notes.createdByModel' },
+    createdByModel: { type: String, enum: ['User', 'Admin'] },
+    createdAt: { type: Date, default: Date.now }
+  }],
+
+  // Compliance
+  kycVerified: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  termsAccepted: {
+    type: Boolean,
+    default: false
+  },
+  complianceFlags: [{
+    type: String,
+    enum: ['aml_check', 'sanctions_check', 'pep_check', 'unusual_activity']
+  }]
 }, { 
   timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
+  toJSON: { 
+    virtuals: true,
+    transform: function(doc, ret) {
+      delete ret.__v;
+      delete ret.statusHistory;
+      delete ret.notes;
+      return ret;
+    }
+  },
+  toObject: { 
+    virtuals: true,
+    transform: function(doc, ret) {
+      delete ret.__v;
+      return ret;
+    }
+  },
+  optimisticConcurrency: true // Enable optimistic concurrency control
 });
 
-InvestmentSchema.index({ user: 1 });
-InvestmentSchema.index({ status: 1 });
-InvestmentSchema.index({ endDate: 1 });
+// Indexes
+InvestmentSchema.index({ user: 1, status: 1 });
+InvestmentSchema.index({ status: 1, endDate: 1 });
+InvestmentSchema.index({ referredBy: 1, status: 1 });
+InvestmentSchema.index({ 'dailyEarnings.date': 1 });
+InvestmentSchema.index({ createdAt: -1 });
 
+// Virtuals
 InvestmentSchema.virtual('daysRemaining').get(function() {
-  return Math.max(0, Math.ceil((this.endDate - Date.now()) / (1000 * 60 * 60 * 24)));
+  return this.status === 'active' 
+    ? Math.max(0, Math.ceil((this.endDate - Date.now()) / (1000 * 60 * 60 * 24)))
+    : 0;
 });
+
+InvestmentSchema.virtual('totalValue').get(function() {
+  return this.amount + this.actualReturn;
+});
+
+InvestmentSchema.virtual('isActive').get(function() {
+  return this.status === 'active';
+});
+
+InvestmentSchema.virtual('payoutFrequency').get(function() {
+  return this.payoutSchedule === 'daily' ? 1 : 
+         this.payoutSchedule === 'weekly' ? 7 :
+         this.payoutSchedule === 'monthly' ? 30 : 0;
+});
+
+// Middleware
+InvestmentSchema.pre('save', function(next) {
+  if (this.isModified('status')) {
+    this.statusHistory.push({
+      status: this.status,
+      changedBy: this._updatedBy || null,
+      changedByModel: this._updatedByModel || 'System',
+      reason: this._statusChangeReason
+    });
+    
+    // Clear temp fields
+    this._updatedBy = undefined;
+    this._updatedByModel = undefined;
+    this._statusChangeReason = undefined;
+  }
+  
+  if (this.isNew && !this.originalAmount) {
+    this.originalAmount = this.amount;
+    this.originalCurrency = this.currency;
+  }
+  
+  next();
+});
+
+// Static methods
+InvestmentSchema.statics.findActiveByUser = function(userId) {
+  return this.find({ user: userId, status: 'active' });
+};
+
+InvestmentSchema.statics.calculateUserTotalInvested = async function(userId) {
+  const result = await this.aggregate([
+    { $match: { user: mongoose.Types.ObjectId(userId) } },
+    { $group: { _id: null, total: { $sum: '$amount' } } }
+  ]);
+  return result.length ? result[0].total : 0;
+};
+
+// Instance methods
+InvestmentSchema.methods.addDailyEarning = function(amount, btcValue) {
+  this.dailyEarnings.push({
+    date: new Date(),
+    amount,
+    btcValue
+  });
+  this.actualReturn += amount;
+  this.lastPayoutDate = new Date();
+  
+  if (this.payoutFrequency > 0) {
+    const nextDate = new Date(this.lastPayoutDate);
+    nextDate.setDate(nextDate.getDate() + this.payoutFrequency);
+    this.nextPayoutDate = nextDate;
+  }
+  
+  return this.save();
+};
+
+InvestmentSchema.methods.cancel = function(reason, changedBy, changedByModel = 'User') {
+  this._updatedBy = changedBy;
+  this._updatedByModel = changedByModel;
+  this._statusChangeReason = reason;
+  this.status = 'cancelled';
+  this.completionDate = new Date();
+  return this.save();
+};
+
+InvestmentSchema.methods.complete = function() {
+  this.status = 'completed';
+  this.completionDate = new Date();
+  return this.save();
+};
+
+// Query helpers
+InvestmentSchema.query.byStatus = function(status) {
+  return this.where({ status });
+};
+
+InvestmentSchema.query.active = function() {
+  return this.where({ status: 'active' });
+};
+
+InvestmentSchema.query.completed = function() {
+  return this.where({ status: 'completed' });
+};
 
 const Investment = mongoose.model('Investment', InvestmentSchema);
 
@@ -3693,6 +3952,137 @@ app.post('/api/admin/kyc/:id/review', adminProtect, restrictTo('super', 'kyc'), 
     });
   }
 });
+
+
+
+// Add this to your server.js in the Admin User Management section
+app.put('/api/admin/users/:id/balance', adminProtect, restrictTo('super', 'finance'), [
+  body('balanceType').isIn(['main', 'active', 'matured', 'savings', 'loan']).withMessage('Invalid balance type'),
+  body('amount').isFloat().withMessage('Amount must be a number'),
+  body('operation').isIn(['add', 'subtract', 'set']).withMessage('Invalid operation'),
+  body('reason').trim().notEmpty().withMessage('Reason is required').escape()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { id } = req.params;
+    const { balanceType, amount, operation, reason } = req.body;
+
+    // Find user and validate
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Perform balance operation
+    const oldBalance = user.balances[balanceType];
+    let newBalance = oldBalance;
+
+    switch (operation) {
+      case 'add':
+        newBalance += amount;
+        break;
+      case 'subtract':
+        newBalance = Math.max(0, oldBalance - amount);
+        break;
+      case 'set':
+        newBalance = amount;
+        break;
+    }
+
+    // Update balance
+    user.balances[balanceType] = newBalance;
+    await user.save();
+
+    // Create audit log
+    await SystemLog.create({
+      action: 'balance-update',
+      entity: 'user',
+      entityId: user._id,
+      performedBy: req.admin._id,
+      performedByModel: 'Admin',
+      changes: {
+        balanceType,
+        oldBalance,
+        newBalance,
+        operation,
+        reason
+      },
+      ip: req.ip,
+      device: req.headers['user-agent'],
+      location: await getUserLocation(req.ip)
+    });
+
+    // Create transaction record
+    const transactionType = operation === 'add' ? 'admin-credit' : 'admin-debit';
+    const reference = `ADJ-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    
+    await Transaction.create({
+      user: user._id,
+      type: transactionType,
+      amount: Math.abs(newBalance - oldBalance),
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference,
+      netAmount: Math.abs(newBalance - oldBalance),
+      details: `Admin balance adjustment: ${reason}`,
+      adminNotes: `Performed by ${req.admin.name} (${req.admin.email})`
+    });
+
+    // Send notification to user if balance was increased
+    if (operation === 'add' || (operation === 'set' && newBalance > oldBalance)) {
+      user.notifications.push({
+        title: 'Balance Updated',
+        message: `Your ${balanceType} balance has been updated by admin. New balance: $${newBalance.toFixed(2)}`,
+        type: 'success'
+      });
+      await user.save();
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        user: {
+          id: user._id,
+          balances: user.balances
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Admin balance update error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while updating user balance'
+    });
+  }
+});
+
+// Helper function to get user location
+async function getUserLocation(ip) {
+  try {
+    if (ip && !ip.startsWith('::ffff:127.0.0.1') && ip !== '127.0.0.1') {
+      const response = await axios.get(`https://ipinfo.io/${ip}?token=${process.env.IPINFO_TOKEN || 'b56ce6e91d732d'}`);
+      return `${response.data.city}, ${response.data.region}, ${response.data.country}`;
+    }
+    return 'Unknown';
+  } catch (err) {
+    return 'Unknown';
+  }
+}
+
+
+
+
 
 // Admin Withdrawal Management
 app.get('/api/admin/withdrawals/pending', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
