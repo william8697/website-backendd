@@ -23,7 +23,6 @@ const speakeasy = require('speakeasy');
 const { v4: uuidv4 } = require('uuid');
 const WebSocket = require('ws');
 const OpenAI = require('openai');
-const moment = require('moment');
 // Initialize Express app
 const app = express();
 
