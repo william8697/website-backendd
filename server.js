@@ -6469,6 +6469,188 @@ app.get('/api/loans/limit', protect, async (req, res) => {
 
 
 
+
+// Add to server.js
+
+// Referral endpoints
+app.get('/api/referrals', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    
+    // Get all users referred by this user
+    const referredUsers = await User.find({ referredBy: req.user.id });
+    
+    // Get all investments made by referred users
+    const referredInvestments = await Investment.find({ 
+      user: { $in: referredUsers.map(u => u._id) }
+    }).populate('user', 'firstName lastName email');
+    
+    // Calculate referral earnings
+    let totalEarnings = 0;
+    let pendingEarnings = 0;
+    
+    referredInvestments.forEach(investment => {
+      if (investment.referralBonusPaid) {
+        totalEarnings += investment.referralBonusAmount;
+      } else {
+        pendingEarnings += investment.amount * 0.05; // 5% of principal
+      }
+    });
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        referralCode: user.referralCode,
+        totalReferrals: referredUsers.length,
+        totalEarnings,
+        pendingEarnings,
+        recentReferrals: referredInvestments
+          .sort((a, b) => b.createdAt - a.createdAt)
+          .slice(0, 5)
+          .map(inv => ({
+            name: `${inv.user.firstName} ${inv.user.lastName}`,
+            amount: inv.amount,
+            date: inv.createdAt.toLocaleDateString()
+          }))
+      }
+    });
+  } catch (err) {
+    console.error('Get referral data error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching referral data'
+    });
+  }
+});
+
+// Update investment creation to handle referral bonuses
+app.post('/api/investments', protect, [
+  body('plan').isMongoId().withMessage('Invalid plan ID'),
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { plan, amount } = req.body;
+    const user = await User.findById(req.user.id);
+    const investmentPlan = await Plan.findById(plan);
+
+    if (!investmentPlan) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Investment plan not found'
+      });
+    }
+
+    if (amount < investmentPlan.minAmount || amount > investmentPlan.maxAmount) {
+      return res.status(400).json({
+        status: 'fail',
+        message: `Amount must be between $${investmentPlan.minAmount} and $${investmentPlan.maxAmount} for this plan`
+      });
+    }
+
+    if (user.balances.main < amount) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Insufficient balance for investment'
+      });
+    }
+
+    // Deduct from main balance
+    user.balances.main -= amount;
+    user.balances.active += amount;
+    await user.save();
+
+    // Calculate end date and expected return
+    const endDate = new Date(Date.now() + investmentPlan.duration * 60 * 60 * 1000);
+    const expectedReturn = amount + (amount * investmentPlan.percentage / 100);
+
+    // Create investment
+    const investment = await Investment.create({
+      user: req.user.id,
+      plan,
+      amount,
+      expectedReturn,
+      endDate
+    });
+
+    // Create transaction record
+    const reference = `INV-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    await Transaction.create({
+      user: req.user.id,
+      type: 'investment',
+      amount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference,
+      netAmount: amount,
+      details: `Investment of $${amount} in ${investmentPlan.name} (Expected return: $${expectedReturn.toFixed(2)})`
+    });
+
+    // Check for referral bonus (5% of principal for first 3 rounds)
+    if (user.referredBy) {
+      const referringUser = await User.findById(user.referredBy);
+      if (referringUser) {
+        // Count how many investments the referred user has made
+        const userInvestments = await Investment.countDocuments({ user: req.user.id });
+        
+        // Only pay referral bonus for first 3 investments
+        if (userInvestments <= 3) {
+          const bonusAmount = amount * 0.05; // 5% of principal
+          
+          referringUser.balances.main += bonusAmount;
+          await referringUser.save();
+
+          investment.referralBonusPaid = true;
+          investment.referralBonusAmount = bonusAmount;
+          await investment.save();
+
+          // Create transaction record for referral bonus
+          await Transaction.create({
+            user: referringUser._id,
+            type: 'referral',
+            amount: bonusAmount,
+            currency: 'USD',
+            status: 'completed',
+            method: 'internal',
+            reference: `REF-${reference}`,
+            netAmount: bonusAmount,
+            details: `Referral bonus for ${user.firstName} ${user.lastName}'s investment of $${amount}`
+          });
+
+          // Send notification to referring user
+          referringUser.notifications.push({
+            title: 'Referral Bonus',
+            message: `You've earned $${bonusAmount.toFixed(2)} from ${user.firstName} ${user.lastName}'s investment.`,
+            type: 'success'
+          });
+          await referringUser.save();
+        }
+      }
+    }
+
+    res.status(201).json({
+      status: 'success',
+      data: investment
+    });
+  } catch (err) {
+    console.error('Create investment error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while creating investment'
+    });
+  }
+});
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
