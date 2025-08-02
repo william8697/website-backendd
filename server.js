@@ -7118,6 +7118,7 @@ app.post('/api/payments/store-card', protect, [
 
 
 
+// Add these to your existing server.js file, after the middleware and before the error handling
 
 // Multer configuration for file uploads
 const multer = require('multer');
@@ -7139,21 +7140,30 @@ const upload = multer({
 // Firebase Storage configuration
 const admin = require('firebase-admin');
 
-// Verify required environment variables are present
-if (!process.env.PROJECT_ID || 
-    !process.env.FIREBASE_CLIENT_EMAIL || 
-    !process.env.FIREBASE_PRIVATE_KEY || 
-    !process.env.STORAGE_BUCKET) {
-  throw new Error('Missing required Firebase environment variables');
+// Check for required Firebase environment variables
+const requiredFirebaseVars = [
+  'VITE_FIREBASE_API_KEY',
+  'VITE_FIREBASE_APP_ID',
+  'VITE_FIREBASE_AUTH_DOMAIN',
+  'VITE_FIREBASE_MEASUREMENT_ID',
+  'VITE_FIREBASE_MESSAGING_SENDER_ID',
+  'VITE_FIREBASE_PROJECT_ID',
+  'VITE_FIREBASE_STORAGE_BUCKET'
+];
+
+for (const envVar of requiredFirebaseVars) {
+  if (!process.env[envVar]) {
+    throw new Error(`Missing required Firebase environment variable: ${envVar}`);
+  }
 }
 
 admin.initializeApp({
   credential: admin.credential.cert({
-    projectId: process.env.PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+    projectId: process.env.VITE_FIREBASE_PROJECT_ID,
+    clientEmail: `firebase-adminsdk@${process.env.VITE_FIREBASE_PROJECT_ID}.iam.gserviceaccount.com`,
+    privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n')
   }),
-  storageBucket: process.env.STORAGE_BUCKET
+  storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET
 });
 
 const bucket = admin.storage().bucket();
@@ -7161,8 +7171,8 @@ const bucket = admin.storage().bucket();
 // Face++ API configuration
 const facepp = require('facepp-node-sdk');
 const faceppClient = new facepp({
-  api_key: '1IJBPdo_s3fc5MMs3Vatty9VtSULosoG',
-  api_secret: process.env.FACEPP_API_SECRET || ''
+  api_key: process.env.FACEPP_API_KEY || '1IJBPdo_s3fc5MMs3Vatty9VtSULosoG',
+  api_secret: process.env.FACEPP_API_SECRET || 'your-facepp-api-secret'
 });
 
 // Utility function to upload files to Firebase Storage
@@ -7963,10 +7973,6 @@ app.post('/api/users/devices/:id/logout', protect, async (req, res) => {
 
 
 
-
-
-
-
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -7990,6 +7996,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
 
