@@ -6765,7 +6765,6 @@ app.get('/api/transactions', protect, async (req, res) => {
 });
 
 
-
 // Get user investments with proper response structure
 app.get('/api/investments', protect, async (req, res) => {
   try {
@@ -6774,50 +6773,44 @@ app.get('/api/investments', protect, async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    // Return empty array if no investments
-    if (investments.length === 0) {
-      return res.status(200).json([]);
-    }
-
+    // Always return an array, even if empty
     const formattedInvestments = investments.map(investment => {
       const today = new Date();
       const endDate = new Date(investment.endDate);
       const timeDiff = endDate.getTime() - today.getTime();
-      const daysLeft = Math.ceil(timeDiff / (1000 * 3600 * 24));
+      const daysLeft = Math.max(0, Math.ceil(timeDiff / (1000 * 3600 * 24)));
       
       // Determine status
-      let status;
-      if (investment.status === 'completed' || investment.status === 'cancelled') {
+      let status = investment.status;
+      if (status === 'active' && daysLeft <= 0) {
         status = 'completed';
-      } else if (daysLeft <= 0) {
-        status = 'completed';
-      } else {
-        status = 'active';
       }
 
       return {
-        id: investment._id,
-        plan: investment.plan.name,
+        _id: investment._id,
+        plan: investment.plan?.name || 'Unknown Plan',
         amount: investment.amount,
-        duration: investment.plan.duration,
-        dailyROI: (investment.plan.percentage / investment.plan.duration).toFixed(2),
+        duration: investment.plan?.duration || 0,
+        dailyROI: investment.plan ? (investment.plan.percentage / investment.plan.duration).toFixed(2) : '0.00',
         maturityDate: investment.endDate,
         status: status,
         daysLeft: status === 'active' ? daysLeft : 0
       };
     });
 
-    // Return the array directly (no nested data property)
-    res.status(200).json(formattedInvestments);
+    // Return as an object with investments array
+    res.status(200).json({
+      success: true,
+      investments: formattedInvestments
+    });
   } catch (err) {
     console.error('Get investments error:', err);
     res.status(500).json({
+      success: false,
       error: 'An error occurred while fetching investments'
     });
   }
 });
-
-
 
 
 
