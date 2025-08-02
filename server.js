@@ -7203,6 +7203,272 @@ app.get('/api/withdrawals/history', protect, async (req, res) => {
 
 
 
+
+
+
+
+
+
+
+// User Profile Endpoint
+app.get('/api/users/profile', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+      .select('firstName lastName email phone country address balances')
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: user.phone || '',
+        country: user.country || '',
+        streetAddress: user.address?.street || '',
+        city: user.address?.city || '',
+        state: user.address?.state || '',
+        postalCode: user.address?.postalCode || '',
+        countryAddress: user.address?.country || '',
+        balance: user.balances?.main || 0
+      }
+    });
+  } catch (err) {
+    console.error('Get user profile error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching user profile'
+    });
+  }
+});
+
+// Two-Factor Authentication Endpoint
+app.get('/api/users/two-factor', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+      .select('twoFactorAuth');
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        methods: [
+          {
+            id: 'sms',
+            name: 'SMS Authentication',
+            description: 'Receive verification codes via SMS',
+            active: user.twoFactorAuth.enabled && user.twoFactorAuth.method === 'sms'
+          },
+          {
+            id: 'authenticator',
+            name: 'Authenticator App',
+            description: 'Use an authenticator app like Google Authenticator',
+            active: user.twoFactorAuth.enabled && user.twoFactorAuth.method === 'authenticator'
+          }
+        ]
+      }
+    });
+  } catch (err) {
+    console.error('Get two-factor methods error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching two-factor methods'
+    });
+  }
+});
+
+// Security Activity Endpoint
+app.get('/api/users/activity', protect, async (req, res) => {
+  try {
+    const activities = await SystemLog.find({ 
+      performedBy: req.user.id,
+      performedByModel: 'User'
+    })
+    .sort({ createdAt: -1 })
+    .limit(10)
+    .lean();
+
+    const formattedActivities = activities.map(activity => ({
+      id: activity._id,
+      type: activity.action,
+      title: activity.action.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()),
+      description: `Action performed on ${activity.entity}`,
+      timestamp: activity.createdAt,
+      location: activity.location,
+      suspicious: activity.action.includes('failed') || activity.action.includes('unauthorized')
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        logs: formattedActivities
+      }
+    });
+  } catch (err) {
+    console.error('Get user activity error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching user activity'
+    });
+  }
+});
+
+// Active Devices Endpoint
+app.get('/api/users/devices', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+      .select('loginHistory')
+      .lean();
+
+    const currentDevice = await getUserDeviceInfo(req);
+
+    const devices = user.loginHistory
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      .slice(0, 5)
+      .map(device => ({
+        id: device._id || crypto.randomBytes(16).toString('hex'),
+        name: `${device.device} (${device.ip})`,
+        browser: device.device,
+        os: device.device,
+        location: device.location,
+        lastActive: device.timestamp,
+        current: device.ip === currentDevice.ip
+      }));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        devices
+      }
+    });
+  } catch (err) {
+    console.error('Get user devices error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching user devices'
+    });
+  }
+});
+
+// KYC Verification Endpoint
+app.get('/api/users/kyc', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+      .select('kycStatus kycDocuments')
+      .lean();
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        status: {
+          identity: user.kycStatus?.identity || 'unverified',
+          address: user.kycStatus?.address || 'unverified',
+          facial: user.kycStatus?.facial || 'unverified'
+        },
+        documents: {
+          identityFront: user.kycDocuments?.identityFront || '',
+          identityBack: user.kycDocuments?.identityBack || '',
+          proofOfAddress: user.kycDocuments?.proofOfAddress || '',
+          selfie: user.kycDocuments?.selfie || ''
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Get KYC status error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching KYC status'
+    });
+  }
+});
+
+// Notification Preferences Endpoint
+app.get('/api/users/notifications', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+      .select('preferences.notifications')
+      .lean();
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        preferences: {
+          email: {
+            accountActivity: user.preferences?.notifications?.email?.accountActivity ?? true,
+            investmentUpdates: user.preferences?.notifications?.email?.investmentUpdates ?? true,
+            promotionalOffers: user.preferences?.notifications?.email?.promotionalOffers ?? false
+          },
+          sms: {
+            securityAlerts: user.preferences?.notifications?.sms?.securityAlerts ?? true,
+            withdrawalConfirmations: user.preferences?.notifications?.sms?.withdrawalConfirmations ?? true,
+            marketingMessages: user.preferences?.notifications?.sms?.marketingMessages ?? false
+          },
+          push: {
+            accountActivity: user.preferences?.notifications?.push?.accountActivity ?? true,
+            investmentUpdates: user.preferences?.notifications?.push?.investmentUpdates ?? true,
+            marketAlerts: user.preferences?.notifications?.push?.marketAlerts ?? false
+          }
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Get notification preferences error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching notification preferences'
+    });
+  }
+});
+
+// API Keys Endpoint
+app.get('/api/users/api-keys', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+      .select('apiKeys')
+      .lean();
+
+    const apiKeys = user.apiKeys.map(key => ({
+      id: key._id,
+      name: key.name,
+      key: key.key.substring(0, 8) + '...' + key.key.substring(key.key.length - 4),
+      permissions: {
+        read: key.permissions.includes('read'),
+        trade: key.permissions.includes('trade'),
+        withdraw: key.permissions.includes('withdraw'),
+        market: key.permissions.includes('market')
+      },
+      expiresAt: key.expiresAt,
+      isActive: key.isActive,
+      createdAt: key.createdAt
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        keys: apiKeys
+      }
+    });
+  } catch (err) {
+    console.error('Get API keys error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching API keys'
+    });
+  }
+});
+
+
+
+
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -7226,6 +7492,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
 
