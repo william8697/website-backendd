@@ -6765,53 +6765,62 @@ app.get('/api/transactions', protect, async (req, res) => {
 });
 
 
-// Get user investments with proper response structure
+// Get user investments with enhanced filtering and pagination
 app.get('/api/investments', protect, async (req, res) => {
-  try {
-    const investments = await Investment.find({ user: req.user.id })
-      .populate('plan', 'name duration percentage')
-      .sort({ createdAt: -1 })
-      .lean();
+    try {
+        const { status, page = 1, limit = 10 } = req.query;
+        const skip = (page - 1) * limit;
 
-    // Always return an array, even if empty
-    const formattedInvestments = investments.map(investment => {
-      const today = new Date();
-      const endDate = new Date(investment.endDate);
-      const timeDiff = endDate.getTime() - today.getTime();
-      const daysLeft = Math.max(0, Math.ceil(timeDiff / (1000 * 3600 * 24)));
-      
-      // Determine status
-      let status = investment.status;
-      if (status === 'active' && daysLeft <= 0) {
-        status = 'completed';
-      }
+        const query = { user: req.user.id };
+        if (status) query.status = status;
 
-      return {
-        _id: investment._id,
-        plan: investment.plan?.name || 'Unknown Plan',
-        amount: investment.amount,
-        duration: investment.plan?.duration || 0,
-        dailyROI: investment.plan ? (investment.plan.percentage / investment.plan.duration).toFixed(2) : '0.00',
-        maturityDate: investment.endDate,
-        status: status,
-        daysLeft: status === 'active' ? daysLeft : 0
-      };
-    });
+        const investments = await Investment.find(query)
+            .populate('plan', 'name duration percentage') // Only get necessary plan fields
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean(); // Convert to plain JavaScript objects
 
-    // Return as an object with investments array
-    res.status(200).json({
-      success: true,
-      investments: formattedInvestments
-    });
-  } catch (err) {
-    console.error('Get investments error:', err);
-    res.status(500).json({
-      success: false,
-      error: 'An error occurred while fetching investments'
-    });
-  }
+        if (investments.length === 0) {
+            return res.status(200).json({
+                status: 'success',
+                data: []
+            });
+        }
+
+        // Format the investments data to match what the frontend expects
+        const formattedInvestments = investments.map(investment => {
+            return {
+                id: investment._id,
+                plan: investment.plan.name,
+                amount: investment.amount,
+                duration: `${investment.plan.duration} hours`, // Match the frontend expectation
+                dailyROI: investment.plan.percentage, // Using plan percentage as daily ROI
+                maturityDate: investment.endDate,
+                status: investment.status,
+                daysLeft: Math.max(0, Math.ceil((investment.endDate - Date.now()) / (1000 * 60 * 60 * 24)))
+            };
+        });
+
+        const total = await Investment.countDocuments(query);
+
+        res.status(200).json({
+            status: 'success',
+            data: formattedInvestments,
+            pagination: {
+                total,
+                page: parseInt(page),
+                pages: Math.ceil(total / limit)
+            }
+        });
+    } catch (err) {
+        console.error('Get investments error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching investments'
+        });
+    }
 });
-
 
 
 
