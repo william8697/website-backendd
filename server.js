@@ -6310,100 +6310,62 @@ app.post('/api/support/messages/:messageId/feedback', protect, [
 
 
 
-// Loan eligibility check endpoint
-app.post('/api/loans/limit', protect, [
-  body('loanAmount').isFloat({ gt: 0 }).withMessage('Loan amount must be greater than 0'),
-  body('term').isInt({ gt: 0 }).withMessage('Term must be greater than 0')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+// Get user's loan limit based on transaction history
+app.get('/api/loans/limit', protect, async (req, res) => {
   try {
-    const { loanAmount, term } = req.body;
-    const user = await User.findById(req.user.id);
-
-    // Check KYC status - all three must be verified
-    if (user.kycStatus.identity !== 'verified' || 
-        user.kycStatus.address !== 'verified' || 
-        user.kycStatus.facial !== 'verified') {
-      return res.status(200).json({
-        qualified: false,
-        message: 'You must complete all KYC verifications to qualify for a loan'
-      });
-    }
-
-    // Check for outstanding loans
-    const activeLoan = await Loan.findOne({ 
-      user: req.user.id,
-      status: { $in: ['active', 'pending'] }
-    });
-
-    if (activeLoan) {
-      return res.status(200).json({
-        qualified: false,
-        message: 'You have an outstanding loan. Please repay it before applying for a new one.'
-      });
-    }
-
-    // Calculate total transaction amount (completed deposits and withdrawals)
-    const transactionStats = await Transaction.aggregate([
+    const userId = req.user.id;
+    
+    // Calculate total transactions (sum of all completed deposits)
+    const transactions = await Transaction.aggregate([
       {
-        $match: { 
-          user: req.user._id,
-          status: 'completed',
-          type: { $in: ['deposit', 'withdrawal'] }
+        $match: {
+          user: mongoose.Types.ObjectId(userId),
+          type: 'deposit',
+          status: 'completed'
         }
       },
       {
         $group: {
           _id: null,
-          totalAmount: { $sum: '$amount' }
+          total: { $sum: '$amount' }
         }
       }
     ]);
 
-    const totalTransactions = transactionStats.length > 0 ? transactionStats[0].totalAmount : 0;
-
-    // Check if user meets minimum transaction requirement ($5000)
-    if (totalTransactions < 5000) {
-      return res.status(200).json({
-        qualified: false,
-        message: `You need at least $5,000 in transaction history to qualify. Your current total is $${totalTransactions.toFixed(2)}.`
-      });
-    }
-
-    // Calculate maximum eligible loan amount (50% of total transactions)
-    const maxEligibleAmount = totalTransactions * 0.5;
-
-    if (loanAmount > maxEligibleAmount) {
-      return res.status(200).json({
-        qualified: false,
-        message: `Your maximum eligible loan amount is $${maxEligibleAmount.toFixed(2)} based on your transaction history.`
-      });
-    }
-
-    // If all checks pass, user is eligible
+    const totalTransactions = transactions.length > 0 ? transactions[0].total : 0;
+    
+    // Check if KYC is verified
+    const user = await User.findById(userId);
+    const kycVerified = user.kycStatus.identity === 'verified' && 
+                       user.kycStatus.address === 'verified' && 
+                       user.kycStatus.facial === 'verified';
+    
+    // Calculate loan limit (example: 50% of total transactions, with minimum of $5000)
+    const rawLimit = totalTransactions * 0.5;
+    const limit = Math.max(5000, rawLimit); // Minimum $5000 limit
+    
+    // Check if user qualifies (must have at least $5000 in transactions and KYC verified)
+    const meetsMinimumRequirement = totalTransactions >= 5000;
+    const qualified = meetsMinimumRequirement && kycVerified;
+    
     res.status(200).json({
-      qualified: true,
-      message: 'You qualify for this loan amount based on your transaction history.',
-      maxEligibleAmount,
-      currentLoanAmount: loanAmount
+      status: 'success',
+      data: {
+        limit,
+        totalTransactions,
+        meetsMinimumRequirement,
+        kycVerified,
+        qualified
+      }
     });
-
   } catch (err) {
-    console.error('Loan eligibility check error:', err);
+    console.error('Loan limit calculation error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while checking loan eligibility'
+      message: 'An error occurred while calculating loan limit'
     });
   }
 });
-
 
 
 
@@ -6503,18 +6465,6 @@ app.get('/api/loans/limit', protect, async (req, res) => {
 
 
 
-/**
- * @api {get} /api/users/me/referrals Get User Referral Data
- * @apiName GetUserReferrals
- * @apiGroup User
- * @apiHeader {String} Authorization User's JWT token
- * 
- * @apiSuccess {String} referralCode User's referral code
- * @apiSuccess {Number} totalReferrals Total number of referrals
- * @apiSuccess {Number} totalEarnings Total earnings from referrals
- * @apiSuccess {Number} pendingEarnings Pending referral earnings
- * @apiSuccess {Array} recentReferrals List of recent referrals (last 5)
- */
 app.get('/api/users/me/referrals', protect, async (req, res) => {
     try {
         // Get the current user with referral data
