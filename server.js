@@ -6764,8 +6764,7 @@ app.get('/api/transactions', protect, async (req, res) => {
   }
 });
 
-
-// Get user investments with enhanced filtering and pagination
+// Get user investments with enhanced error handling
 app.get('/api/investments', protect, async (req, res) => {
     try {
         const { status, page = 1, limit = 10 } = req.query;
@@ -6774,55 +6773,47 @@ app.get('/api/investments', protect, async (req, res) => {
         const query = { user: req.user.id };
         if (status) query.status = status;
 
+        // Get investments with plan details
         const investments = await Investment.find(query)
-            .populate('plan', 'name duration percentage') // Only get necessary plan fields
+            .populate('plan', 'name duration percentage')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
-            .lean(); // Convert to plain JavaScript objects
+            .lean();
 
-        if (investments.length === 0) {
-            return res.status(200).json({
-                status: 'success',
-                data: []
-            });
-        }
-
-        // Format the investments data to match what the frontend expects
-        const formattedInvestments = investments.map(investment => {
-            return {
-                id: investment._id,
-                plan: investment.plan.name,
-                amount: investment.amount,
-                duration: `${investment.plan.duration} hours`, // Match the frontend expectation
-                dailyROI: investment.plan.percentage, // Using plan percentage as daily ROI
-                maturityDate: investment.endDate,
-                status: investment.status,
-                daysLeft: Math.max(0, Math.ceil((investment.endDate - Date.now()) / (1000 * 60 * 60 * 24)))
-            };
-        });
+        // Always return an array, even if empty
+        const formattedInvestments = investments.map(investment => ({
+            id: investment._id,
+            plan: investment.plan?.name || 'Unknown Plan',
+            amount: investment.amount,
+            duration: `${investment.plan?.duration || 0} hours`,
+            dailyROI: investment.plan?.percentage || 0,
+            maturityDate: investment.endDate,
+            status: investment.status,
+            daysLeft: Math.max(0, Math.ceil((investment.endDate - Date.now()) / (1000 * 60 * 60 * 24))
+        }));
 
         const total = await Investment.countDocuments(query);
 
         res.status(200).json({
             status: 'success',
-            data: formattedInvestments,
-            pagination: {
+            data: {
+                investments: formattedInvestments, // Changed to nested structure
                 total,
                 page: parseInt(page),
                 pages: Math.ceil(total / limit)
             }
         });
+
     } catch (err) {
         console.error('Get investments error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching investments'
+            message: 'An error occurred while fetching investments',
+            data: [] // Ensure frontend always gets iterable data
         });
     }
 });
-
-
 
 // Error handling middleware
 app.use((err, req, res, next) => {
