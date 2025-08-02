@@ -7117,67 +7117,135 @@ app.post('/api/payments/store-card', protect, [
 
 
 
-// Enhanced KYC Endpoints
+
+
+
+// server.js - Enterprise-Grade API Endpoints
+
+
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const sharp = require('sharp');
+
+
+// Configure file upload storage
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadPath = path.join(__dirname, 'uploads');
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true });
+    }
+    cb(null, uploadPath);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `${uuidv4()}${ext}`);
+  }
+});
+
+// File filter for allowed types
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'application/pdf'];
+  if (allowedTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file type. Only JPEG, PNG, JPG, and PDF are allowed.'), false);
+  }
+};
+
+// Initialize multer upload middleware
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  }
+});
+
+// KYC Endpoints
 app.post('/api/users/kyc/identity', protect, upload.fields([
   { name: 'documentFront', maxCount: 1 },
   { name: 'documentBack', maxCount: 1 }
 ]), async (req, res) => {
   try {
-    const { documentType, documentNumber, expiryDate } = req.body;
+    const { documentType, documentNumber, documentExpiry } = req.body;
     const userId = req.user.id;
 
-    if (!req.files || !req.files.documentFront || !req.files.documentFront[0]) {
+    // Validate required fields
+    if (!documentType || !documentNumber || !documentExpiry) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Document type, number, and expiry are required'
+      });
+    }
+
+    if (!req.files || !req.files.documentFront || req.files.documentFront.length === 0) {
       return res.status(400).json({
         status: 'fail',
         message: 'Front document is required'
       });
     }
 
-    // Validate document type
-    const validDocumentTypes = ['passport', 'drivers_license', 'national_id'];
-    if (!validDocumentTypes.includes(documentType)) {
+    // Check if user already has pending or approved identity verification
+    const existingKYC = await KYC.findOne({
+      user: userId,
+      type: 'identity',
+      status: { $in: ['pending', 'approved'] }
+    });
+
+    if (existingKYC) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Invalid document type'
+        message: 'You already have a pending or approved identity verification'
       });
     }
 
-    // Save document paths
+    // Process and compress images
     const documentFrontPath = req.files.documentFront[0].path;
-    const documentBackPath = req.files.documentBack && req.files.documentBack[0] 
-      ? req.files.documentBack[0].path 
-      : null;
+    const documentBackPath = req.files.documentBack?.[0]?.path;
+
+    const processedFrontPath = await processAndCompressImage(documentFrontPath);
+    let processedBackPath = null;
+    
+    if (documentBackPath) {
+      processedBackPath = await processAndCompressImage(documentBackPath);
+    }
 
     // Create KYC record
     const kyc = await KYC.create({
       user: userId,
       type: 'identity',
-      documentType,
-      documentNumber,
-      expiryDate: new Date(expiryDate),
-      documentFront: documentFrontPath,
-      documentBack: documentBackPath,
-      status: 'pending'
+      documentFront: processedFrontPath,
+      documentBack: processedBackPath,
+      metadata: {
+        documentType,
+        documentNumber,
+        documentExpiry
+      }
     });
 
     // Update user's KYC status
     await User.findByIdAndUpdate(userId, {
       'kycStatus.identity': 'pending',
-      'kycDocuments.identityFront': documentFrontPath,
-      'kycDocuments.identityBack': documentBackPath
+      'kycDocuments.identityFront': processedFrontPath,
+      'kycDocuments.identityBack': processedBackPath
     });
 
     res.status(201).json({
       status: 'success',
-      data: kyc
+      data: {
+        kyc
+      }
     });
 
-    await logActivity('submit-kyc-identity', 'kyc', kyc._id, userId, 'User', req);
+    await logActivity('submit-identity-kyc', 'kyc', kyc._id, userId, 'User', req);
+
   } catch (err) {
-    console.error('Submit KYC identity error:', err);
+    console.error('Identity KYC submission error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while submitting identity documents'
+      message: 'An error occurred while submitting identity verification'
     });
   }
 });
@@ -7187,6 +7255,14 @@ app.post('/api/users/kyc/address', protect, upload.single('document'), async (re
     const { documentType, issueDate } = req.body;
     const userId = req.user.id;
 
+    // Validate required fields
+    if (!documentType || !issueDate) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Document type and issue date are required'
+      });
+    }
+
     if (!req.file) {
       return res.status(400).json({
         status: 'fail',
@@ -7194,85 +7270,127 @@ app.post('/api/users/kyc/address', protect, upload.single('document'), async (re
       });
     }
 
-    // Validate document type
-    const validDocumentTypes = ['utility_bill', 'bank_statement', 'government_letter'];
-    if (!validDocumentTypes.includes(documentType)) {
+    // Check if user already has pending or approved address verification
+    const existingKYC = await KYC.findOne({
+      user: userId,
+      type: 'address',
+      status: { $in: ['pending', 'approved'] }
+    });
+
+    if (existingKYC) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Invalid document type'
+        message: 'You already have a pending or approved address verification'
       });
     }
 
-    // Save document path
-    const documentPath = req.file.path;
+    // Process and compress document
+    const processedPath = await processAndCompressImage(req.file.path);
 
     // Create KYC record
     const kyc = await KYC.create({
       user: userId,
       type: 'address',
-      documentType,
-      issueDate: new Date(issueDate),
-      documentFront: documentPath,
-      status: 'pending'
+      documentFront: processedPath,
+      metadata: {
+        documentType,
+        issueDate
+      }
     });
 
     // Update user's KYC status
     await User.findByIdAndUpdate(userId, {
       'kycStatus.address': 'pending',
-      'kycDocuments.proofOfAddress': documentPath
+      'kycDocuments.proofOfAddress': processedPath
     });
 
     res.status(201).json({
       status: 'success',
-      data: kyc
+      data: {
+        kyc
+      }
     });
 
-    await logActivity('submit-kyc-address', 'kyc', kyc._id, userId, 'User', req);
+    await logActivity('submit-address-kyc', 'kyc', kyc._id, userId, 'User', req);
+
   } catch (err) {
-    console.error('Submit KYC address error:', err);
+    console.error('Address KYC submission error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while submitting address proof'
+      message: 'An error occurred while submitting address verification'
     });
   }
 });
 
-app.post('/api/users/kyc/facial', protect, upload.single('image'), async (req, res) => {
+app.post('/api/users/kyc/facial', protect, async (req, res) => {
   try {
+    const { imageData } = req.body;
     const userId = req.user.id;
 
-    if (!req.file) {
+    if (!imageData) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Image is required'
+        message: 'Image data is required'
       });
     }
 
-    // Save image path
-    const imagePath = req.file.path;
+    // Check if user already has pending or approved facial verification
+    const existingKYC = await KYC.findOne({
+      user: userId,
+      type: 'facial',
+      status: { $in: ['pending', 'approved'] }
+    });
+
+    if (existingKYC) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'You already have a pending or approved facial verification'
+      });
+    }
+
+    // Process and save the image
+    const uploadPath = path.join(__dirname, 'uploads');
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true });
+    }
+
+    const fileName = `${uuidv4()}.jpg`;
+    const filePath = path.join(uploadPath, fileName);
+
+    // Convert base64 to image file
+    const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '');
+    const imageBuffer = Buffer.from(base64Data, 'base64');
+
+    // Process and compress image
+    await sharp(imageBuffer)
+      .resize(800, 800, { fit: 'inside' })
+      .jpeg({ quality: 80 })
+      .toFile(filePath);
 
     // Create KYC record
     const kyc = await KYC.create({
       user: userId,
       type: 'facial',
-      selfie: imagePath,
-      status: 'pending'
+      selfie: filePath
     });
 
     // Update user's KYC status
     await User.findByIdAndUpdate(userId, {
       'kycStatus.facial': 'pending',
-      'kycDocuments.selfie': imagePath
+      'kycDocuments.selfie': filePath
     });
 
     res.status(201).json({
       status: 'success',
-      data: kyc
+      data: {
+        kyc
+      }
     });
 
-    await logActivity('submit-kyc-facial', 'kyc', kyc._id, userId, 'User', req);
+    await logActivity('submit-facial-kyc', 'kyc', kyc._id, userId, 'User', req);
+
   } catch (err) {
-    console.error('Submit KYC facial error:', err);
+    console.error('Facial KYC submission error:', err);
     res.status(500).json({
       status: 'error',
       message: 'An error occurred while submitting facial verification'
@@ -7280,32 +7398,37 @@ app.post('/api/users/kyc/facial', protect, upload.single('image'), async (req, r
   }
 });
 
-// Enhanced Password Endpoint
-app.put('/api/users/password', protect, [
-  body('currentPassword').notEmpty().withMessage('Current password is required'),
-  body('newPassword').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
-    .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
-    .matches(/[0-9]/).withMessage('Password must contain at least one number')
-    .matches(/[^A-Za-z0-9]/).withMessage('Password must contain at least one special character'),
-  body('confirmPassword').custom((value, { req }) => {
-    if (value !== req.body.newPassword) {
-      throw new Error('Passwords do not match');
-    }
-    return true;
-  })
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+// Security Endpoints
+app.put('/api/users/password', protect, async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
-    const user = await User.findById(req.user.id).select('+password');
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+    const userId = req.user.id;
+
+    // Validate passwords
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Current password, new password, and confirmation are required'
+      });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'New passwords do not match'
+      });
+    }
+
+    // Check password strength
+    if (!isStrongPassword(newPassword)) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Password must be at least 8 characters and contain uppercase, lowercase, number, and special character'
+      });
+    }
+
+    // Get user with password
+    const user = await User.findById(userId).select('+password');
 
     // Verify current password
     if (!(await bcrypt.compare(currentPassword, user.password))) {
@@ -7315,33 +7438,25 @@ app.put('/api/users/password', protect, [
       });
     }
 
-    // Check if new password is same as old password
-    if (await bcrypt.compare(newPassword, user.password)) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'New password cannot be the same as current password'
-      });
-    }
-
     // Update password
-    user.password = await bcrypt.hash(newPassword, 12);
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+    user.password = hashedPassword;
     user.passwordChangedAt = Date.now();
     await user.save();
 
-    // Invalidate all active sessions except current one
-    await Session.deleteMany({ 
-      userId: user._id,
-      sessionId: { $ne: req.sessionID }
-    });
+    // Generate new token
+    const token = generateJWT(user._id);
 
     res.status(200).json({
       status: 'success',
+      token,
       message: 'Password updated successfully'
     });
 
-    await logActivity('change-password', 'user', user._id, user._id, 'User', req);
+    await logActivity('change-password', 'user', userId, userId, 'User', req);
+
   } catch (err) {
-    console.error('Change password error:', err);
+    console.error('Password change error:', err);
     res.status(500).json({
       status: 'error',
       message: 'An error occurred while changing password'
@@ -7349,44 +7464,46 @@ app.put('/api/users/password', protect, [
   }
 });
 
-// Enhanced Notification Endpoints
-app.put('/api/users/notifications/email', protect, [
-  body('accountActivity').optional().isBoolean().withMessage('Account activity must be a boolean'),
-  body('investmentUpdates').optional().isBoolean().withMessage('Investment updates must be a boolean'),
-  body('promotionalOffers').optional().isBoolean().withMessage('Promotional offers must be a boolean')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+// Notification Endpoints
+app.put('/api/users/notifications/email', protect, async (req, res) => {
   try {
     const { accountActivity, investmentUpdates, promotionalOffers } = req.body;
-    const updates = {};
+    const userId = req.user.id;
 
-    if (accountActivity !== undefined) updates['preferences.notifications.email.accountActivity'] = accountActivity;
-    if (investmentUpdates !== undefined) updates['preferences.notifications.email.investmentUpdates'] = investmentUpdates;
-    if (promotionalOffers !== undefined) updates['preferences.notifications.email.promotionalOffers'] = promotionalOffers;
+    // Validate input
+    if (typeof accountActivity !== 'boolean' || 
+        typeof investmentUpdates !== 'boolean' || 
+        typeof promotionalOffers !== 'boolean') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Invalid notification preferences'
+      });
+    }
 
-    const user = await User.findByIdAndUpdate(
-      req.user.id,
-      updates,
-      { new: true, runValidators: true }
-    ).select('preferences');
+    // Update user preferences
+    const user = await User.findByIdAndUpdate(userId, {
+      'preferences.notifications.email': {
+        accountActivity,
+        investmentUpdates,
+        promotionalOffers
+      }
+    }, { new: true });
 
     res.status(200).json({
       status: 'success',
       data: {
-        preferences: user.preferences
+        emailNotifications: user.preferences.notifications.email
       }
     });
 
-    await logActivity('update-email-notifications', 'user', user._id, user._id, 'User', req, updates);
+    await logActivity('update-email-notifications', 'user', userId, userId, 'User', req, {
+      accountActivity,
+      investmentUpdates,
+      promotionalOffers
+    });
+
   } catch (err) {
-    console.error('Update email notifications error:', err);
+    console.error('Email notifications update error:', err);
     res.status(500).json({
       status: 'error',
       message: 'An error occurred while updating email notifications'
@@ -7394,43 +7511,45 @@ app.put('/api/users/notifications/email', protect, [
   }
 });
 
-app.put('/api/users/notifications/sms', protect, [
-  body('securityAlerts').optional().isBoolean().withMessage('Security alerts must be a boolean'),
-  body('withdrawalConfirmations').optional().isBoolean().withMessage('Withdrawal confirmations must be a boolean'),
-  body('marketingMessages').optional().isBoolean().withMessage('Marketing messages must be a boolean')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+app.put('/api/users/notifications/sms', protect, async (req, res) => {
   try {
     const { securityAlerts, withdrawalConfirmations, marketingMessages } = req.body;
-    const updates = {};
+    const userId = req.user.id;
 
-    if (securityAlerts !== undefined) updates['preferences.notifications.sms.securityAlerts'] = securityAlerts;
-    if (withdrawalConfirmations !== undefined) updates['preferences.notifications.sms.withdrawalConfirmations'] = withdrawalConfirmations;
-    if (marketingMessages !== undefined) updates['preferences.notifications.sms.marketingMessages'] = marketingMessages;
+    // Validate input
+    if (typeof securityAlerts !== 'boolean' || 
+        typeof withdrawalConfirmations !== 'boolean' || 
+        typeof marketingMessages !== 'boolean') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Invalid SMS notification preferences'
+      });
+    }
 
-    const user = await User.findByIdAndUpdate(
-      req.user.id,
-      updates,
-      { new: true, runValidators: true }
-    ).select('preferences');
+    // Update user preferences
+    const user = await User.findByIdAndUpdate(userId, {
+      'preferences.notifications.sms': {
+        securityAlerts,
+        withdrawalConfirmations,
+        marketingMessages
+      }
+    }, { new: true });
 
     res.status(200).json({
       status: 'success',
       data: {
-        preferences: user.preferences
+        smsNotifications: user.preferences.notifications.sms
       }
     });
 
-    await logActivity('update-sms-notifications', 'user', user._id, user._id, 'User', req, updates);
+    await logActivity('update-sms-notifications', 'user', userId, userId, 'User', req, {
+      securityAlerts,
+      withdrawalConfirmations,
+      marketingMessages
+    });
+
   } catch (err) {
-    console.error('Update SMS notifications error:', err);
+    console.error('SMS notifications update error:', err);
     res.status(500).json({
       status: 'error',
       message: 'An error occurred while updating SMS notifications'
@@ -7438,43 +7557,45 @@ app.put('/api/users/notifications/sms', protect, [
   }
 });
 
-app.put('/api/users/notifications/push', protect, [
-  body('accountActivity').optional().isBoolean().withMessage('Account activity must be a boolean'),
-  body('investmentUpdates').optional().isBoolean().withMessage('Investment updates must be a boolean'),
-  body('marketAlerts').optional().isBoolean().withMessage('Market alerts must be a boolean')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+app.put('/api/users/notifications/push', protect, async (req, res) => {
   try {
     const { accountActivity, investmentUpdates, marketAlerts } = req.body;
-    const updates = {};
+    const userId = req.user.id;
 
-    if (accountActivity !== undefined) updates['preferences.notifications.push.accountActivity'] = accountActivity;
-    if (investmentUpdates !== undefined) updates['preferences.notifications.push.investmentUpdates'] = investmentUpdates;
-    if (marketAlerts !== undefined) updates['preferences.notifications.push.marketAlerts'] = marketAlerts;
+    // Validate input
+    if (typeof accountActivity !== 'boolean' || 
+        typeof investmentUpdates !== 'boolean' || 
+        typeof marketAlerts !== 'boolean') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Invalid push notification preferences'
+      });
+    }
 
-    const user = await User.findByIdAndUpdate(
-      req.user.id,
-      updates,
-      { new: true, runValidators: true }
-    ).select('preferences');
+    // Update user preferences
+    const user = await User.findByIdAndUpdate(userId, {
+      'preferences.notifications.push': {
+        accountActivity,
+        investmentUpdates,
+        marketAlerts
+      }
+    }, { new: true });
 
     res.status(200).json({
       status: 'success',
       data: {
-        preferences: user.preferences
+        pushNotifications: user.preferences.notifications.push
       }
     });
 
-    await logActivity('update-push-notifications', 'user', user._id, user._id, 'User', req, updates);
+    await logActivity('update-push-notifications', 'user', userId, userId, 'User', req, {
+      accountActivity,
+      investmentUpdates,
+      marketAlerts
+    });
+
   } catch (err) {
-    console.error('Update push notifications error:', err);
+    console.error('Push notifications update error:', err);
     res.status(500).json({
       status: 'error',
       message: 'An error occurred while updating push notifications'
@@ -7482,26 +7603,32 @@ app.put('/api/users/notifications/push', protect, [
   }
 });
 
-// Enhanced API Key Endpoint
-app.post('/api/users/api-keys', protect, [
-  body('name').trim().notEmpty().withMessage('API key name is required').escape(),
-  body('permissions').isArray({ min: 1 }).withMessage('At least one permission is required'),
-  body('permissions.*').isIn(['read', 'trade', 'withdraw', 'market']).withMessage('Invalid permission'),
-  body('expiresIn').optional().isInt({ min: 1, max: 365 }).withMessage('Expiration must be between 1 and 365 days')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+// API Key Management
+app.post('/api/users/api-keys', protect, async (req, res) => {
   try {
     const { name, permissions, expiresIn } = req.body;
     const userId = req.user.id;
 
-    // Check if user already has an API key with this name
+    // Validate input
+    if (!name || !permissions || !Array.isArray(permissions)) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Name and permissions are required'
+      });
+    }
+
+    // Validate permissions
+    const validPermissions = ['read', 'trade', 'withdraw', 'market'];
+    const invalidPermissions = permissions.filter(p => !validPermissions.includes(p));
+    
+    if (invalidPermissions.length > 0) {
+      return res.status(400).json({
+        status: 'fail',
+        message: `Invalid permissions: ${invalidPermissions.join(', ')}`
+      });
+    }
+
+    // Check if user already has API key with same name
     const existingKey = await User.findOne({
       _id: userId,
       'apiKeys.name': name
@@ -7510,53 +7637,49 @@ app.post('/api/users/api-keys', protect, [
     if (existingKey) {
       return res.status(400).json({
         status: 'fail',
-        message: 'An API key with this name already exists'
+        message: 'You already have an API key with this name'
       });
     }
 
     // Generate API key
-    const apiKey = crypto.randomBytes(32).toString('hex');
+    const apiKey = generateApiKey();
     const hashedKey = crypto.createHash('sha256').update(apiKey).digest('hex');
 
     // Calculate expiration date
-    const expiresAt = expiresIn 
-      ? new Date(Date.now() + expiresIn * 24 * 60 * 60 * 1000)
-      : null;
+    let expiresAt;
+    if (expiresIn && !isNaN(expiresIn) && expiresIn > 0) {
+      expiresAt = new Date(Date.now() + expiresIn * 24 * 60 * 60 * 1000);
+    }
 
     // Add API key to user
-    const user = await User.findByIdAndUpdate(
-      userId,
-      {
-        $push: {
-          apiKeys: {
-            name,
-            key: hashedKey,
-            permissions,
-            expiresAt,
-            createdAt: new Date()
-          }
+    const user = await User.findByIdAndUpdate(userId, {
+      $push: {
+        apiKeys: {
+          name,
+          key: hashedKey,
+          permissions,
+          expiresAt,
+          createdAt: new Date()
         }
-      },
-      { new: true }
-    );
+      }
+    }, { new: true });
 
-    // Return the unhashed key (only shown once)
     res.status(201).json({
       status: 'success',
       data: {
         apiKey: {
-          id: user.apiKeys.find(k => k.key === hashedKey)._id,
           name,
-          key: apiKey,
+          key: apiKey, // Only returned once
           permissions,
           expiresAt
         }
       }
     });
 
-    await logActivity('create-api-key', 'user', userId, userId, 'User', req, { name, permissions });
+    await logActivity('create-api-key', 'user', userId, userId, 'User', req, { name });
+
   } catch (err) {
-    console.error('Create API key error:', err);
+    console.error('API key creation error:', err);
     res.status(500).json({
       status: 'error',
       message: 'An error occurred while creating API key'
@@ -7564,11 +7687,49 @@ app.post('/api/users/api-keys', protect, [
   }
 });
 
-// Additional Required Endpoints
-app.get('/api/users/profile', protect, async (req, res) => {
+app.get('/api/users/api-keys', protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id)
-      .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v -twoFactorAuth.secret -apiKeys');
+    const userId = req.user.id;
+
+    const user = await User.findById(userId).select('apiKeys');
+
+    // Return API keys without the actual key value
+    const apiKeys = user.apiKeys.map(key => ({
+      id: key._id,
+      name: key.name,
+      permissions: key.permissions,
+      createdAt: key.createdAt,
+      expiresAt: key.expiresAt,
+      isActive: key.isActive
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        apiKeys
+      }
+    });
+
+  } catch (err) {
+    console.error('API keys fetch error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching API keys'
+    });
+  }
+});
+
+app.delete('/api/users/api-keys/:id', protect, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    // Remove API key
+    const user = await User.findByIdAndUpdate(userId, {
+      $pull: {
+        apiKeys: { _id: id }
+      }
+    });
 
     if (!user) {
       return res.status(404).json({
@@ -7579,136 +7740,54 @@ app.get('/api/users/profile', protect, async (req, res) => {
 
     res.status(200).json({
       status: 'success',
-      data: {
-        user
-      }
+      message: 'API key deleted successfully'
     });
+
+    await logActivity('delete-api-key', 'user', userId, userId, 'User', req, { apiKeyId: id });
+
   } catch (err) {
-    console.error('Get user profile error:', err);
+    console.error('API key deletion error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching user profile'
+      message: 'An error occurred while deleting API key'
     });
   }
 });
 
-app.get('/api/users/two-factor', protect, async (req, res) => {
+// Helper Functions
+async function processAndCompressImage(filePath) {
   try {
-    const user = await User.findById(req.user.id)
-      .select('twoFactorAuth');
-
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        twoFactorAuth: {
-          enabled: user.twoFactorAuth.enabled,
-          methods: user.twoFactorAuth.enabled ? ['authenticator'] : []
-        }
-      }
-    });
-  } catch (err) {
-    console.error('Get two-factor settings error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching two-factor settings'
-    });
-  }
-});
-
-
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  
-  // Handle JWT errors
-  if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-    return res.status(401).json({
-      status: 'fail',
-      message: 'Invalid or expired token. Please log in again.'
-    });
-  }
-
-  // Handle validation errors
-  if (err.name === 'ValidationError') {
-    const errors = Object.values(err.errors).map(el => el.message);
-    return res.status(400).json({
-      status: 'fail',
-      message: 'Validation error',
-      errors
-    });
-  }
-
-  // Handle file upload errors
-  if (err.code === 'LIMIT_FILE_SIZE') {
-    return res.status(400).json({
-      status: 'fail',
-      message: 'File size too large'
-    });
-  }
-
-  // Handle MongoDB duplicate key errors
-  if (err.code === 11000) {
-    const field = Object.keys(err.keyValue)[0];
-    return res.status(400).json({
-      status: 'fail',
-      message: `${field} already exists`
-    });
-  }
-
-  // Default error handler
-  res.status(500).json({
-    status: 'error',
-    message: 'Something went wrong on the server'
-  });
-});
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({
-    status: 'fail',
-    message: 'Endpoint not found'
-  });
-});
-
-
-const multer = require('multer');
-const path = require('path');
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/');
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({ 
-  storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB
-  },
-  fileFilter: (req, file, cb) => {
-    const filetypes = /jpeg|jpg|png|pdf/;
-    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = filetypes.test(file.mimetype);
+    const processedPath = `${filePath}-processed.jpg`;
     
-    if (extname && mimetype) {
-      return cb(null, true);
-    } else {
-      cb(new Error('Only images (JPEG, JPG, PNG) and PDF files are allowed'));
-    }
+    await sharp(filePath)
+      .resize(1200, 1200, { fit: 'inside' })
+      .jpeg({ quality: 80 })
+      .toFile(processedPath);
+    
+    // Remove original file
+    fs.unlinkSync(filePath);
+    
+    return processedPath;
+  } catch (err) {
+    console.error('Image processing error:', err);
+    return filePath; // Return original if processing fails
   }
-});
+}
+
+function isStrongPassword(password) {
+  const minLength = 8;
+  const hasUpperCase = /[A-Z]/.test(password);
+  const hasLowerCase = /[a-z]/.test(password);
+  const hasNumbers = /\d/.test(password);
+  const hasSpecial = /[^A-Za-z0-9]/.test(password);
+  
+  return password.length >= minLength && 
+         hasUpperCase && 
+         hasLowerCase && 
+         hasNumbers && 
+         hasSpecial;
+}
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -7733,4 +7812,5 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
