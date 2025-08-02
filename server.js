@@ -6771,34 +6771,53 @@ app.get('/api/transactions', protect, async (req, res) => {
 
 app.get('/api/investments', protect, async (req, res) => {
   try {
-    const investments = await Investment.find({ user: req.user.id })
-      .populate('plan', 'name duration percentage')
-      .lean();
+    // Strict query to only get active investments
+    const investments = await Investment.find({ 
+      user: req.user.id,
+      status: 'active',
+      endDate: { $gt: new Date() } // Ensure investment hasn't matured
+    })
+    .populate({
+      path: 'plan',
+      match: { isActive: true }, // Only include active plans
+      select: 'name duration percentage'
+    })
+    .lean();
 
-    if (investments.length === 0) {
-      return res.status(200).json([]);
-    }
+    // Filter out investments with inactive plans
+    const activeInvestments = investments.filter(inv => inv.plan !== null);
 
-    const formattedInvestments = investments.map(investment => {
-      // Calculate daily ROI (assuming duration is in hours)
+    // Format response with validation
+    const formattedInvestments = activeInvestments.map(investment => {
+      // Validate investment data
+      if (!investment.plan || !investment.endDate) {
+        throw new Error('Invalid investment data');
+      }
+
+      // Calculate daily ROI safely
       const dailyROI = (investment.plan.percentage / (investment.plan.duration / 24)).toFixed(2);
       
       return {
+        _id: investment._id,
         plan: investment.plan.name,
         amount: investment.amount,
         duration: investment.plan.duration,
         dailyROI,
         maturityDate: investment.endDate,
-        status: investment.status
+        status: 'active' // Enforced by query
       };
     });
 
-    res.status(200).json(formattedInvestments);
+    res.status(200).json({
+      status: 'success',
+      data: formattedInvestments
+    });
+
   } catch (err) {
     console.error('Get investments error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching investments'
+      message: err.message || 'An error occurred while fetching active investments'
     });
   }
 });
