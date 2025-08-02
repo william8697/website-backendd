@@ -7213,7 +7213,6 @@ app.get('/api/withdrawals/history', protect, async (req, res) => {
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { v4: uuidv4 } = require('uuid');
 const sharp = require('sharp');
 
 // Configure file storage for KYC documents
@@ -8096,3 +8095,4 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
