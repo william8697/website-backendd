@@ -2478,6 +2478,7 @@ app.get('/api/users/me', protect, async (req, res) => {
           address: user.address,
           kycStatus: user.kycStatus,
           balances: user.balances,
+            balance: user.balances?.main || 0,
           referralCode: user.referralCode,
           isVerified: user.isVerified,
           status: user.status,
@@ -6896,6 +6897,8 @@ app.get('/api/deposits/history', protect, async (req, res) => {
         res.status(200).json([]);
     }
 });
+
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {
