@@ -6310,42 +6310,34 @@ app.post('/api/support/messages/:messageId/feedback', protect, [
 
 
 
-// Get user's loan limit based on transaction history
 app.get('/api/loans/limit', protect, async (req, res) => {
   try {
-    const userId = req.user.id;
+    const user = await User.findById(req.user.id);
     
-    // Calculate total transactions (sum of all completed deposits)
+    // Calculate total transactions (simplified example - you'd want to sum actual transactions)
     const transactions = await Transaction.aggregate([
-      {
-        $match: {
-          user: mongoose.Types.ObjectId(userId),
-          type: 'deposit',
-          status: 'completed'
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$amount' }
-        }
-      }
+      { $match: { user: user._id, status: 'completed' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
-
+    
     const totalTransactions = transactions.length > 0 ? transactions[0].total : 0;
     
-    // Check if KYC is verified
-    const user = await User.findById(userId);
+    // Check if user meets minimum requirements
+    const MINIMUM_TRANSACTION = 5000;
+    const meetsMinimumRequirement = totalTransactions >= MINIMUM_TRANSACTION;
+    
+    // Check KYC status
     const kycVerified = user.kycStatus.identity === 'verified' && 
-                       user.kycStatus.address === 'verified' && 
+                       user.kycStatus.address === 'verified' &&
                        user.kycStatus.facial === 'verified';
     
-    // Calculate loan limit (example: 50% of total transactions, with minimum of $5000)
-    const rawLimit = totalTransactions * 0.5;
-    const limit = Math.max(5000, rawLimit); // Minimum $5000 limit
+    // Calculate loan limit (example calculation - adjust as needed)
+    let limit = 0;
+    if (meetsMinimumRequirement && kycVerified) {
+      // Example: loan limit is 50% of total transactions, with a max of $50,000
+      limit = Math.min(totalTransactions * 0.5, 50000);
+    }
     
-    // Check if user qualifies (must have at least $5000 in transactions and KYC verified)
-    const meetsMinimumRequirement = totalTransactions >= 5000;
     const qualified = meetsMinimumRequirement && kycVerified;
     
     res.status(200).json({
@@ -6353,21 +6345,20 @@ app.get('/api/loans/limit', protect, async (req, res) => {
       data: {
         limit,
         totalTransactions,
+        qualified,
         meetsMinimumRequirement,
-        kycVerified,
-        qualified
+        kycVerified
       }
     });
+    
   } catch (err) {
-    console.error('Loan limit calculation error:', err);
+    console.error('Get loan limit error:', err);
     res.status(500).json({
       status: 'error',
       message: 'An error occurred while calculating loan limit'
     });
   }
 });
-
-
 
 
 
