@@ -7119,7 +7119,6 @@ app.post('/api/payments/store-card', protect, [
 
 
 
-
 // Add these to your existing server.js file, after the middleware and before the error handling
 
 // Multer configuration for file uploads
@@ -7141,11 +7140,18 @@ const upload = multer({
 
 // Firebase Storage configuration
 const admin = require('firebase-admin');
-const serviceAccount = require('./firebase-service-account.json'); // You need to create this file
-
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  storageBucket: 'bithash-358e4.appspot.com'
+  credential: admin.credential.cert({
+    projectId: process.env.PROJECT_ID,
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+  }),
+  storageBucket: process.env.STORAGE_BUCKET,
+  apiKey: process.env.API_KEY,
+  authDomain: process.env.AUTH_DOMAIN,
+  messagingSenderId: process.env.MESSAGING_SENDER_ID,
+  appId: process.env.APP_ID,
+  measurementId: process.env.MEASUREMENT_ID
 });
 
 const bucket = admin.storage().bucket();
@@ -7154,7 +7160,7 @@ const bucket = admin.storage().bucket();
 const facepp = require('facepp-node-sdk');
 const faceppClient = new facepp({
   api_key: '1IJBPdo_s3fc5MMs3Vatty9VtSULosoG',
-  api_secret: 'your-facepp-api-secret' // You should get this from Face++
+  api_secret: process.env.FACEPP_API_SECRET
 });
 
 // Utility function to upload files to Firebase Storage
@@ -7959,7 +7965,6 @@ app.post('/api/users/devices/:id/logout', protect, async (req, res) => {
 
 
 
-
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -7983,4 +7988,5 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
