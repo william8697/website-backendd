@@ -6626,6 +6626,55 @@ app.get('/api/users/me/referrals', protect, async (req, res) => {
 
 
 
+// Add this to your server.js in the User Endpoints section
+app.get('/api/users/balances', protect, async (req, res) => {
+  try {
+    // Get current BTC price
+    let btcPrice = 50000; // Default value
+    try {
+      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+      btcPrice = response.data.bitcoin.usd;
+    } catch (err) {
+      console.error('Failed to fetch BTC price:', err);
+    }
+
+    const user = await User.findById(req.user.id).select('balances');
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        balances: {
+          main: user.balances.main || 0,
+          active: user.balances.active || 0,
+          matured: user.balances.matured || 0,
+          savings: user.balances.savings || 0,
+          loan: user.balances.loan || 0
+        },
+        btcPrice,
+        btcValues: {
+          main: user.balances.main / btcPrice || 0,
+          active: user.balances.active / btcPrice || 0,
+          matured: user.balances.matured / btcPrice || 0,
+          savings: user.balances.savings / btcPrice || 0,
+          loan: user.balances.loan / btcPrice || 0
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Get user balances error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching user balances'
+    });
+  }
+});
+
 
 
 
