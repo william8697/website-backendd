@@ -6766,79 +6766,57 @@ app.get('/api/transactions', protect, async (req, res) => {
 
 
 
-
-
-// GET /api/investments - Fetch investments from database with active status tracking
+// Get user investments with proper response structure
 app.get('/api/investments', protect, async (req, res) => {
   try {
-    // 1. Fetch investments from database with plan details
-    const investments = await Investment.find({ 
-      user: req.user._id 
-    })
-    .populate({
-      path: 'plan',
-      select: 'name percentage duration minAmount maxAmount'
-    })
-    .sort({ createdAt: -1 })
-    .lean();
+    const investments = await Investment.find({ user: req.user.id })
+      .populate('plan', 'name duration percentage')
+      .sort({ createdAt: -1 })
+      .lean();
 
-    // 2. Handle empty state (no investments)
+    // Return empty array if no investments
     if (investments.length === 0) {
       return res.status(200).json([]);
     }
 
-    // 3. Process each investment to match frontend requirements
-    const processedInvestments = investments.map(investment => {
+    const formattedInvestments = investments.map(investment => {
       const today = new Date();
-      const maturityDate = new Date(investment.endDate);
+      const endDate = new Date(investment.endDate);
+      const timeDiff = endDate.getTime() - today.getTime();
+      const daysLeft = Math.ceil(timeDiff / (1000 * 3600 * 24));
       
-      // Calculate days remaining (only for active investments)
-      let daysLeft = 0;
-      let statusDisplay = investment.status.charAt(0).toUpperCase() + investment.status.slice(1);
-      
-      if (investment.status === 'active') {
-        daysLeft = Math.max(0, Math.ceil((maturityDate - today) / (1000 * 60 * 60 * 24)));
-        statusDisplay = `Active (${daysLeft}d left)`;
+      // Determine status
+      let status;
+      if (investment.status === 'completed' || investment.status === 'cancelled') {
+        status = 'completed';
+      } else if (daysLeft <= 0) {
+        status = 'completed';
+      } else {
+        status = 'active';
       }
 
-      // Calculate daily ROI (percentage divided by duration in days)
-      const durationInDays = investment.plan.duration / 24;
-      const dailyROI = (investment.plan.percentage / durationInDays).toFixed(2);
-
-      // 4. Return formatted investment data
       return {
         id: investment._id,
         plan: investment.plan.name,
-        amount: investment.amount.toFixed(2),
-        duration: `${investment.plan.duration} hours`,
-        dailyROI: dailyROI,
-        maturityDate: maturityDate.toISOString(),
-        status: statusDisplay,
-        expectedReturn: investment.expectedReturn.toFixed(2),
-        startDate: investment.startDate.toISOString(),
-        minAmount: investment.plan.minAmount,
-        maxAmount: investment.plan.maxAmount
+        amount: investment.amount,
+        duration: investment.plan.duration,
+        dailyROI: (investment.plan.percentage / investment.plan.duration).toFixed(2),
+        maturityDate: investment.endDate,
+        status: status,
+        daysLeft: status === 'active' ? daysLeft : 0
       };
     });
 
-    // 5. Check for active investments (for UI indicators)
-    const hasActiveInvestments = investments.some(inv => inv.status === 'active');
-
-    // 6. Send response with processed data
-    res.status(200).json({
-      investments: processedInvestments,
-      hasActive: hasActiveInvestments,
-      count: investments.length
-    });
-
-  } catch (error) {
-    console.error('Database fetch error:', error);
+    // Return the array directly (no nested data property)
+    res.status(200).json(formattedInvestments);
+  } catch (err) {
+    console.error('Get investments error:', err);
     res.status(500).json({
-      error: 'Failed to fetch investment data',
-      details: error.message
+      error: 'An error occurred while fetching investments'
     });
   }
 });
+
 
 
 
