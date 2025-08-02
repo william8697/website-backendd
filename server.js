@@ -6310,56 +6310,48 @@ app.post('/api/support/messages/:messageId/feedback', protect, [
 
 
 
+// In server.js - update the /api/loans/limit endpoint
 app.get('/api/loans/limit', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     
-    // Calculate total transactions (simplified example - you'd want to sum actual transactions)
+    // Calculate total transactions
     const transactions = await Transaction.aggregate([
       { $match: { user: user._id, status: 'completed' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     
-    const totalTransactions = transactions.length > 0 ? transactions[0].total : 0;
-    
-    // Check if user meets minimum requirements
+    const totalTransactions = transactions[0]?.total || 0;
     const MINIMUM_TRANSACTION = 5000;
     const meetsMinimumRequirement = totalTransactions >= MINIMUM_TRANSACTION;
-    
-    // Check KYC status
     const kycVerified = user.kycStatus.identity === 'verified' && 
                        user.kycStatus.address === 'verified' &&
                        user.kycStatus.facial === 'verified';
     
-    // Calculate loan limit (example calculation - adjust as needed)
-    let limit = 0;
-    if (meetsMinimumRequirement && kycVerified) {
-      // Example: loan limit is 50% of total transactions, with a max of $50,000
-      limit = Math.min(totalTransactions * 0.5, 50000);
-    }
-    
-    const qualified = meetsMinimumRequirement && kycVerified;
-    
+    // Calculate loan limit (50% of total transactions, max $50k)
+    const limit = meetsMinimumRequirement && kycVerified 
+      ? Math.min(totalTransactions * 0.5, 50000)
+      : 0;
+
     res.status(200).json({
       status: 'success',
       data: {
         limit,
         totalTransactions,
-        qualified,
+        qualified: meetsMinimumRequirement && kycVerified,
         meetsMinimumRequirement,
         kycVerified
       }
     });
-    
+
   } catch (err) {
     console.error('Get loan limit error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while calculating loan limit'
+      message: 'Failed to calculate loan limit'
     });
   }
 });
-
 
 
 // Loan Qualification and Limit Calculation Endpoint
