@@ -6771,57 +6771,37 @@ app.get('/api/transactions', protect, async (req, res) => {
 
 app.get('/api/investments', protect, async (req, res) => {
   try {
-    // Strict query to only get active investments
+    // Always return an array, even if empty
     const investments = await Investment.find({ 
       user: req.user.id,
-      status: 'active',
-      endDate: { $gt: new Date() } // Ensure investment hasn't matured
-    })
-    .populate({
-      path: 'plan',
-      match: { isActive: true }, // Only include active plans
-      select: 'name duration percentage'
-    })
-    .lean();
+      status: 'active'
+    }).populate('plan', 'name duration percentage');
 
-    // Filter out investments with inactive plans
-    const activeInvestments = investments.filter(inv => inv.plan !== null);
-
-    // Format response with validation
-    const formattedInvestments = activeInvestments.map(investment => {
-      // Validate investment data
-      if (!investment.plan || !investment.endDate) {
-        throw new Error('Invalid investment data');
-      }
-
-      // Calculate daily ROI safely
-      const dailyROI = (investment.plan.percentage / (investment.plan.duration / 24)).toFixed(2);
-      
-      return {
-        _id: investment._id,
-        plan: investment.plan.name,
-        amount: investment.amount,
-        duration: investment.plan.duration,
-        dailyROI,
-        maturityDate: investment.endDate,
-        status: 'active' // Enforced by query
-      };
-    });
+    // Transform data for frontend
+    const responseData = investments.map(inv => ({
+      id: inv._id,
+      plan: inv.plan?.name || 'No Plan',
+      amount: inv.amount,
+      duration: inv.plan?.duration || 0,
+      dailyROI: inv.plan ? (inv.plan.percentage / (inv.plan.duration / 24)).toFixed(2) : '0.00',
+      maturityDate: inv.endDate,
+      status: inv.status
+    }));
 
     res.status(200).json({
-      status: 'success',
-      data: formattedInvestments
+      success: true,
+      data: responseData  // Ensure this is always an array
     });
 
-  } catch (err) {
-    console.error('Get investments error:', err);
+  } catch (error) {
+    console.error('Investment fetch error:', error);
     res.status(500).json({
-      status: 'error',
-      message: err.message || 'An error occurred while fetching active investments'
+      success: false,
+      message: 'Failed to load investments',
+      data: []  // Return empty array on error
     });
   }
 });
-
 
 
 
