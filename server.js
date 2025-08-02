@@ -6309,8 +6309,6 @@ app.post('/api/support/messages/:messageId/feedback', protect, [
 
 
 
-
-// In server.js - update the /api/loans/limit endpoint
 app.get('/api/loans/limit', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
