@@ -6735,6 +6735,55 @@ app.get('/api/mining', protect, async (req, res) => {
 
 
 
+app.get('/api/transactions', protect, async (req, res) => {
+  try {
+    // Get query parameters for filtering/sorting
+    const { type, status, method, limit = 10, sort = '-createdAt' } = req.query;
+    
+    // Build the query object
+    const query = { user: req.user._id };
+    if (type) query.type = type;
+    if (status) query.status = status;
+    if (method) query.method = method;
+
+    // Get transactions from database
+    const transactions = await Transaction.find(query)
+      .sort(sort)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Format the transactions for the frontend
+    const formattedTransactions = transactions.map(transaction => ({
+      id: transaction._id,
+      date: transaction.createdAt,
+      type: transaction.type,
+      amount: transaction.amount,
+      status: transaction.status,
+      method: transaction.method,
+      details: transaction.details || 'N/A',
+      fee: transaction.fee || 0,
+      netAmount: transaction.netAmount || transaction.amount,
+      reference: transaction.reference,
+      // Include additional fields that might be needed by the frontend
+      ...(transaction.btcAmount && { btcAmount: transaction.btcAmount }),
+      ...(transaction.btcAddress && { btcAddress: transaction.btcAddress }),
+      ...(transaction.bankDetails && { bankDetails: transaction.bankDetails }),
+      ...(transaction.cardDetails && { cardDetails: transaction.cardDetails })
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: formattedTransactions
+    });
+
+  } catch (err) {
+    console.error('Get transactions error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching transactions'
+    });
+  }
+});
 
 
 
