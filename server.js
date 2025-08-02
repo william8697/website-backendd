@@ -6626,10 +6626,10 @@ app.get('/api/users/me/referrals', protect, async (req, res) => {
 
 
 
-// Add this to your server.js in the User Endpoints section
+// Get user balances
 app.get('/api/users/balances', protect, async (req, res) => {
   try {
-    // Get current BTC price
+    // Get current BTC price (using default if API fails)
     let btcPrice = 50000; // Default value
     try {
       const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
@@ -6638,7 +6638,8 @@ app.get('/api/users/balances', protect, async (req, res) => {
       console.error('Failed to fetch BTC price:', err);
     }
 
-    const user = await User.findById(req.user.id).select('balances');
+    // Find user and ensure balances exist
+    const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({
         status: 'fail',
@@ -6646,35 +6647,50 @@ app.get('/api/users/balances', protect, async (req, res) => {
       });
     }
 
+    // Initialize balances if they don't exist
+    if (!user.balances) {
+      user.balances = {
+        main: 0,
+        active: 0,
+        matured: 0,
+        savings: 0,
+        loan: 0
+      };
+      await user.save();
+    }
+
+    // Prepare response
+    const responseData = {
+      balances: {
+        main: user.balances.main,
+        active: user.balances.active,
+        matured: user.balances.matured,
+        savings: user.balances.savings,
+        loan: user.balances.loan
+      },
+      btcPrice,
+      btcValues: {
+        main: user.balances.main / btcPrice,
+        active: user.balances.active / btcPrice,
+        matured: user.balances.matured / btcPrice,
+        savings: user.balances.savings / btcPrice,
+        loan: user.balances.loan / btcPrice
+      }
+    };
+
     res.status(200).json({
       status: 'success',
-      data: {
-        balances: {
-          main: user.balances.main || 0,
-          active: user.balances.active || 0,
-          matured: user.balances.matured || 0,
-          savings: user.balances.savings || 0,
-          loan: user.balances.loan || 0
-        },
-        btcPrice,
-        btcValues: {
-          main: user.balances.main / btcPrice || 0,
-          active: user.balances.active / btcPrice || 0,
-          matured: user.balances.matured / btcPrice || 0,
-          savings: user.balances.savings / btcPrice || 0,
-          loan: user.balances.loan / btcPrice || 0
-        }
-      }
+      data: responseData
     });
+
   } catch (err) {
-    console.error('Get user balances error:', err);
+    console.error('Error fetching user balances:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching user balances'
+      message: 'Failed to fetch user balances'
     });
   }
 });
-
 
 
 
