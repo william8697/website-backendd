@@ -7166,7 +7166,6 @@ app.get('/api/users/kyc-status', protect, async (req, res) => {
 });
 
 
-
 app.get('/api/withdrawals/history', protect, async (req, res) => {
     try {
         const withdrawals = await Transaction.find({
@@ -7175,32 +7174,34 @@ app.get('/api/withdrawals/history', protect, async (req, res) => {
         })
         .sort({ createdAt: -1 })
         .limit(10)
-        .select('createdAt method amount status reference currency fee netAmount')
+        .select('createdAt method amount status reference currency fee netAmount processedAt')
         .lean();
 
-        // Format the response to match frontend expectations
+        // Ensure we always return an array, even if empty
         const formattedWithdrawals = withdrawals.map(tx => ({
             id: tx._id,
-            date: tx.createdAt,
-            method: tx.method,
-            amount: tx.amount,
-            status: tx.status,
-            txId: tx.reference,
-            currency: tx.currency,
-            fee: tx.fee,
-            netAmount: tx.netAmount
+            date: tx.createdAt || new Date(), // Fallback to current date if missing
+            method: tx.method || 'btc',       // Default to BTC if missing
+            amount: tx.amount || 0,
+            status: tx.status || 'pending',
+            txId: tx.reference || 'N/A',
+            currency: tx.currency || 'USD',
+            fee: tx.fee || 0,
+            netAmount: tx.netAmount || tx.amount || 0,
+            processedAt: tx.processedAt || null
         }));
 
         res.status(200).json({
             status: 'success',
-            data: formattedWithdrawals
+            data: formattedWithdrawals || [] // Ensure array is never undefined
         });
 
     } catch (err) {
         console.error('Error fetching withdrawal history:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching withdrawal history'
+            message: 'An error occurred while fetching withdrawal history',
+            data: [] // Return empty array on error
         });
     }
 });
@@ -7230,5 +7231,6 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
