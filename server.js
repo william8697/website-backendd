@@ -2478,7 +2478,6 @@ app.get('/api/users/me', protect, async (req, res) => {
           address: user.address,
           kycStatus: user.kycStatus,
           balances: user.balances,
-            balance: user.balances?.main || 0,
           referralCode: user.referralCode,
           isVerified: user.isVerified,
           status: user.status,
@@ -6895,6 +6894,45 @@ app.get('/api/deposits/history', protect, async (req, res) => {
         console.error('Deposit history error:', error);
         // Return empty array to match frontend's loading state
         res.status(200).json([]);
+    }
+});
+
+
+// Update this endpoint in server.js
+app.get('/api/users/me', protect, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id)
+            .select('balances firstName lastName email');
+        
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Ensure balances exists and has the expected structure
+        const userData = {
+            firstName: user.firstName,
+            lastName: user.lastName,
+            email: user.email,
+            balance: user.balances?.main || 0, // Matches frontend's expected property
+            balances: {
+                main: user.balances?.main || 0,
+                active: user.balances?.active || 0,
+                matured: user.balances?.matured || 0,
+                savings: user.balances?.savings || 0,
+                loan: user.balances?.loan || 0
+            }
+        };
+
+        res.status(200).json(userData);
+    } catch (err) {
+        console.error('Get user error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching user data'
+        });
     }
 });
 
