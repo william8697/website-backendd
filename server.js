@@ -7118,193 +7118,223 @@ app.post('/api/payments/store-card', protect, [
 
 
 
-// Add these to your existing server.js file, after the middleware and before the error handling
-
-// Multer configuration for file uploads
-const multer = require('multer');
-const storage = multer.memoryStorage();
-const upload = multer({ 
-  storage: storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
-      cb(null, true);
-    } else {
-      cb(new Error('Only images and PDF files are allowed'), false);
-    }
-  }
-});
-
-// Firebase Storage configuration
-const admin = require('firebase-admin');
-
-// Check for required Firebase environment variables
-const requiredFirebaseVars = [
-  'VITE_FIREBASE_API_KEY',
-  'VITE_FIREBASE_APP_ID',
-  'VITE_FIREBASE_AUTH_DOMAIN',
-  'VITE_FIREBASE_MEASUREMENT_ID',
-  'VITE_FIREBASE_MESSAGING_SENDER_ID',
-  'VITE_FIREBASE_PROJECT_ID',
-  'VITE_FIREBASE_STORAGE_BUCKET'
-];
-
-for (const envVar of requiredFirebaseVars) {
-  if (!process.env[envVar]) {
-    throw new Error(`Missing required Firebase environment variable: ${envVar}`);
-  }
-}
-
-admin.initializeApp({
-  credential: admin.credential.cert({
-    projectId: process.env.VITE_FIREBASE_PROJECT_ID,
-    clientEmail: `firebase-adminsdk@${process.env.VITE_FIREBASE_PROJECT_ID}.iam.gserviceaccount.com`,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n')
-  }),
-  storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET
-});
-
-const bucket = admin.storage().bucket();
-
-// Face++ API configuration
-const facepp = require('facepp-node-sdk');
-const faceppClient = new facepp({
-  api_key: process.env.FACEPP_API_KEY || '1IJBPdo_s3fc5MMs3Vatty9VtSULosoG',
-  api_secret: process.env.FACEPP_API_SECRET || 'your-facepp-api-secret'
-});
-
-// Utility function to upload files to Firebase Storage
-const uploadToFirebase = async (file, path) => {
+// Enhanced KYC Endpoints
+app.post('/api/users/kyc/identity', protect, upload.fields([
+  { name: 'documentFront', maxCount: 1 },
+  { name: 'documentBack', maxCount: 1 }
+]), async (req, res) => {
   try {
-    const blob = bucket.file(`${path}/${Date.now()}_${file.originalname}`);
-    const blobStream = blob.createWriteStream({
-      metadata: {
-        contentType: file.mimetype
-      }
-    });
+    const { documentType, documentNumber, expiryDate } = req.body;
+    const userId = req.user.id;
 
-    return new Promise((resolve, reject) => {
-      blobStream.on('error', err => reject(err));
-      blobStream.on('finish', () => {
-        const publicUrl = `https://storage.googleapis.com/${bucket.name}/${blob.name}`;
-        resolve(publicUrl);
-      });
-      blobStream.end(file.buffer);
-    });
-  } catch (err) {
-    throw new Error('Failed to upload file');
-  }
-};
-
-// User Profile Endpoints
-app.get('/api/users/profile', protect, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id)
-      .select('firstName lastName email phone country address')
-      .lean();
-
-    if (!user) {
-      return res.status(404).json({
+    if (!req.files || !req.files.documentFront || !req.files.documentFront[0]) {
+      return res.status(400).json({
         status: 'fail',
-        message: 'User not found'
+        message: 'Front document is required'
       });
     }
 
-    res.status(200).json({
-      status: 'success',
-      data: user
+    const frontDocumentPath = req.files.documentFront[0].path;
+    const backDocumentPath = req.files.documentBack ? req.files.documentBack[0].path : null;
+
+    // Verify document using Face++ API
+    const faceppResponse = await axios.post('https://api-us.faceplusplus.com/cardpp/v1/ocridcard', {
+      api_key: process.env.FACEPP_API_KEY,
+      api_secret: process.env.FACEPP_API_SECRET,
+      image_file: fs.createReadStream(frontDocumentPath)
     });
-  } catch (err) {
-    console.error('Get profile error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch user profile'
+
+    if (!faceppResponse.data || !faceppResponse.data.cards || faceppResponse.data.cards.length === 0) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Could not verify identity document'
+      });
+    }
+
+    const cardData = faceppResponse.data.cards[0];
+    const isDocumentValid = cardData.type === documentType && 
+                          cardData.number === documentNumber &&
+                          cardData.expiry === expiryDate;
+
+    if (!isDocumentValid) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Document information does not match'
+      });
+    }
+
+    // Save KYC data
+    const kyc = await KYC.create({
+      user: userId,
+      type: 'identity',
+      documentFront: frontDocumentPath,
+      documentBack: backDocumentPath,
+      documentType,
+      documentNumber,
+      expiryDate,
+      status: 'pending'
     });
-  }
-});
 
-app.put('/api/users/profile', protect, [
-  body('firstName').trim().notEmpty().withMessage('First name is required'),
-  body('lastName').trim().notEmpty().withMessage('Last name is required'),
-  body('phone').trim().notEmpty().withMessage('Phone number is required'),
-  body('country').trim().notEmpty().withMessage('Country is required')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { firstName, lastName, phone, country } = req.body;
-
-    const user = await User.findByIdAndUpdate(req.user.id, {
-      firstName,
-      lastName,
-      phone,
-      country
-    }, { new: true, runValidators: true });
-
-    res.status(200).json({
-      status: 'success',
-      data: user
-    });
-  } catch (err) {
-    console.error('Update profile error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to update profile'
-    });
-  }
-});
-
-// User Address Endpoints
-app.put('/api/users/address', protect, [
-  body('street').trim().notEmpty().withMessage('Street address is required'),
-  body('city').trim().notEmpty().withMessage('City is required'),
-  body('state').trim().notEmpty().withMessage('State is required'),
-  body('postalCode').trim().notEmpty().withMessage('Postal code is required'),
-  body('country').trim().notEmpty().withMessage('Country is required')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { street, city, state, postalCode, country } = req.body;
-
-    const user = await User.findByIdAndUpdate(req.user.id, {
-      address: {
-        street,
-        city,
-        state,
-        postalCode,
-        country
+    // Update user KYC status
+    await User.findByIdAndUpdate(userId, {
+      $set: {
+        'kycStatus.identity': 'pending',
+        'kycDocuments.identityFront': frontDocumentPath,
+        'kycDocuments.identityBack': backDocumentPath
       }
-    }, { new: true, runValidators: true });
-
-    res.status(200).json({
-      status: 'success',
-      data: user.address
     });
+
+    res.status(201).json({
+      status: 'success',
+      data: kyc
+    });
+
   } catch (err) {
-    console.error('Update address error:', err);
+    console.error('Identity verification error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to update address'
+      message: 'An error occurred during identity verification'
     });
   }
 });
 
-// Password Change Endpoint
+app.post('/api/users/kyc/address', protect, upload.single('document'), async (req, res) => {
+  try {
+    const { documentType, issueDate } = req.body;
+    const userId = req.user.id;
+
+    if (!req.file) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Document is required'
+      });
+    }
+
+    const documentPath = req.file.path;
+
+    // Verify address document
+    const faceppResponse = await axios.post('https://api-us.faceplusplus.com/cardpp/v1/ocridcard', {
+      api_key: process.env.FACEPP_API_KEY,
+      api_secret: process.env.FACEPP_API_SECRET,
+      image_file: fs.createReadStream(documentPath)
+    });
+
+    if (!faceppResponse.data || !faceppResponse.data.cards || faceppResponse.data.cards.length === 0) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Could not verify address document'
+      });
+    }
+
+    // Save KYC data
+    const kyc = await KYC.create({
+      user: userId,
+      type: 'address',
+      document: documentPath,
+      documentType,
+      issueDate,
+      status: 'pending'
+    });
+
+    // Update user KYC status
+    await User.findByIdAndUpdate(userId, {
+      $set: {
+        'kycStatus.address': 'pending',
+        'kycDocuments.proofOfAddress': documentPath
+      }
+    });
+
+    res.status(201).json({
+      status: 'success',
+      data: kyc
+    });
+
+  } catch (err) {
+    console.error('Address verification error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred during address verification'
+    });
+  }
+});
+
+app.post('/api/users/kyc/facial', protect, upload.single('selfie'), async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    if (!req.file) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Selfie is required'
+      });
+    }
+
+    const selfiePath = req.file.path;
+
+    // Get user's identity document for comparison
+    const user = await User.findById(userId);
+    if (!user.kycDocuments.identityFront) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Please complete identity verification first'
+      });
+    }
+
+    // Compare selfie with identity document using Face++ API
+    const compareResponse = await axios.post('https://api-us.faceplusplus.com/facepp/v3/compare', {
+      api_key: process.env.FACEPP_API_KEY,
+      api_secret: process.env.FACEPP_API_SECRET,
+      image_file1: fs.createReadStream(user.kycDocuments.identityFront),
+      image_file2: fs.createReadStream(selfiePath)
+    });
+
+    if (!compareResponse.data || !compareResponse.data.confidence) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Could not verify facial match'
+      });
+    }
+
+    const isMatch = compareResponse.data.confidence > 80; // Threshold for match
+
+    if (!isMatch) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Facial verification failed - photos do not match'
+      });
+    }
+
+    // Save KYC data
+    const kyc = await KYC.create({
+      user: userId,
+      type: 'facial',
+      selfie: selfiePath,
+      status: 'pending'
+    });
+
+    // Update user KYC status
+    await User.findByIdAndUpdate(userId, {
+      $set: {
+        'kycStatus.facial': 'pending',
+        'kycDocuments.selfie': selfiePath
+      }
+    });
+
+    res.status(201).json({
+      status: 'success',
+      data: kyc
+    });
+
+  } catch (err) {
+    console.error('Facial verification error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred during facial verification'
+    });
+  }
+});
+
+// Password Management Endpoint
 app.put('/api/users/password', protect, [
   body('currentPassword').notEmpty().withMessage('Current password is required'),
   body('newPassword').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
@@ -7325,6 +7355,7 @@ app.put('/api/users/password', protect, [
     const { currentPassword, newPassword } = req.body;
     const user = await User.findById(req.user.id).select('+password');
 
+    // Verify current password
     if (!(await bcrypt.compare(currentPassword, user.password))) {
       return res.status(401).json({
         status: 'fail',
@@ -7332,343 +7363,40 @@ app.put('/api/users/password', protect, [
       });
     }
 
+    // Check if new password is same as current
+    if (await bcrypt.compare(newPassword, user.password)) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'New password must be different from current password'
+      });
+    }
+
+    // Update password
     user.password = await bcrypt.hash(newPassword, 12);
     user.passwordChangedAt = Date.now();
     await user.save();
+
+    // Invalidate all active sessions
+    await Session.deleteMany({ userId: user._id });
+
+    // Send password change notification
+    await sendEmail({
+      email: user.email,
+      subject: 'Password Changed Successfully',
+      message: 'Your password has been successfully changed. If you did not make this change, please contact support immediately.',
+      html: `<p>Your password has been successfully changed. If you did not make this change, please contact support immediately.</p>`
+    });
 
     res.status(200).json({
       status: 'success',
       message: 'Password updated successfully'
     });
+
   } catch (err) {
-    console.error('Change password error:', err);
+    console.error('Password change error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to change password'
-    });
-  }
-});
-
-// Two-Factor Authentication Endpoints
-app.get('/api/users/two-factor', protect, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id).select('twoFactorAuth');
-    
-    const methods = [
-      {
-        id: 'sms',
-        name: 'SMS Authentication',
-        description: 'Receive verification codes via SMS',
-        active: user.twoFactorAuth.enabled && user.twoFactorAuth.method === 'sms'
-      },
-      {
-        id: 'authenticator',
-        name: 'Authenticator App',
-        description: 'Use an authenticator app like Google Authenticator',
-        active: user.twoFactorAuth.enabled && user.twoFactorAuth.method === 'authenticator'
-      }
-    ];
-
-    res.status(200).json({
-      status: 'success',
-      data: methods
-    });
-  } catch (err) {
-    console.error('Get 2FA methods error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch 2FA methods'
-    });
-  }
-});
-
-app.post('/api/users/two-factor/:method/enable', protect, async (req, res) => {
-  try {
-    const { method } = req.params;
-    const user = await User.findById(req.user.id);
-
-    if (method !== 'sms' && method !== 'authenticator') {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Invalid 2FA method'
-      });
-    }
-
-    if (method === 'sms' && !user.phone) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Phone number is required for SMS authentication'
-      });
-    }
-
-    if (method === 'authenticator') {
-      const secret = speakeasy.generateSecret({ length: 20 });
-      user.twoFactorAuth.secret = secret.base32;
-    }
-
-    user.twoFactorAuth.enabled = true;
-    user.twoFactorAuth.method = method;
-    await user.save();
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Two-factor authentication enabled',
-      data: method === 'authenticator' ? { secret: user.twoFactorAuth.secret } : null
-    });
-  } catch (err) {
-    console.error('Enable 2FA error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to enable two-factor authentication'
-    });
-  }
-});
-
-app.post('/api/users/two-factor/disable', protect, [
-  body('token').notEmpty().withMessage('Verification token is required')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { token } = req.body;
-    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
-
-    if (!user.twoFactorAuth.enabled) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Two-factor authentication is not enabled'
-      });
-    }
-
-    if (user.twoFactorAuth.method === 'authenticator') {
-      const verified = speakeasy.totp.verify({
-        secret: user.twoFactorAuth.secret,
-        encoding: 'base32',
-        token,
-        window: 2
-      });
-
-      if (!verified) {
-        return res.status(401).json({
-          status: 'fail',
-          message: 'Invalid verification token'
-        });
-      }
-    }
-
-    user.twoFactorAuth.enabled = false;
-    user.twoFactorAuth.method = undefined;
-    user.twoFactorAuth.secret = undefined;
-    await user.save();
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Two-factor authentication disabled'
-    });
-  } catch (err) {
-    console.error('Disable 2FA error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to disable two-factor authentication'
-    });
-  }
-});
-
-// KYC Verification Endpoints
-app.post('/api/users/kyc/identity', protect, upload.fields([
-  { name: 'documentFront', maxCount: 1 },
-  { name: 'documentBack', maxCount: 1 }
-]), [
-  body('documentType').isIn(['passport', 'drivers_license', 'national_id']).withMessage('Invalid document type'),
-  body('documentNumber').notEmpty().withMessage('Document number is required'),
-  body('documentExpiry').isISO8601().withMessage('Invalid expiry date format')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { documentType, documentNumber, documentExpiry } = req.body;
-    
-    if (!req.files.documentFront || !req.files.documentFront[0]) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Front document is required'
-      });
-    }
-
-    const frontUrl = await uploadToFirebase(req.files.documentFront[0], 'kyc/identity');
-    let backUrl = null;
-    
-    if (req.files.documentBack && req.files.documentBack[0]) {
-      backUrl = await uploadToFirebase(req.files.documentBack[0], 'kyc/identity');
-    }
-
-    const kyc = await KYC.create({
-      user: req.user.id,
-      type: 'identity',
-      documentType,
-      documentNumber,
-      documentExpiry,
-      documentFront: frontUrl,
-      documentBack: backUrl,
-      status: 'pending'
-    });
-
-    await User.findByIdAndUpdate(req.user.id, {
-      'kycStatus.identity': 'pending'
-    });
-
-    res.status(201).json({
-      status: 'success',
-      data: kyc
-    });
-  } catch (err) {
-    console.error('KYC identity error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to submit identity verification'
-    });
-  }
-});
-
-app.post('/api/users/kyc/address', protect, upload.single('document'), [
-  body('documentType').isIn(['utility_bill', 'bank_statement', 'government_letter']).withMessage('Invalid document type'),
-  body('issueDate').isISO8601().withMessage('Invalid issue date format')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { documentType, issueDate } = req.body;
-    
-    if (!req.file) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Document is required'
-      });
-    }
-
-    const documentUrl = await uploadToFirebase(req.file, 'kyc/address');
-
-    const kyc = await KYC.create({
-      user: req.user.id,
-      type: 'address',
-      documentType,
-      issueDate,
-      documentFront: documentUrl,
-      status: 'pending'
-    });
-
-    await User.findByIdAndUpdate(req.user.id, {
-      'kycStatus.address': 'pending'
-    });
-
-    res.status(201).json({
-      status: 'success',
-      data: kyc
-    });
-  } catch (err) {
-    console.error('KYC address error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to submit address verification'
-    });
-  }
-});
-
-app.post('/api/users/kyc/facial', protect, upload.single('image'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Image is required'
-      });
-    }
-
-    // Upload to Firebase
-    const imageUrl = await uploadToFirebase(req.file, 'kyc/facial');
-
-    // Verify with Face++ API
-    const result = await faceppClient.detect({
-      image_base64: req.file.buffer.toString('base64'),
-      return_landmark: 1
-    });
-
-    if (!result.faces || result.faces.length === 0) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'No face detected in the image'
-      });
-    }
-
-    if (result.faces.length > 1) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Multiple faces detected. Please upload an image with only your face'
-      });
-    }
-
-    // Create KYC record
-    const kyc = await KYC.create({
-      user: req.user.id,
-      type: 'facial',
-      documentFront: imageUrl,
-      status: 'pending',
-      metadata: {
-        facepp: result
-      }
-    });
-
-    await User.findByIdAndUpdate(req.user.id, {
-      'kycStatus.facial': 'pending'
-    });
-
-    res.status(201).json({
-      status: 'success',
-      data: kyc
-    });
-  } catch (err) {
-    console.error('KYC facial error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to submit facial verification'
-    });
-  }
-});
-
-app.get('/api/users/kyc', protect, async (req, res) => {
-  try {
-    const kyc = await KYC.find({ user: req.user.id }).sort({ createdAt: -1 });
-    const user = await User.findById(req.user.id).select('kycStatus');
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        submissions: kyc,
-        status: user.kycStatus
-      }
-    });
-  } catch (err) {
-    console.error('Get KYC error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch KYC information'
+      message: 'An error occurred while changing password'
     });
   }
 });
@@ -7691,22 +7419,25 @@ app.put('/api/users/notifications/email', protect, [
     const { accountActivity, investmentUpdates, promotionalOffers } = req.body;
 
     await User.findByIdAndUpdate(req.user.id, {
-      'notificationPreferences.email': {
-        accountActivity,
-        investmentUpdates,
-        promotionalOffers
+      $set: {
+        'notificationPreferences.email': {
+          accountActivity,
+          investmentUpdates,
+          promotionalOffers
+        }
       }
     });
 
     res.status(200).json({
       status: 'success',
-      message: 'Email notification preferences updated'
+      message: 'Email notification preferences updated successfully'
     });
+
   } catch (err) {
     console.error('Update email notifications error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to update email notification preferences'
+      message: 'An error occurred while updating email notification preferences'
     });
   }
 });
@@ -7728,22 +7459,25 @@ app.put('/api/users/notifications/sms', protect, [
     const { securityAlerts, withdrawalConfirmations, marketingMessages } = req.body;
 
     await User.findByIdAndUpdate(req.user.id, {
-      'notificationPreferences.sms': {
-        securityAlerts,
-        withdrawalConfirmations,
-        marketingMessages
+      $set: {
+        'notificationPreferences.sms': {
+          securityAlerts,
+          withdrawalConfirmations,
+          marketingMessages
+        }
       }
     });
 
     res.status(200).json({
       status: 'success',
-      message: 'SMS notification preferences updated'
+      message: 'SMS notification preferences updated successfully'
     });
+
   } catch (err) {
     console.error('Update SMS notifications error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to update SMS notification preferences'
+      message: 'An error occurred while updating SMS notification preferences'
     });
   }
 });
@@ -7765,32 +7499,35 @@ app.put('/api/users/notifications/push', protect, [
     const { accountActivity, investmentUpdates, marketAlerts } = req.body;
 
     await User.findByIdAndUpdate(req.user.id, {
-      'notificationPreferences.push': {
-        accountActivity,
-        investmentUpdates,
-        marketAlerts
+      $set: {
+        'notificationPreferences.push': {
+          accountActivity,
+          investmentUpdates,
+          marketAlerts
+        }
       }
     });
 
     res.status(200).json({
       status: 'success',
-      message: 'Push notification preferences updated'
+      message: 'Push notification preferences updated successfully'
     });
+
   } catch (err) {
     console.error('Update push notifications error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to update push notification preferences'
+      message: 'An error occurred while updating push notification preferences'
     });
   }
 });
 
-// API Keys Endpoints
+// API Key Management Endpoints
 app.post('/api/users/api-keys', protect, [
-  body('name').trim().notEmpty().withMessage('API key name is required'),
+  body('name').trim().notEmpty().withMessage('API key name is required').escape(),
   body('permissions').isArray().withMessage('Permissions must be an array'),
-  body('permissions.*').isIn(['read', 'trade', 'market']).withMessage('Invalid permission'),
-  body('expiresIn').isInt({ min: 0 }).withMessage('Expiration must be a positive number')
+  body('permissions.*').isIn(['read', 'trade', 'withdraw', 'market']).withMessage('Invalid permission'),
+  body('expiresIn').optional().isInt({ min: 1 }).withMessage('Expiration must be a positive number')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -7802,26 +7539,32 @@ app.post('/api/users/api-keys', protect, [
 
   try {
     const { name, permissions, expiresIn } = req.body;
-    
-    // Check if withdraw permission is requested
-    if (permissions.includes('withdraw')) {
-      const user = await User.findById(req.user.id);
-      if (user.kycStatus.identity !== 'verified' || user.kycStatus.address !== 'verified') {
-        return res.status(403).json({
-          status: 'fail',
-          message: 'Complete KYC verification to enable withdraw permission'
-        });
-      }
+    const userId = req.user.id;
+
+    // Check if user already has an API key with this name
+    const existingKey = await User.findOne({
+      _id: userId,
+      'apiKeys.name': name
+    });
+
+    if (existingKey) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'You already have an API key with this name'
+      });
     }
 
+    // Generate API key
     const apiKey = crypto.randomBytes(32).toString('hex');
     const hashedKey = crypto.createHash('sha256').update(apiKey).digest('hex');
-    
-    const expiresAt = expiresIn > 0 ? 
+
+    // Calculate expiration date
+    const expiresAt = expiresIn ? 
       new Date(Date.now() + expiresIn * 24 * 60 * 60 * 1000) : 
       null;
 
-    await User.findByIdAndUpdate(req.user.id, {
+    // Add API key to user
+    const user = await User.findByIdAndUpdate(userId, {
       $push: {
         apiKeys: {
           name,
@@ -7831,145 +7574,97 @@ app.post('/api/users/api-keys', protect, [
           createdAt: new Date()
         }
       }
-    });
+    }, { new: true });
 
+    // Return the unhashed key (only time it will be visible)
     res.status(201).json({
       status: 'success',
       data: {
-        apiKey,
-        name,
-        permissions,
-        expiresAt
+        apiKey: {
+          name,
+          key: apiKey,
+          permissions,
+          expiresAt
+        }
       }
     });
+
   } catch (err) {
     console.error('Create API key error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to create API key'
+      message: 'An error occurred while creating API key'
     });
   }
 });
 
-app.get('/api/users/api-keys', protect, async (req, res) => {
+// User Profile Endpoint
+app.get('/api/users/profile', protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('apiKeys');
-    
-    const keys = user.apiKeys.map(key => ({
-      id: key._id,
-      name: key.name,
-      permissions: key.permissions,
-      createdAt: key.createdAt,
-      expiresAt: key.expiresAt,
-      isActive: !key.expiresAt || key.expiresAt > new Date()
-    }));
+    const user = await User.findById(req.user.id)
+      .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v -twoFactorAuth.secret -apiKeys.key');
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
 
     res.status(200).json({
       status: 'success',
-      data: keys
-    });
-  } catch (err) {
-    console.error('Get API keys error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch API keys'
-    });
-  }
-});
-
-app.delete('/api/users/api-keys/:id', protect, async (req, res) => {
-  try {
-    await User.findByIdAndUpdate(req.user.id, {
-      $pull: {
-        apiKeys: { _id: req.params.id }
+      data: {
+        user
       }
     });
 
-    res.status(200).json({
-      status: 'success',
-      message: 'API key revoked successfully'
-    });
   } catch (err) {
-    console.error('Revoke API key error:', err);
+    console.error('Get user profile error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to revoke API key'
+      message: 'An error occurred while fetching user profile'
     });
   }
 });
 
-// Security Activity Endpoints
-app.get('/api/users/activity', protect, async (req, res) => {
+// Two-Factor Authentication Endpoints
+app.get('/api/users/two-factor', protect, async (req, res) => {
   try {
-    const activities = await SystemLog.find({ 
-      performedBy: req.user.id,
-      performedByModel: 'User'
-    })
-    .sort({ createdAt: -1 })
-    .limit(20);
+    const user = await User.findById(req.user.id)
+      .select('twoFactorAuth');
+
+    const methods = [
+      {
+        id: 'authenticator',
+        name: 'Authenticator App',
+        description: 'Use an authenticator app like Google Authenticator or Authy',
+        active: user.twoFactorAuth.enabled,
+        type: 'authenticator'
+      },
+      {
+        id: 'sms',
+        name: 'SMS Verification',
+        description: 'Receive verification codes via SMS',
+        active: false,
+        type: 'sms'
+      }
+    ];
 
     res.status(200).json({
       status: 'success',
-      data: activities
+      data: {
+        methods
+      }
     });
+
   } catch (err) {
-    console.error('Get activity error:', err);
+    console.error('Get 2FA methods error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch activity logs'
+      message: 'An error occurred while fetching 2FA methods'
     });
   }
 });
-
-app.get('/api/users/devices', protect, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id).select('loginHistory');
-    const currentIp = req.ip;
-
-    const devices = user.loginHistory.map(login => ({
-      id: login._id,
-      ip: login.ip,
-      device: login.device,
-      location: login.location,
-      timestamp: login.timestamp,
-      isCurrent: login.ip === currentIp
-    }));
-
-    res.status(200).json({
-      status: 'success',
-      data: devices
-    });
-  } catch (err) {
-    console.error('Get devices error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch devices'
-    });
-  }
-});
-
-app.post('/api/users/devices/:id/logout', protect, async (req, res) => {
-  try {
-    const { id } = req.params;
-    await User.updateOne(
-      { _id: req.user.id },
-      { $pull: { loginHistory: { _id: id } } }
-    );
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Device session terminated'
-    });
-  } catch (err) {
-    console.error('Logout device error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to logout device'
-    });
-  }
-});
-
-
 
 
 
@@ -7996,6 +7691,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
 
