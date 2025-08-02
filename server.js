@@ -6773,73 +6773,46 @@ app.get('/api/investments', protect, async (req, res) => {
     const { status, page = 1, limit = 20 } = req.query;
     const skip = (page - 1) * limit;
 
-    // Base query - always filter by user
     const query = { user: req.user.id };
-    
-    // Apply status filter if provided
-    if (status) {
-      query.status = status;
-    }
+    if (status) query.status = status;
 
-    // Get investments with plan details in a single query
-    const [investments, total, activeCount] = await Promise.all([
-      Investment.find(query)
-        .populate('plan', 'name duration percentage minAmount maxAmount')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean(),
-      
-      Investment.countDocuments(query),
-      
-      Investment.countDocuments({
-        user: req.user.id,
-        status: 'active'
-      })
-    ]);
+    // Get investments with plan details
+    const investments = await Investment.find(query)
+      .populate('plan', 'name duration percentage')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    // Check if user has any active investments
+    const hasActiveInvestments = await Investment.exists({
+      user: req.user.id,
+      status: 'active'
+    });
 
     // Transform investments for frontend
     const transformedInvestments = investments.map(investment => {
-      const endDate = new Date(investment.endDate);
+      const maturityDate = new Date(investment.endDate);
       const today = new Date();
-      const timeDiff = endDate.getTime() - today.getTime();
-      const daysLeft = Math.max(0, Math.ceil(timeDiff / (1000 * 3600 * 24)));
+      const timeDiff = maturityDate.getTime() - today.getTime();
+      const daysLeft = Math.ceil(timeDiff / (1000 * 3600 * 24));
 
       return {
-        _id: investment._id,
+        id: investment._id,
         plan: investment.plan?.name || 'Unknown Plan',
-        amount: investment.amount.toFixed(2),
-        duration: `${investment.plan?.duration || 0} hours`,
-        dailyROI: investment.plan 
-          ? (investment.plan.percentage / investment.plan.duration).toFixed(2) 
-          : '0.00',
-        maturityDate: endDate,
+        amount: investment.amount,
+        duration: investment.plan?.duration || 0,
+        dailyROI: investment.plan ? (investment.plan.percentage / investment.plan.duration).toFixed(2) : '0.00',
+        maturityDate: investment.endDate,
         status: investment.status,
-        daysLeft,
-        expectedReturn: investment.expectedReturn.toFixed(2),
-        referralBonus: investment.referralBonusAmount?.toFixed(2) || '0.00'
+        daysLeft: daysLeft > 0 ? daysLeft : 0
       };
     });
 
-    res.status(200).json({
-      status: 'success',
-      data: {
-        investments: transformedInvestments,
-        hasActiveInvestments: activeCount > 0,
-        activeInvestmentCount: activeCount,
-        total,
-        page: parseInt(page),
-        pages: Math.ceil(total / limit)
-      }
-    });
+    res.status(200).json(transformedInvestments); // Directly return the array
 
   } catch (err) {
     console.error('Get investments error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching investments',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
+    res.status(500).json([]); // Return empty array on error
   }
 });
 
