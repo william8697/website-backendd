@@ -7208,867 +7208,1058 @@ app.get('/api/withdrawals/history', protect, async (req, res) => {
 
 
 
-
-
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const sharp = require('sharp');
-
-// Configure file storage for KYC documents
-const kycStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadPath = path.join(__dirname, 'uploads/kyc');
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath, { recursive: true });
-    }
-    cb(null, uploadPath);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${uuidv4()}${ext}`);
+// KYC Verification Routes
+app.post('/api/users/kyc/identity', protect, upload.fields([
+  { name: 'documentFront', maxCount: 1 },
+  { name: 'documentBack', maxCount: 1 }
+]), [
+  body('documentType').isIn(['passport', 'drivers_license', 'national_id']).withMessage('Invalid document type'),
+  body('documentNumber').notEmpty().withMessage('Document number is required'),
+  body('expiryDate').isISO8601().withMessage('Invalid expiry date format')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
   }
-});
-
-const upload = multer({
-  storage: kycStorage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'image/jpeg' || 
-        file.mimetype === 'image/png' || 
-        file.mimetype === 'application/pdf') {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only JPEG, PNG, and PDF are allowed.'));
-    }
-  }
-});
-
-// Utility function to process and validate images
-const processImage = async (file, maxWidth = 1000, maxHeight = 1000) => {
-  const processedPath = path.join(path.dirname(file.path), `processed_${path.basename(file.path)}`);
-  
-  await sharp(file.path)
-    .resize(maxWidth, maxHeight, { fit: 'inside' })
-    .jpeg({ quality: 85 })
-    .toFile(processedPath);
-  
-  fs.unlinkSync(file.path); // Remove original file
-  return processedPath;
-};
-
-// KYC Identity Verification Endpoint
-app.post('/api/users/kyc/identity', 
-  protect,
-  upload.fields([
-    { name: 'documentFront', maxCount: 1 },
-    { name: 'documentBack', maxCount: 1 }
-  ]),
-  [
-    body('documentType').isIn(['passport', 'drivers_license', 'national_id']).withMessage('Invalid document type'),
-    body('documentNumber').notEmpty().withMessage('Document number is required'),
-    body('documentExpiry').isISO8601().withMessage('Invalid expiration date format')
-  ],
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      // Clean up uploaded files if validation fails
-      if (req.files) {
-        Object.values(req.files).forEach(files => {
-          files.forEach(file => fs.unlinkSync(file.path));
-        });
-      }
-      return res.status(400).json({
-        status: 'fail',
-        errors: errors.array()
-      });
-    }
-
-    try {
-      const { documentType, documentNumber, documentExpiry } = req.body;
-      const userId = req.user.id;
-
-      // Process document images
-      let documentFrontPath, documentBackPath;
-      try {
-        if (req.files.documentFront) {
-          documentFrontPath = await processImage(req.files.documentFront[0]);
-        }
-        if (req.files.documentBack) {
-          documentBackPath = await processImage(req.files.documentBack[0]);
-        }
-      } catch (imageError) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'Failed to process document images: ' + imageError.message
-        });
-      }
-
-      // Start database transaction
-      const session = await mongoose.startSession();
-      session.startTransaction();
-
-      try {
-        // Create KYC record
-        const kycRecord = await KYC.create([{
-          user: userId,
-          type: 'identity',
-          documentType,
-          documentNumber,
-          documentExpiry: new Date(documentExpiry),
-          documentFront: documentFrontPath,
-          documentBack: documentBackPath,
-          status: 'pending'
-        }], { session });
-
-        // Update user KYC status
-        await User.findByIdAndUpdate(userId, {
-          $set: {
-            'kycStatus.identity': 'pending',
-            'kycDocuments.identityFront': documentFrontPath,
-            'kycDocuments.identityBack': documentBackPath
-          }
-        }, { session });
-
-        await session.commitTransaction();
-        session.endSession();
-
-        // Invalidate any cached KYC data
-        await redis.del(`user:${userId}:kyc`);
-
-        res.status(201).json({
-          status: 'success',
-          data: {
-            kycId: kycRecord[0]._id,
-            status: 'pending'
-          }
-        });
-
-        // Log the KYC submission
-        await logActivity('kyc-identity-submitted', 'kyc', kycRecord[0]._id, userId, 'User', req);
-        
-        // Notify admin team
-        await notifyAdmins('New KYC Submission', `User ${userId} has submitted identity documents for verification.`);
-
-      } catch (dbError) {
-        await session.abortTransaction();
-        session.endSession();
-        // Clean up files if DB operation fails
-        if (documentFrontPath) fs.unlinkSync(documentFrontPath);
-        if (documentBackPath) fs.unlinkSync(documentBackPath);
-        
-        throw dbError;
-      }
-    } catch (err) {
-      console.error('KYC Identity submission error:', err);
-      res.status(500).json({
-        status: 'error',
-        message: 'An error occurred while processing your KYC documents'
-      });
-    }
-  }
-);
-
-// KYC Address Verification Endpoint
-app.post('/api/users/kyc/address', 
-  protect,
-  upload.single('document'),
-  [
-    body('documentType').isIn(['utility_bill', 'bank_statement', 'government_letter']).withMessage('Invalid document type'),
-    body('issueDate').isISO8601().withMessage('Invalid issue date format')
-  ],
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      if (req.file) fs.unlinkSync(req.file.path);
-      return res.status(400).json({
-        status: 'fail',
-        errors: errors.array()
-      });
-    }
-
-    try {
-      const { documentType, issueDate } = req.body;
-      const userId = req.user.id;
-
-      let documentPath;
-      try {
-        if (req.file) {
-          documentPath = await processImage(req.file);
-        } else {
-          return res.status(400).json({
-            status: 'fail',
-            message: 'Document file is required'
-          });
-        }
-      } catch (imageError) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'Failed to process document: ' + imageError.message
-        });
-      }
-
-      const session = await mongoose.startSession();
-      session.startTransaction();
-
-      try {
-        const kycRecord = await KYC.create([{
-          user: userId,
-          type: 'address',
-          documentType,
-          issueDate: new Date(issueDate),
-          documentFront: documentPath,
-          status: 'pending'
-        }], { session });
-
-        await User.findByIdAndUpdate(userId, {
-          $set: {
-            'kycStatus.address': 'pending',
-            'kycDocuments.proofOfAddress': documentPath
-          }
-        }, { session });
-
-        await session.commitTransaction();
-        session.endSession();
-
-        await redis.del(`user:${userId}:kyc`);
-
-        res.status(201).json({
-          status: 'success',
-          data: {
-            kycId: kycRecord[0]._id,
-            status: 'pending'
-          }
-        });
-
-        await logActivity('kyc-address-submitted', 'kyc', kycRecord[0]._id, userId, 'User', req);
-        await notifyAdmins('New Address Verification', `User ${userId} has submitted address proof for verification.`);
-
-      } catch (dbError) {
-        await session.abortTransaction();
-        session.endSession();
-        if (documentPath) fs.unlinkSync(documentPath);
-        throw dbError;
-      }
-    } catch (err) {
-      console.error('KYC Address submission error:', err);
-      res.status(500).json({
-        status: 'error',
-        message: 'An error occurred while processing your address verification'
-      });
-    }
-  }
-);
-
-// KYC Facial Verification Endpoint
-app.post('/api/users/kyc/facial', 
-  protect,
-  upload.single('image'),
-  async (req, res) => {
-    if (!req.file) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Facial image is required'
-      });
-    }
-
-    try {
-      const userId = req.user.id;
-      let imagePath;
-
-      try {
-        imagePath = await processImage(req.file, 800, 800);
-      } catch (imageError) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'Failed to process facial image: ' + imageError.message
-        });
-      }
-
-      const session = await mongoose.startSession();
-      session.startTransaction();
-
-      try {
-        // Perform facial recognition checks here (integration with your facial recognition service)
-        const facialMatch = await verifyFacialImage(imagePath, userId);
-        if (!facialMatch.success) {
-          throw new Error(facialMatch.message || 'Facial verification failed');
-        }
-
-        const kycRecord = await KYC.create([{
-          user: userId,
-          type: 'facial',
-          selfie: imagePath,
-          status: facialMatch.autoApproved ? 'approved' : 'pending',
-          verificationData: facialMatch.data
-        }], { session });
-
-        const updateData = {
-          'kycDocuments.selfie': imagePath,
-          'kycStatus.facial': facialMatch.autoApproved ? 'verified' : 'pending'
-        };
-
-        if (facialMatch.autoApproved) {
-          updateData.kycVerifiedAt = new Date();
-        }
-
-        await User.findByIdAndUpdate(userId, {
-          $set: updateData
-        }, { session });
-
-        await session.commitTransaction();
-        session.endSession();
-
-        await redis.del(`user:${userId}:kyc`);
-
-        res.status(201).json({
-          status: 'success',
-          data: {
-            kycId: kycRecord[0]._id,
-            status: facialMatch.autoApproved ? 'verified' : 'pending',
-            verificationData: facialMatch.data
-          }
-        });
-
-        await logActivity('kyc-facial-submitted', 'kyc', kycRecord[0]._id, userId, 'User', req);
-        
-        if (!facialMatch.autoApproved) {
-          await notifyAdmins('New Facial Verification', `User ${userId} has submitted facial verification for manual review.`);
-        }
-
-      } catch (dbError) {
-        await session.abortTransaction();
-        session.endSession();
-        if (imagePath) fs.unlinkSync(imagePath);
-        throw dbError;
-      }
-    } catch (err) {
-      console.error('KYC Facial verification error:', err);
-      res.status(500).json({
-        status: 'error',
-        message: err.message || 'An error occurred during facial verification'
-      });
-    }
-  }
-);
-
-// Password Change Endpoint
-app.put('/api/users/password', 
-  protect,
-  [
-    body('currentPassword').notEmpty().withMessage('Current password is required'),
-    body('newPassword').isLength({ min: 12 }).withMessage('Password must be at least 12 characters')
-      .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
-      .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
-      .matches(/[0-9]/).withMessage('Password must contain at least one number')
-      .matches(/[^A-Za-z0-9]/).withMessage('Password must contain at least one special character')
-      .not().matches(/(.)\1{3,}/).withMessage('Password contains too many repeated characters')
-      .custom((value, { req }) => {
-        if (value.toLowerCase().includes(req.user.email.split('@')[0].toLowerCase())) {
-          throw new Error('Password cannot contain your email username');
-        }
-        return true;
-      })
-  ],
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'fail',
-        errors: errors.array()
-      });
-    }
-
-    try {
-      const { currentPassword, newPassword } = req.body;
-      const userId = req.user.id;
-
-      const user = await User.findById(userId).select('+password +passwordHistory');
-      if (!user) {
-        return res.status(404).json({
-          status: 'fail',
-          message: 'User not found'
-        });
-      }
-
-      // Verify current password
-      if (!(await bcrypt.compare(currentPassword, user.password))) {
-        return res.status(401).json({
-          status: 'fail',
-          message: 'Current password is incorrect'
-        });
-      }
-
-      // Check against password history (last 5 passwords)
-      const isUsed = await Promise.all(
-        user.passwordHistory.slice(0, 5).map(async oldHash => {
-          return await bcrypt.compare(newPassword, oldHash);
-        })
-      );
-
-      if (isUsed.some(match => match)) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'You cannot reuse a previous password'
-        });
-      }
-
-      // Update password
-      const newHashedPassword = await bcrypt.hash(newPassword, 12);
-      
-      const session = await mongoose.startSession();
-      session.startTransaction();
-
-      try {
-        user.password = newHashedPassword;
-        user.passwordChangedAt = Date.now();
-        user.passwordHistory.unshift(newHashedPassword);
-        if (user.passwordHistory.length > 5) {
-          user.passwordHistory = user.passwordHistory.slice(0, 5);
-        }
-
-        // Invalidate all active sessions except current one
-        await Session.deleteMany({ 
-          userId, 
-          _id: { $ne: req.session.id } 
-        }).session(session);
-
-        await user.save({ session });
-        await session.commitTransaction();
-        session.endSession();
-
-        // Invalidate any cached user data
-        await redis.del(`user:${userId}`);
-
-        // Send password change notification
-        await sendPasswordChangeNotification(user.email, user.firstName);
-
-        res.status(200).json({
-          status: 'success',
-          message: 'Password updated successfully'
-        });
-
-        await logActivity('password-changed', 'user', userId, userId, 'User', req);
-
-      } catch (dbError) {
-        await session.abortTransaction();
-        session.endSession();
-        throw dbError;
-      }
-    } catch (err) {
-      console.error('Password change error:', err);
-      res.status(500).json({
-        status: 'error',
-        message: 'An error occurred while changing password'
-      });
-    }
-  }
-);
-
-// Notification Preferences Endpoints
-const updateNotificationPreferences = async (userId, type, preferences) => {
-  const updatePath = `preferences.notifications.${type}`;
-  
-  const session = await mongoose.startSession();
-  session.startTransaction();
 
   try {
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { $set: { [updatePath]: preferences } },
-      { new: true, session }
-    );
+    const { documentType, documentNumber, expiryDate } = req.body;
+    const documentFront = req.files['documentFront'] ? req.files['documentFront'][0].path : null;
+    const documentBack = req.files['documentBack'] ? req.files['documentBack'][0].path : null;
+
+    if (!documentFront) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Front document is required'
+      });
+    }
+
+    // Check if user already has pending or approved identity verification
+    const existingKYC = await KYC.findOne({
+      user: req.user.id,
+      type: 'identity',
+      status: { $in: ['pending', 'approved'] }
+    });
+
+    if (existingKYC) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'You already have a pending or approved identity verification'
+      });
+    }
+
+    // Create KYC record
+    const kyc = await KYC.create({
+      user: req.user.id,
+      type: 'identity',
+      documentType,
+      documentNumber,
+      expiryDate: new Date(expiryDate),
+      documentFront,
+      documentBack,
+      status: 'pending'
+    });
+
+    // Update user's KYC status
+    await User.findByIdAndUpdate(req.user.id, {
+      'kycStatus.identity': 'pending',
+      'kycDocuments.identityFront': documentFront,
+      'kycDocuments.identityBack': documentBack || null
+    });
+
+    res.status(201).json({
+      status: 'success',
+      data: {
+        kyc: {
+          id: kyc._id,
+          type: kyc.type,
+          status: kyc.status,
+          createdAt: kyc.createdAt
+        }
+      }
+    });
+
+    await logActivity('submit-identity-kyc', 'kyc', kyc._id, req.user.id, 'User', req);
+  } catch (err) {
+    console.error('Identity KYC submission error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while submitting identity verification'
+    });
+  }
+});
+
+app.post('/api/users/kyc/address', protect, upload.single('document'), [
+  body('documentType').isIn(['utility_bill', 'bank_statement', 'government_letter']).withMessage('Invalid document type'),
+  body('issueDate').isISO8601().withMessage('Invalid issue date format')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { documentType, issueDate } = req.body;
+    const document = req.file ? req.file.path : null;
+
+    if (!document) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Document is required'
+      });
+    }
+
+    // Check if user already has pending or approved address verification
+    const existingKYC = await KYC.findOne({
+      user: req.user.id,
+      type: 'address',
+      status: { $in: ['pending', 'approved'] }
+    });
+
+    if (existingKYC) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'You already have a pending or approved address verification'
+      });
+    }
+
+    // Create KYC record
+    const kyc = await KYC.create({
+      user: req.user.id,
+      type: 'address',
+      documentType,
+      issueDate: new Date(issueDate),
+      document,
+      status: 'pending'
+    });
+
+    // Update user's KYC status
+    await User.findByIdAndUpdate(req.user.id, {
+      'kycStatus.address': 'pending',
+      'kycDocuments.proofOfAddress': document
+    });
+
+    res.status(201).json({
+      status: 'success',
+      data: {
+        kyc: {
+          id: kyc._id,
+          type: kyc.type,
+          status: kyc.status,
+          createdAt: kyc.createdAt
+        }
+      }
+    });
+
+    await logActivity('submit-address-kyc', 'kyc', kyc._id, req.user.id, 'User', req);
+  } catch (err) {
+    console.error('Address KYC submission error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while submitting address verification'
+    });
+  }
+});
+
+app.post('/api/users/kyc/facial', protect, upload.single('selfie'), async (req, res) => {
+  try {
+    const selfie = req.file ? req.file.path : null;
+
+    if (!selfie) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Selfie is required'
+      });
+    }
+
+    // Check if user already has pending or approved facial verification
+    const existingKYC = await KYC.findOne({
+      user: req.user.id,
+      type: 'facial',
+      status: { $in: ['pending', 'approved'] }
+    });
+
+    if (existingKYC) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'You already have a pending or approved facial verification'
+      });
+    }
+
+    // Create KYC record
+    const kyc = await KYC.create({
+      user: req.user.id,
+      type: 'facial',
+      selfie,
+      status: 'pending'
+    });
+
+    // Update user's KYC status
+    await User.findByIdAndUpdate(req.user.id, {
+      'kycStatus.facial': 'pending',
+      'kycDocuments.selfie': selfie
+    });
+
+    res.status(201).json({
+      status: 'success',
+      data: {
+        kyc: {
+          id: kyc._id,
+          type: kyc.type,
+          status: kyc.status,
+          createdAt: kyc.createdAt
+        }
+      }
+    });
+
+    await logActivity('submit-facial-kyc', 'kyc', kyc._id, req.user.id, 'User', req);
+  } catch (err) {
+    console.error('Facial KYC submission error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while submitting facial verification'
+    });
+  }
+});
+
+app.get('/api/users/kyc/status', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('kycStatus kycDocuments');
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        kycStatus: user.kycStatus,
+        documents: {
+          identityFront: user.kycDocuments.identityFront,
+          identityBack: user.kycDocuments.identityBack,
+          proofOfAddress: user.kycDocuments.proofOfAddress,
+          selfie: user.kycDocuments.selfie
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Get KYC status error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching KYC status'
+    });
+  }
+});
+
+
+
+
+app.put('/api/users/password', protect, [
+  body('currentPassword').notEmpty().withMessage('Current password is required'),
+  body('newPassword').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+    .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
+    .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
+    .matches(/[0-9]/).withMessage('Password must contain at least one number')
+    .matches(/[^A-Za-z0-9]/).withMessage('Password must contain at least one special character'),
+  body('confirmPassword').custom((value, { req }) => {
+    if (value !== req.body.newPassword) {
+      throw new Error('Passwords do not match');
+    }
+    return true;
+  })
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const user = await User.findById(req.user.id).select('+password');
+
+    // Verify current password
+    if (!(await bcrypt.compare(currentPassword, user.password))) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Current password is incorrect'
+      });
+    }
+
+    // Check if new password is same as current password
+    if (await bcrypt.compare(newPassword, user.password)) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'New password must be different from current password'
+      });
+    }
+
+    // Update password
+    user.password = await bcrypt.hash(newPassword, 12);
+    user.passwordChangedAt = Date.now();
+    await user.save();
+
+    // Send password change notification
+    const message = `Your BitHash account password was changed on ${new Date().toLocaleString()}. If you didn't make this change, please contact support immediately.`;
+    await sendEmail({
+      email: user.email,
+      subject: 'Password Changed',
+      message,
+      html: `<p>${message}</p>`
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Password updated successfully'
+    });
+
+    await logActivity('change-password', 'user', user._id, user._id, 'User', req);
+  } catch (err) {
+    console.error('Password change error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while changing password'
+    });
+  }
+});
+
+
+
+
+
+app.put('/api/users/notifications/email', protect, [
+  body('accountActivity').isBoolean().withMessage('Account activity preference must be boolean'),
+  body('investmentUpdates').isBoolean().withMessage('Investment updates preference must be boolean'),
+  body('promotionalOffers').isBoolean().withMessage('Promotional offers preference must be boolean')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { accountActivity, investmentUpdates, promotionalOffers } = req.body;
+
+    await User.findByIdAndUpdate(req.user.id, {
+      'preferences.notifications.email': {
+        accountActivity,
+        investmentUpdates,
+        promotionalOffers
+      }
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Email notification preferences updated'
+    });
+
+    await logActivity('update-email-prefs', 'user', req.user.id, req.user.id, 'User', req, {
+      accountActivity,
+      investmentUpdates,
+      promotionalOffers
+    });
+  } catch (err) {
+    console.error('Update email preferences error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while updating email preferences'
+    });
+  }
+});
+
+app.put('/api/users/notifications/sms', protect, [
+  body('securityAlerts').isBoolean().withMessage('Security alerts preference must be boolean'),
+  body('withdrawalConfirmations').isBoolean().withMessage('Withdrawal confirmations preference must be boolean'),
+  body('marketingMessages').isBoolean().withMessage('Marketing messages preference must be boolean')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { securityAlerts, withdrawalConfirmations, marketingMessages } = req.body;
+
+    await User.findByIdAndUpdate(req.user.id, {
+      'preferences.notifications.sms': {
+        securityAlerts,
+        withdrawalConfirmations,
+        marketingMessages
+      }
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'SMS notification preferences updated'
+    });
+
+    await logActivity('update-sms-prefs', 'user', req.user.id, req.user.id, 'User', req, {
+      securityAlerts,
+      withdrawalConfirmations,
+      marketingMessages
+    });
+  } catch (err) {
+    console.error('Update SMS preferences error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while updating SMS preferences'
+    });
+  }
+});
+
+app.put('/api/users/notifications/push', protect, [
+  body('accountActivity').isBoolean().withMessage('Account activity preference must be boolean'),
+  body('investmentUpdates').isBoolean().withMessage('Investment updates preference must be boolean'),
+  body('marketAlerts').isBoolean().withMessage('Market alerts preference must be boolean')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { accountActivity, investmentUpdates, marketAlerts } = req.body;
+
+    await User.findByIdAndUpdate(req.user.id, {
+      'preferences.notifications.push': {
+        accountActivity,
+        investmentUpdates,
+        marketAlerts
+      }
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Push notification preferences updated'
+    });
+
+    await logActivity('update-push-prefs', 'user', req.user.id, req.user.id, 'User', req, {
+      accountActivity,
+      investmentUpdates,
+      marketAlerts
+    });
+  } catch (err) {
+    console.error('Update push preferences error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while updating push preferences'
+    });
+  }
+});
+
+app.get('/api/users/notifications/preferences', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('preferences.notifications');
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        email: user.preferences.notifications.email,
+        sms: user.preferences.notifications.sms,
+        push: user.preferences.notifications.push
+      }
+    });
+  } catch (err) {
+    console.error('Get notification preferences error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching notification preferences'
+    });
+  }
+});
+
+
+
+
+app.post('/api/users/api-keys', protect, [
+  body('name').trim().notEmpty().withMessage('API key name is required').escape(),
+  body('permissions').isArray().withMessage('Permissions must be an array'),
+  body('permissions.*').isIn(['read', 'trade', 'withdraw', 'market_data']).withMessage('Invalid permission'),
+  body('expiresIn').optional().isInt({ min: 1 }).withMessage('Expiration must be a positive number')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { name, permissions, expiresIn } = req.body;
+    const user = await User.findById(req.user.id);
+
+    // Check if API key with same name already exists
+    const existingKey = user.apiKeys.find(key => key.name === name);
+    if (existingKey) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'An API key with this name already exists'
+      });
+    }
+
+    // Generate API key
+    const apiKey = generateApiKey();
+    const hashedKey = crypto.createHash('sha256').update(apiKey).digest('hex');
+    
+    // Calculate expiration date
+    const expiresAt = expiresIn ? 
+      new Date(Date.now() + expiresIn * 24 * 60 * 60 * 1000) : 
+      null;
+
+    // Add API key to user
+    user.apiKeys.push({
+      name,
+      key: hashedKey,
+      permissions,
+      expiresAt,
+      createdAt: new Date()
+    });
+
+    await user.save();
+
+    // Return the plaintext API key (only time it will be visible)
+    res.status(201).json({
+      status: 'success',
+      data: {
+        apiKey: {
+          name,
+          key: apiKey,
+          permissions,
+          expiresAt
+        }
+      }
+    });
+
+    await logActivity('create-api-key', 'user', user._id, user._id, 'User', req, { name, permissions });
+  } catch (err) {
+    console.error('Create API key error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while creating API key'
+    });
+  }
+});
+
+app.get('/api/users/api-keys', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('apiKeys');
+    
+    // Don't return the actual keys, just metadata
+    const apiKeys = user.apiKeys.map(key => ({
+      id: key._id,
+      name: key.name,
+      permissions: key.permissions,
+      createdAt: key.createdAt,
+      expiresAt: key.expiresAt,
+      isActive: key.isActive
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        apiKeys
+      }
+    });
+  } catch (err) {
+    console.error('Get API keys error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching API keys'
+    });
+  }
+});
+
+app.delete('/api/users/api-keys/:id', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    
+    // Find and remove the API key
+    const keyIndex = user.apiKeys.findIndex(key => key._id.toString() === req.params.id);
+    if (keyIndex === -1) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'API key not found'
+      });
+    }
+
+    user.apiKeys.splice(keyIndex, 1);
+    await user.save();
+
+    res.status(200).json({
+      status: 'success',
+      message: 'API key revoked successfully'
+    });
+
+    await logActivity('revoke-api-key', 'user', user._id, user._id, 'User', req, { apiKeyId: req.params.id });
+  } catch (err) {
+    console.error('Revoke API key error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while revoking API key'
+    });
+  }
+});
+
+
+
+
+app.get('/api/users/profile', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+      .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v -twoFactorAuth.secret -apiKeys');
 
     if (!user) {
-      throw new Error('User not found');
-    }
-
-    await session.commitTransaction();
-    session.endSession();
-
-    // Invalidate cached preferences
-    await redis.del(`user:${userId}:preferences`);
-
-    return user;
-  } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
-    throw err;
-  }
-};
-
-// Email Notification Preferences
-app.put('/api/users/notifications/email', 
-  protect,
-  [
-    body('accountActivity').isBoolean().withMessage('Account activity preference must be boolean'),
-    body('investmentUpdates').isBoolean().withMessage('Investment updates preference must be boolean'),
-    body('promotionalOffers').isBoolean().withMessage('Promotional offers preference must be boolean')
-  ],
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
+      return res.status(404).json({
         status: 'fail',
-        errors: errors.array()
+        message: 'User not found'
       });
     }
 
-    try {
-      const { accountActivity, investmentUpdates, promotionalOffers } = req.body;
-      const userId = req.user.id;
-
-      const user = await updateNotificationPreferences(userId, 'email', {
-        accountActivity,
-        investmentUpdates,
-        promotionalOffers
-      });
-
-      res.status(200).json({
-        status: 'success',
-        data: {
-          email: user.preferences.notifications.email
-        }
-      });
-
-      await logActivity('update-email-preferences', 'user', userId, userId, 'User', req, {
-        accountActivity,
-        investmentUpdates,
-        promotionalOffers
-      });
-
-    } catch (err) {
-      console.error('Update email preferences error:', err);
-      res.status(500).json({
-        status: 'error',
-        message: 'An error occurred while updating email preferences'
-      });
-    }
-  }
-);
-
-// SMS Notification Preferences
-app.put('/api/users/notifications/sms', 
-  protect,
-  [
-    body('securityAlerts').isBoolean().withMessage('Security alerts preference must be boolean'),
-    body('withdrawalConfirmations').isBoolean().withMessage('Withdrawal confirmations preference must be boolean'),
-    body('marketingMessages').isBoolean().withMessage('Marketing messages preference must be boolean')
-  ],
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'fail',
-        errors: errors.array()
-      });
-    }
-
-    try {
-      const { securityAlerts, withdrawalConfirmations, marketingMessages } = req.body;
-      const userId = req.user.id;
-
-      const user = await updateNotificationPreferences(userId, 'sms', {
-        securityAlerts,
-        withdrawalConfirmations,
-        marketingMessages
-      });
-
-      res.status(200).json({
-        status: 'success',
-        data: {
-          sms: user.preferences.notifications.sms
-        }
-      });
-
-      await logActivity('update-sms-preferences', 'user', userId, userId, 'User', req, {
-        securityAlerts,
-        withdrawalConfirmations,
-        marketingMessages
-      });
-
-    } catch (err) {
-      console.error('Update SMS preferences error:', err);
-      res.status(500).json({
-        status: 'error',
-        message: 'An error occurred while updating SMS preferences'
-      });
-    }
-  }
-);
-
-// Push Notification Preferences
-app.put('/api/users/notifications/push', 
-  protect,
-  [
-    body('accountActivity').isBoolean().withMessage('Account activity preference must be boolean'),
-    body('investmentUpdates').isBoolean().withMessage('Investment updates preference must be boolean'),
-    body('marketAlerts').isBoolean().withMessage('Market alerts preference must be boolean')
-  ],
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'fail',
-        errors: errors.array()
-      });
-    }
-
-    try {
-      const { accountActivity, investmentUpdates, marketAlerts } = req.body;
-      const userId = req.user.id;
-
-      const user = await updateNotificationPreferences(userId, 'push', {
-        accountActivity,
-        investmentUpdates,
-        marketAlerts
-      });
-
-      res.status(200).json({
-        status: 'success',
-        data: {
-          push: user.preferences.notifications.push
-        }
-      });
-
-      await logActivity('update-push-preferences', 'user', userId, userId, 'User', req, {
-        accountActivity,
-        investmentUpdates,
-        marketAlerts
-      });
-
-    } catch (err) {
-      console.error('Update push preferences error:', err);
-      res.status(500).json({
-        status: 'error',
-        message: 'An error occurred while updating push notification preferences'
-      });
-    }
-  }
-);
-
-// API Key Creation Endpoint
-app.post('/api/users/api-keys', 
-  protect,
-  [
-    body('name').trim().notEmpty().withMessage('API key name is required')
-      .isLength({ max: 50 }).withMessage('Name cannot exceed 50 characters')
-      .matches(/^[a-zA-Z0-9 _-]+$/).withMessage('Name contains invalid characters'),
-    body('permissions').isArray({ min: 1 }).withMessage('At least one permission is required'),
-    body('permissions.*').isIn(['read', 'trade', 'market']).withMessage('Invalid permission type'),
-    body('expiryDays').optional().isInt({ min: 1, max: 365 }).withMessage('Expiry must be between 1 and 365 days')
-  ],
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'fail',
-        errors: errors.array()
-      });
-    }
-
-    try {
-      const { name, permissions, expiryDays } = req.body;
-      const userId = req.user.id;
-
-      // Check if user already has too many active API keys
-      const apiKeyCount = await User.countDocuments({
-        _id: userId,
-        'apiKeys.isActive': true
-      });
-
-      if (apiKeyCount >= 10) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'Maximum number of active API keys (10) reached'
-        });
-      }
-
-      // Generate API key
-      const apiKey = crypto.randomBytes(32).toString('hex');
-      const hashedKey = crypto.createHash('sha256').update(apiKey).digest('hex');
-      
-      // Calculate expiry date
-      const expiresAt = expiryDays ? 
-        new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000) : 
-        null;
-
-      const session = await mongoose.startSession();
-      session.startTransaction();
-
-      try {
-        const user = await User.findByIdAndUpdate(
-          userId,
-          {
-            $push: {
-              apiKeys: {
-                name,
-                key: hashedKey,
-                permissions,
-                expiresAt,
-                isActive: true
-              }
-            }
-          },
-          { new: true, session }
-        );
-
-        if (!user) {
-          throw new Error('User not found');
-        }
-
-        await session.commitTransaction();
-        session.endSession();
-
-        // Invalidate any cached API keys
-        await redis.del(`user:${userId}:api-keys`);
-
-        // Return the plaintext key (only shown once)
-        res.status(201).json({
-          status: 'success',
-          data: {
-            apiKey: {
-              id: user.apiKeys[user.apiKeys.length - 1]._id,
-              name,
-              key: apiKey, // Only time the full key is returned
-              permissions,
-              expiresAt,
-              isActive: true
-            }
-          }
-        });
-
-        await logActivity('api-key-created', 'api-key', user.apiKeys[user.apiKeys.length - 1]._id, userId, 'User', req, {
-          name,
-          permissions
-        });
-
-        // Send email notification about new API key
-        await sendApiKeyCreationNotification(user.email, user.firstName, name);
-
-      } catch (dbError) {
-        await session.abortTransaction();
-        session.endSession();
-        throw dbError;
-      }
-    } catch (err) {
-      console.error('API key creation error:', err);
-      res.status(500).json({
-        status: 'error',
-        message: err.message || 'An error occurred while creating API key'
-      });
-    }
-  }
-);
-
-// Helper Functions
-async function verifyFacialImage(imagePath, userId) {
-  // In production, integrate with your facial recognition service
-  // This is a mock implementation - replace with actual service integration
-  
-  try {
-    // 1. Check image quality
-    const imageStats = await sharp(imagePath).stats();
-    if (imageStats.entropy < 7) { // Low entropy = poor quality
-      return { success: false, message: 'Low quality image - please provide a clearer photo' };
-    }
-
-    // 2. Check if face is detected (mock)
-    const hasFace = Math.random() > 0.1; // 90% chance of "detecting" a face in mock
-    
-    if (!hasFace) {
-      return { success: false, message: 'No face detected - please ensure your face is clearly visible' };
-    }
-
-    // 3. If user has previous facial data, compare (mock)
-    const user = await User.findById(userId).select('kycDocuments.selfie');
-    if (user.kycDocuments?.selfie) {
-      const isMatch = Math.random() > 0.2; // 80% chance of matching in mock
-      if (!isMatch) {
-        return { success: false, message: 'Face does not match previous verification' };
-      }
-    }
-
-    // 4. Check against blacklists (would call external service in production)
-    const isBlacklisted = false; // Would call external service
-    
-    if (isBlacklisted) {
-      return { 
-        success: false, 
-        message: 'Verification failed', 
-        autoApproved: false,
-        requiresManualReview: true
-      };
-    }
-
-    // In production, you would:
-    // - Call facial recognition API
-    // - Store verification metadata
-    // - Implement liveness detection
-    // - Potentially auto-approve if confidence is high
-
-    return {
-      success: true,
-      autoApproved: Math.random() > 0.3, // 70% auto-approval in mock
+    res.status(200).json({
+      status: 'success',
       data: {
-        confidence: 0.95, // Mock confidence score
-        liveness: 'high', // Mock liveness result
-        verificationId: uuidv4() // Mock verification ID
+        user
       }
-    };
-
+    });
   } catch (err) {
-    console.error('Facial verification error:', err);
-    return { success: false, message: 'Facial verification service unavailable' };
+    console.error('Get user profile error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching user profile'
+    });
   }
-}
+});
 
-async function notifyAdmins(subject, message) {
-  // In production, implement your admin notification system
-  // This could be emails, Slack messages, etc.
+app.put('/api/users/profile', protect, [
+  body('firstName').optional().trim().notEmpty().withMessage('First name cannot be empty').escape(),
+  body('lastName').optional().trim().notEmpty().withMessage('Last name cannot be empty').escape(),
+  body('phone').optional().trim().isMobilePhone().withMessage('Invalid phone number').escape(),
+  body('country').optional().trim().escape()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
   try {
-    const admins = await Admin.find({}).select('email');
-    await Promise.all(admins.map(admin => {
-      return sendEmail({
-        email: admin.email,
-        subject: `[Action Required] ${subject}`,
-        message: `${message}\n\nPlease review in the admin panel.`,
-        html: `<p>${message}</p><p>Please review in the admin panel.</p>`
+    const { firstName, lastName, phone, country } = req.body;
+    const updates = {};
+
+    if (firstName) updates.firstName = firstName;
+    if (lastName) updates.lastName = lastName;
+    if (phone) updates.phone = phone;
+    if (country) updates.country = country;
+
+    const user = await User.findByIdAndUpdate(req.user.id, updates, {
+      new: true,
+      runValidators: true
+    }).select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v -twoFactorAuth.secret -apiKeys');
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        user
+      }
+    });
+
+    await logActivity('update-profile', 'user', user._id, user._id, 'User', req, updates);
+  } catch (err) {
+    console.error('Update profile error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while updating profile'
+    });
+  }
+});
+
+app.put('/api/users/address', protect, [
+  body('street').optional().trim().escape(),
+  body('city').optional().trim().escape(),
+  body('state').optional().trim().escape(),
+  body('postalCode').optional().trim().escape(),
+  body('country').optional().trim().escape()
+], async (req, res) => {
+  try {
+    const { street, city, state, postalCode, country } = req.body;
+    const updates = { address: {} };
+
+    if (street) updates.address.street = street;
+    if (city) updates.address.city = city;
+    if (state) updates.address.state = state;
+    if (postalCode) updates.address.postalCode = postalCode;
+    if (country) updates.address.country = country;
+
+    const user = await User.findByIdAndUpdate(req.user.id, updates, {
+      new: true,
+      runValidators: true
+    }).select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v -twoFactorAuth.secret -apiKeys');
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        user
+      }
+    });
+
+    await logActivity('update-address', 'user', user._id, user._id, 'User', req, updates);
+  } catch (err) {
+    console.error('Update address error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while updating address'
+    });
+  }
+});
+
+
+
+
+app.get('/api/users/two-factor', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('twoFactorAuth');
+    
+    const methods = [
+      {
+        id: 'authenticator',
+        name: 'Authenticator App',
+        description: 'Use an authenticator app like Google Authenticator or Authy',
+        active: user.twoFactorAuth.enabled,
+        type: 'authenticator'
+      },
+      {
+        id: 'sms',
+        name: 'SMS Verification',
+        description: 'Receive verification codes via SMS',
+        active: false, // SMS 2FA would require additional setup
+        type: 'sms'
+      }
+    ];
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        methods
+      }
+    });
+  } catch (err) {
+    console.error('Get 2FA methods error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching 2FA methods'
+    });
+  }
+});
+
+app.post('/api/users/two-factor/setup', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
+
+    if (user.twoFactorAuth.enabled) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Two-factor authentication is already enabled'
       });
+    }
+
+    const secret = generateTOTPSecret();
+    user.twoFactorAuth.secret = secret.base32;
+    await user.save();
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        secret: secret.base32,
+        otpauthUrl: secret.otpauth_url,
+        qrCodeUrl: `https://chart.googleapis.com/chart?chs=200x200&chld=M|0&cht=qr&chl=${encodeURIComponent(secret.otpauth_url)}`
+      }
+    });
+  } catch (err) {
+    console.error('Setup 2FA error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while setting up two-factor authentication'
+    });
+  }
+});
+
+app.post('/api/users/two-factor/verify', protect, [
+  body('token').notEmpty().withMessage('Token is required'),
+  body('secret').optional().isLength({ min: 32 }).withMessage('Invalid secret')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { token, secret } = req.body;
+    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
+
+    // Use provided secret or the one stored in user document
+    const verificationSecret = secret || user.twoFactorAuth.secret;
+    if (!verificationSecret) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Two-factor authentication is not set up'
+      });
+    }
+
+    const isValidToken = verifyTOTP(token, verificationSecret);
+    if (!isValidToken) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Invalid verification code'
+      });
+    }
+
+    // If using a new secret (from setup), enable 2FA
+    if (secret && secret === user.twoFactorAuth.secret) {
+      user.twoFactorAuth.enabled = true;
+      await user.save();
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Verification successful'
+    });
+  } catch (err) {
+    console.error('Verify 2FA error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while verifying two-factor authentication'
+    });
+  }
+});
+
+app.post('/api/users/two-factor/disable', protect, [
+  body('token').notEmpty().withMessage('Token is required')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { token } = req.body;
+    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
+
+    if (!user.twoFactorAuth.enabled || !user.twoFactorAuth.secret) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Two-factor authentication is not enabled'
+      });
+    }
+
+    const isValidToken = verifyTOTP(token, user.twoFactorAuth.secret);
+    if (!isValidToken) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Invalid verification code'
+      });
+    }
+
+    user.twoFactorAuth.enabled = false;
+    user.twoFactorAuth.secret = undefined;
+    await user.save();
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Two-factor authentication disabled successfully'
+    });
+
+    await logActivity('disable-2fa', 'user', user._id, user._id, 'User', req);
+  } catch (err) {
+    console.error('Disable 2FA error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while disabling two-factor authentication'
+    });
+  }
+});
+
+
+
+app.get('/api/users/activity', protect, async (req, res) => {
+  try {
+    const { limit = 20, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const activities = await SystemLog.find({ 
+      performedBy: req.user.id,
+      performedByModel: 'User'
+    })
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(parseInt(limit));
+
+    const total = await SystemLog.countDocuments({ 
+      performedBy: req.user.id,
+      performedByModel: 'User'
+    });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        activities,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (err) {
+    console.error('Get user activity error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching user activity'
+    });
+  }
+});
+
+app.get('/api/users/devices', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('loginHistory');
+    const currentIp = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+
+    const devices = user.loginHistory.map(login => ({
+      id: login._id,
+      ip: login.ip,
+      device: login.device,
+      location: login.location,
+      timestamp: login.timestamp,
+      current: login.ip === currentIp
     }));
-  } catch (err) {
-    console.error('Admin notification error:', err);
-    // Fail silently - admin notifications shouldn't block user flow
-  }
-}
 
-async function sendPasswordChangeNotification(email, name) {
-  try {
-    await sendEmail({
-      email,
-      subject: 'Your password has been changed',
-      message: `Hi ${name},\n\nThis is to confirm that your password was recently changed. If you didn't make this change, please contact our support team immediately.`,
-      html: `<p>Hi ${name},</p><p>This is to confirm that your password was recently changed. If you didn't make this change, please contact our support team immediately.</p>`
+    res.status(200).json({
+      status: 'success',
+      data: {
+        devices
+      }
     });
   } catch (err) {
-    console.error('Password change notification error:', err);
-    // Fail silently - notification shouldn't block password change
-  }
-}
-
-async function sendApiKeyCreationNotification(email, name, apiKeyName) {
-  try {
-    await sendEmail({
-      email,
-      subject: 'New API Key Created',
-      message: `Hi ${name},\n\nA new API key "${apiKeyName}" was created for your account. If you didn't create this key, please revoke it immediately and contact our support team.`,
-      html: `<p>Hi ${name},</p><p>A new API key "${apiKeyName}" was created for your account. If you didn't create this key, please revoke it immediately and contact our support team.</p>`
+    console.error('Get user devices error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching user devices'
     });
-  } catch (err) {
-    console.error('API key creation notification error:', err);
-    // Fail silently - notification shouldn't block API key creation
   }
-}
+});
+
+app.post('/api/users/devices/:id/logout', protect, async (req, res) => {
+  try {
+    const deviceId = req.params.id;
+    const user = await User.findById(req.user.id);
+
+    // Find the login session to logout
+    const sessionIndex = user.loginHistory.findIndex(
+      session => session._id.toString() === deviceId
+    );
+
+    if (sessionIndex === -1) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Device session not found'
+      });
+    }
+
+    // In a real implementation, you would invalidate the session token
+    // For this example, we'll just remove it from history
+    user.loginHistory.splice(sessionIndex, 1);
+    await user.save();
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Device logged out successfully'
+    });
+
+    await logActivity('logout-device', 'user', user._id, user._id, 'User', req, { deviceId });
+  } catch (err) {
+    console.error('Logout device error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while logging out device'
+    });
+  }
+});
+
+
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  
+  // Handle JWT errors
+  if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+    return res.status(401).json({
+      status: 'fail',
+      message: 'Invalid or expired token. Please log in again.'
+    });
+  }
+
+  // Handle validation errors
+  if (err.name === 'ValidationError') {
+    const errors = Object.values(err.errors).map(el => el.message);
+    return res.status(400).json({
+      status: 'fail',
+      message: 'Validation error',
+      errors
+    });
+  }
+
+  // Handle file upload errors
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({
+      status: 'fail',
+      message: 'File size too large'
+    });
+  }
+
+  // Handle MongoDB duplicate key errors
+  if (err.code === 11000) {
+    const field = Object.keys(err.keyValue)[0];
+    return res.status(400).json({
+      status: 'fail',
+      message: `${field} already exists`
+    });
+  }
+
+  // Default error handler
+  res.status(500).json({
+    status: 'error',
+    message: 'Something went wrong on the server'
+  });
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    status: 'fail',
+    message: 'Endpoint not found'
+  });
+});
+
 
 
 
@@ -8095,4 +8286,5 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
