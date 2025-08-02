@@ -6764,44 +6764,73 @@ app.get('/api/transactions', protect, async (req, res) => {
   }
 });
 
-// Get user investments with enhanced error handling
+
+
+
+
+// Get user investments with robust error handling
 app.get('/api/investments', protect, async (req, res) => {
     try {
-        const { status, page = 1, limit = 10 } = req.query;
+        // Validate and parse query parameters
+        const { status } = req.query;
+        let { page = 1, limit = 10 } = req.query;
+        
+        page = parseInt(page);
+        limit = parseInt(limit);
+        
+        if (isNaN(page) || page < 1) page = 1;
+        if (isNaN(limit) limit = 10;
+        limit = Math.min(Math.max(limit, 1), 100); // Clamp between 1-100
+
         const skip = (page - 1) * limit;
 
-        const query = { user: req.user.id };
-        if (status) query.status = status;
+        // Build query
+        const query = { user: req.user._id }; // Use _id instead of id for consistency
+        if (status && ['active', 'pending', 'completed'].includes(status)) {
+            query.status = status;
+        }
 
         // Get investments with plan details
         const investments = await Investment.find(query)
-            .populate('plan', 'name duration percentage')
+            .populate({
+                path: 'plan',
+                select: 'name duration percentage',
+                match: { isActive: true } // Only include active plans
+            })
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(parseInt(limit))
+            .limit(limit)
             .lean();
 
-        // Always return an array, even if empty
-        const formattedInvestments = investments.map(investment => ({
-            id: investment._id,
-            plan: investment.plan?.name || 'Unknown Plan',
-            amount: investment.amount,
-            duration: `${investment.plan?.duration || 0} hours`,
-            dailyROI: investment.plan?.percentage || 0,
-            maturityDate: investment.endDate,
-            status: investment.status,
-            daysLeft: Math.max(0, Math.ceil((investment.endDate - Date.now()) / (1000 * 60 * 60 * 24))
-        }));
+        // Format investments with proper null checks
+        const formattedInvestments = investments.map(investment => {
+            const endDate = investment.endDate || new Date();
+            const daysLeft = Math.max(0, Math.ceil((endDate - Date.now()) / (1000 * 60 * 60 * 24)));
+            
+            return {
+                id: investment._id,
+                plan: investment.plan?.name || 'Deleted Plan',
+                amount: investment.amount || 0,
+                duration: `${investment.plan?.duration || 0} hours`,
+                dailyROI: investment.plan?.percentage || 0,
+                maturityDate: endDate,
+                status: investment.status || 'unknown',
+                daysLeft
+            };
+        });
 
         const total = await Investment.countDocuments(query);
 
         res.status(200).json({
             status: 'success',
             data: {
-                investments: formattedInvestments, // Changed to nested structure
-                total,
-                page: parseInt(page),
-                pages: Math.ceil(total / limit)
+                investments: formattedInvestments,
+                pagination: {
+                    total,
+                    page,
+                    pages: Math.ceil(total / limit),
+                    limit
+                }
             }
         });
 
@@ -6810,10 +6839,21 @@ app.get('/api/investments', protect, async (req, res) => {
         res.status(500).json({
             status: 'error',
             message: 'An error occurred while fetching investments',
-            data: [] // Ensure frontend always gets iterable data
+            data: {
+                investments: [],
+                pagination: {
+                    total: 0,
+                    page: 1,
+                    pages: 0,
+                    limit: 10
+                }
+            }
         });
     }
 });
+
+
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {
