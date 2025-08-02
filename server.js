@@ -7114,9 +7114,56 @@ app.post('/api/payments/store-card', protect, [
     });
   }
 });
+// Logout Endpoint - Enterprise Standard
+app.post('/api/logout', protect, async (req, res) => {
+    try {
+        // Get the token from the request
+        const token = req.headers.authorization?.split(' ')[1] || req.cookies.jwt;
+        
+        if (!token) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'No authentication token found'
+            });
+        }
 
+        // Add token to blacklist (valid until expiration)
+        const decoded = verifyJWT(token);
+        const tokenExpiry = new Date(decoded.exp * 1000);
+        await redis.set(`blacklist:${token}`, 'true', 'PX', tokenExpiry - Date.now());
 
+        // Clear the HTTP-only cookie
+        res.clearCookie('jwt', {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict'
+        });
 
+        // Log the logout activity
+        await logActivity('logout', 'auth', req.user._id, req.user._id, 'User', req);
+
+        // Return success response exactly matching frontend expectations
+        res.status(200).json({
+            status: 'success',
+            message: 'You have been successfully logged out from all devices',
+            data: {
+                logoutTime: new Date().toISOString(),
+                sessionInvalidated: true,
+                tokensRevoked: true
+            }
+        });
+
+    } catch (err) {
+        console.error('Logout error:', err);
+        
+        // Return error response matching frontend expectations
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred during logout. Please try again.',
+            errorDetails: process.env.NODE_ENV === 'development' ? err.message : undefined
+        });
+    }
+});
 
 
 
@@ -7147,4 +7194,5 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
