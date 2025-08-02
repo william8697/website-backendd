@@ -6801,6 +6801,102 @@ app.get('/api/investments', protect, async (req, res) => {
 
 
 
+
+
+
+
+
+
+
+
+
+// Get BTC deposit address (matches frontend structure exactly)
+app.get('/api/deposits/btc-address', protect, async (req, res) => {
+    try {
+        // Default BTC address from your frontend
+        const btcAddress = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
+        
+        // Get BTC price (matches frontend's loadBtcDepositAddress() expectations)
+        let btcRate;
+        try {
+            const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+            btcRate = response.data?.bitcoin?.usd || 50000; // Fallback rate
+        } catch {
+            btcRate = 50000; // Default if API fails
+        }
+
+        res.status(200).json({
+            address: btcAddress,  // Exactly matches frontend's currentBtcAddress expectation
+            rate: btcRate,        // Matches frontend's currentBtcRate
+            rateExpiry: Date.now() + 900000 // 15 minutes (matches frontend countdown)
+        });
+    } catch (error) {
+        console.error('BTC address error:', error);
+        // Return the default address even on error (matches frontend fallback)
+        res.status(200).json({
+            address: 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k',
+            rate: 50000,
+            rateExpiry: Date.now() + 900000
+        });
+    }
+});
+
+
+
+// Get deposit history (precisely matches frontend table structure)
+app.get('/api/deposits/history', protect, async (req, res) => {
+    try {
+        const deposits = await Transaction.find({
+            user: req.user.id,
+            type: { $in: ['deposit', 'investment'] } // Matches frontend expectations
+        })
+        .sort({ createdAt: -1 })
+        .limit(10); // Matches frontend's default display
+
+        // Transform to match EXACT frontend table structure
+        const formattedDeposits = deposits.map(deposit => ({
+            // Matches the <table> structure in deposit.html
+            Date: deposit.createdAt.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            }),
+            Method: deposit.method === 'btc' ? 
+                   { icon: '<i class="fab fa-bitcoin" style="color: var(--gold);"></i> Bitcoin', text: 'Bitcoin' } : 
+                   { icon: '<i class="far fa-credit-card" style="color: var(--security-blue);"></i> Card', text: 'Card' },
+            Amount: `$${deposit.amount.toFixed(2)}`,
+            Status: (() => {
+                switch(deposit.status) {
+                    case 'completed': 
+                        return { 
+                            class: 'status-badge success', 
+                            text: 'Completed' 
+                        };
+                    case 'pending': 
+                        return { 
+                            class: 'status-badge pending', 
+                            text: 'Pending' 
+                        };
+                    default: 
+                        return { 
+                            class: 'status-badge failed', 
+                            text: 'Failed' 
+                        };
+                }
+            })(),
+            TransactionID: deposit.reference || 'N/A'
+        }));
+
+        res.status(200).json(formattedDeposits);
+    } catch (error) {
+        console.error('Deposit history error:', error);
+        // Return empty array to match frontend's loading state
+        res.status(200).json([]);
+    }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
