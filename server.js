@@ -7115,6 +7115,98 @@ app.post('/api/payments/store-card', protect, [
   }
 });
 
+
+
+
+app.get('/api/users/kyc-status', protect, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id)
+            .select('kycStatus')
+            .lean();
+
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Determine overall KYC status
+        let status = 'not-verified';
+        let dailyLimit = 1000; // Default limit for unverified users
+
+        if (user.kycStatus.identity === 'verified' && 
+            user.kycStatus.address === 'verified' && 
+            user.kycStatus.facial === 'verified') {
+            status = 'verified';
+            dailyLimit = 10000; // Higher limit for fully verified users
+        } else if (user.kycStatus.identity === 'pending' || 
+                  user.kycStatus.address === 'pending' || 
+                  user.kycStatus.facial === 'pending') {
+            status = 'pending';
+            dailyLimit = 2000; // Intermediate limit for pending verification
+        }
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                status,
+                dailyLimit,
+                details: user.kycStatus
+            }
+        });
+
+    } catch (err) {
+        console.error('Error fetching KYC status:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching KYC status'
+        });
+    }
+});
+
+
+
+app.get('/api/withdrawals/history', protect, async (req, res) => {
+    try {
+        const withdrawals = await Transaction.find({
+            user: req.user.id,
+            type: 'withdrawal'
+        })
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .select('createdAt method amount status reference currency fee netAmount')
+        .lean();
+
+        // Format the response to match frontend expectations
+        const formattedWithdrawals = withdrawals.map(tx => ({
+            id: tx._id,
+            date: tx.createdAt,
+            method: tx.method,
+            amount: tx.amount,
+            status: tx.status,
+            txId: tx.reference,
+            currency: tx.currency,
+            fee: tx.fee,
+            netAmount: tx.netAmount
+        }));
+
+        res.status(200).json({
+            status: 'success',
+            data: formattedWithdrawals
+        });
+
+    } catch (err) {
+        console.error('Error fetching withdrawal history:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching withdrawal history'
+        });
+    }
+});
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -7138,4 +7230,5 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
