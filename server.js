@@ -7166,44 +7166,39 @@ app.get('/api/users/kyc-status', protect, async (req, res) => {
 });
 
 
+
+// Add this endpoint to your server.js
 app.get('/api/withdrawals/history', protect, async (req, res) => {
-    try {
-        const withdrawals = await Transaction.find({
-            user: req.user.id,
-            type: 'withdrawal'
-        })
-        .sort({ createdAt: -1 })
-        .limit(10)
-        .select('createdAt method amount status reference currency fee netAmount processedAt')
-        .lean();
+  try {
+    // Find all withdrawal transactions for the current user
+    const withdrawals = await Transaction.find({
+      user: req.user._id,
+      type: 'withdrawal'
+    })
+    .sort({ createdAt: -1 }) // Sort by newest first
+    .limit(10) // Limit to 10 most recent withdrawals
+    .lean(); // Convert to plain JavaScript objects
 
-        // Ensure we always return an array, even if empty
-        const formattedWithdrawals = withdrawals.map(tx => ({
-            id: tx._id,
-            date: tx.createdAt || new Date(), // Fallback to current date if missing
-            method: tx.method || 'btc',       // Default to BTC if missing
-            amount: tx.amount || 0,
-            status: tx.status || 'pending',
-            txId: tx.reference || 'N/A',
-            currency: tx.currency || 'USD',
-            fee: tx.fee || 0,
-            netAmount: tx.netAmount || tx.amount || 0,
-            processedAt: tx.processedAt || null
-        }));
+    // Format the withdrawals to match the frontend's expected structure
+    const formattedWithdrawals = withdrawals.map(withdrawal => ({
+      date: withdrawal.createdAt,
+      method: withdrawal.method,
+      amount: withdrawal.amount,
+      status: withdrawal.status,
+      txId: withdrawal.reference,
+      currency: withdrawal.currency || 'USD',
+      fee: withdrawal.fee || 0,
+      netAmount: withdrawal.netAmount || withdrawal.amount
+    }));
 
-        res.status(200).json({
-            status: 'success',
-            data: formattedWithdrawals || [] // Ensure array is never undefined
-        });
-
-    } catch (err) {
-        console.error('Error fetching withdrawal history:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while fetching withdrawal history',
-            data: [] // Return empty array on error
-        });
-    }
+    res.status(200).json(formattedWithdrawals);
+  } catch (err) {
+    console.error('Error fetching withdrawal history:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch withdrawal history'
+    });
+  }
 });
 
 
@@ -7231,6 +7226,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
 
