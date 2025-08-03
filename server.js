@@ -7262,15 +7262,19 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
-// Add this endpoint to your server.js in the User Endpoints section
+// In server.js - Add this with your other routes
 app.post('/api/users/two-factor/authenticator/enable', protect, [
-  body('token').notEmpty().withMessage('Token is required')
+  body('token').notEmpty().withMessage('Verification code is required')
+    .isLength({ min: 6, max: 6 }).withMessage('Code must be 6 digits')
+    .isNumeric().withMessage('Code must contain only numbers')
 ], async (req, res) => {
   try {
+    // Validate request
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({
         status: 'fail',
+        message: 'Validation failed',
         errors: errors.array()
       });
     }
@@ -7278,6 +7282,7 @@ app.post('/api/users/two-factor/authenticator/enable', protect, [
     const { token } = req.body;
     const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
 
+    // Check if user exists
     if (!user) {
       return res.status(404).json({
         status: 'fail',
@@ -7285,6 +7290,7 @@ app.post('/api/users/two-factor/authenticator/enable', protect, [
       });
     }
 
+    // Check if already enabled
     if (user.twoFactorAuth.enabled) {
       return res.status(400).json({
         status: 'fail',
@@ -7292,59 +7298,55 @@ app.post('/api/users/two-factor/authenticator/enable', protect, [
       });
     }
 
+    // Check if secret exists
     if (!user.twoFactorAuth.secret) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Two-factor authentication is not set up'
+        message: 'Two-factor setup not completed'
       });
     }
 
-    // Verify the token with 2-step window (60 seconds before/after)
+    // Verify token
     const verified = speakeasy.totp.verify({
       secret: user.twoFactorAuth.secret,
       encoding: 'base32',
       token,
-      window: 2
+      window: 2 // Allows 1 minute before/after
     });
 
     if (!verified) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Invalid two-factor authentication token'
+        message: 'Invalid verification code'
       });
     }
 
-    // Enable 2FA for the user
+    // Enable 2FA
     user.twoFactorAuth.enabled = true;
+    
+    // Generate backup codes (exactly 8 codes as frontend expects)
+    const backupCodes = Array(8).fill().map(() => 
+      crypto.randomBytes(4).toString('hex').toUpperCase()
+    );
+    
+    // Store hashed backup codes
+    user.twoFactorAuth.backupCodes = backupCodes.map(code => 
+      crypto.createHash('sha256').update(code).digest('hex')
+    );
+    
     await user.save();
 
-    // Generate 8 backup codes (exactly what frontend expects)
-    const backupCodes = Array.from({ length: 8 }, () => {
-      return crypto.randomBytes(4).toString('hex').toUpperCase();
-    });
-
-    // Hash and store backup codes
-    user.twoFactorAuth.backupCodes = backupCodes.map(code => {
-      return crypto.createHash('sha256').update(code).digest('hex');
-    });
-    await user.save();
-
-    // Return success response exactly matching frontend expectations
+    // Return success with backup codes (frontend shows these to user)
     res.status(200).json({
       status: 'success',
       message: 'Two-factor authentication enabled successfully',
       data: {
-        backupCodes // Return plaintext codes to show user (only once)
+        backupCodes // Unhashed codes to display once
       }
     });
 
-    // Log this security activity
-    await logActivity('enable-2fa', 'user', user._id, user._id, 'User', req, {
-      method: 'authenticator'
-    });
-
   } catch (err) {
-    console.error('Enable 2FA error:', err);
+    console.error('2FA Enable Error:', err);
     res.status(500).json({
       status: 'error',
       message: 'An error occurred while enabling two-factor authentication'
@@ -7379,10 +7381,3 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
-
-
-
-
-
-
-
