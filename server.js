@@ -7265,114 +7265,6 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
-// Enable 2FA endpoint
-app.post('/api/users/two-factor/:method/enable', protect, async (req, res) => {
-  try {
-    const { method } = req.params;
-    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
-
-    if (method !== 'authenticator') {
-      return res.status(400).json({ status: 'fail', message: 'Only authenticator method supported' });
-    }
-
-    if (user.twoFactorAuth.enabled) {
-      return res.status(400).json({ status: 'fail', message: '2FA already enabled' });
-    }
-
-    if (!user.twoFactorAuth.secret) {
-      const secret = generateTOTPSecret();
-      user.twoFactorAuth.secret = secret.base32;
-    }
-
-    const otpauthUrl = speakeasy.otpauthURL({
-      secret: user.twoFactorAuth.secret,
-      label: `BitHash:${user.email}`,
-      issuer: 'BitHash'
-    });
-
-    await user.save();
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        secret: user.twoFactorAuth.secret,
-        otpauthUrl,
-        qrCodeUrl: `https://chart.googleapis.com/chart?chs=200x200&chld=M|0&cht=qr&chl=${encodeURIComponent(otpauthUrl)}`,
-        requiresVerification: true
-      }
-    });
-
-  } catch (err) {
-    res.status(500).json({ status: 'error', message: 'Error setting up 2FA' });
-  }
-});
-
-// Verify 2FA token endpoint
-app.post('/api/users/two-factor/verify', protect, [
-  body('token').notEmpty().trim().escape()
-], async (req, res) => {
-  try {
-    const { token } = req.body;
-    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
-
-    if (!user.twoFactorAuth.secret) {
-      return res.status(400).json({ status: 'fail', message: '2FA not configured' });
-    }
-
-    const valid = speakeasy.totp.verify({
-      secret: user.twoFactorAuth.secret,
-      encoding: 'base32',
-      token,
-      window: 2
-    });
-
-    if (!valid) {
-      return res.status(401).json({ status: 'fail', message: 'Invalid token' });
-    }
-
-    user.twoFactorAuth.enabled = true;
-    await user.save();
-
-    res.status(200).json({ status: 'success', message: '2FA enabled successfully' });
-
-  } catch (err) {
-    res.status(500).json({ status: 'error', message: 'Verification failed' });
-  }
-});
-
-// Disable 2FA endpoint
-app.delete('/api/users/two-factor', protect, [
-  body('token').notEmpty().trim().escape()
-], async (req, res) => {
-  try {
-    const { token } = req.body;
-    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
-
-    if (!user.twoFactorAuth.enabled) {
-      return res.status(400).json({ status: 'fail', message: '2FA not enabled' });
-    }
-
-    const valid = speakeasy.totp.verify({
-      secret: user.twoFactorAuth.secret,
-      encoding: 'base32',
-      token,
-      window: 2
-    });
-
-    if (!valid) {
-      return res.status(401).json({ status: 'fail', message: 'Invalid token' });
-    }
-
-    user.twoFactorAuth.enabled = false;
-    user.twoFactorAuth.secret = undefined;
-    await user.save();
-
-    res.status(200).json({ status: 'success', message: '2FA disabled successfully' });
-
-  } catch (err) {
-    res.status(500).json({ status: 'error', message: 'Failed to disable 2FA' });
-  }
-});
 
 
 
@@ -7405,5 +7297,6 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
