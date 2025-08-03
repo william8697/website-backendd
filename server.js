@@ -7261,25 +7261,11 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
-// Add to server.js after other KYC routes
 
-/**
- * @api {post} /api/users/kyc/facial Submit Facial Verification
- * @apiName SubmitFacialKYC
- * @apiGroup KYC
- * @apiPermission user
- * 
- * @apiHeader {String} Authorization User's JWT token
- * 
- * @apiParam {String} image Base64 encoded image of user's face
- * @apiParam {String} [documentImage] Base64 encoded image of ID document (for comparison)
- * 
- * @apiSuccess {Object} kyc KYC submission record
- * @apiSuccess {String} message Verification status message
- */
+
+// Facial KYC Verification Endpoint
 app.post('/api/users/kyc/facial', protect, [
-  body('image').notEmpty().withMessage('Facial image is required'),
-  body('documentImage').optional().notEmpty().withMessage('Document image cannot be empty if provided')
+  body('image').notEmpty().withMessage('Image is required')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -7290,146 +7276,101 @@ app.post('/api/users/kyc/facial', protect, [
   }
 
   try {
-    const { image, documentImage } = req.body;
+    const { image } = req.body;
     const user = await User.findById(req.user.id);
 
-    // Check if facial verification is already submitted
-    const existingFacialKYC = await KYC.findOne({ 
+    // Check if facial KYC is already verified
+    if (user.kycStatus.facial === 'verified') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Facial verification has already been completed'
+      });
+    }
+
+    // Check for existing pending facial KYC
+    const existingKYC = await KYC.findOne({ 
       user: user._id, 
       type: 'facial',
-      status: { $in: ['pending', 'approved'] }
+      status: 'pending'
     });
     
-    if (existingFacialKYC) {
+    if (existingKYC) {
       return res.status(400).json({
         status: 'fail',
-        message: existingFacialKYC.status === 'approved' 
-          ? 'Facial verification already completed' 
-          : 'Facial verification already submitted and pending review'
+        message: 'You already have a pending facial verification'
       });
     }
 
-    // Validate image size and format
-    if (image.length > 5 * 1024 * 1024) { // 5MB max
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Image size exceeds maximum limit of 5MB'
-      });
-    }
-
-    // Prepare Face++ API request
-    const faceppParams = {
+    // Verify with Face++ API
+    const faceppResponse = await axios.post('https://api-us.faceplusplus.com/facepp/v3/detect', {
       api_key: process.env.FACEPP_API_KEY,
       api_secret: process.env.FACEPP_API_SECRET,
       image_base64: image,
       return_landmark: 1,
       return_attributes: 'gender,age,smiling,headpose,facequality,blur,eyestatus,emotion,ethnicity,beauty,mouthstatus,eyegaze,skinstatus'
-    };
+    }, {
+      timeout: 10000 // 10 seconds timeout
+    });
 
-    // If document image is provided, add it for comparison
-    if (documentImage) {
-      faceppParams.image_base64_compare = documentImage;
-    }
-
-    // Call Face++ API for facial detection and verification
-    const faceppResponse = await axios.post('https://api-us.faceplusplus.com/facepp/v3/detect', 
-      querystring.stringify(faceppParams), {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
-        }
-      });
-
-    // Check Face++ response
+    // Validate Face++ response
     if (!faceppResponse.data.faces || faceppResponse.data.faces.length === 0) {
       return res.status(400).json({
         status: 'fail',
-        message: 'No faces detected in the image. Please upload a clear photo of your face.'
+        message: 'No face detected in the image'
       });
     }
 
-    // If comparing with document image
-    if (documentImage) {
-      if (!faceppResponse.data.faces_compare || faceppResponse.data.faces_compare.length === 0) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'No faces detected in the document image. Please upload a clear photo of your ID.'
-        });
-      }
+    if (faceppResponse.data.faces.length > 1) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Multiple faces detected. Please upload an image with only your face'
+      });
+    }
 
-      // Compare faces between selfie and document
-      const compareParams = {
+    const face = faceppResponse.data.faces[0];
+    const qualityChecks = [];
+
+    // Perform quality checks
+    if (face.attributes.blur.value > 50) {
+      qualityChecks.push('Image is too blurry');
+    }
+    if (face.attributes.facequality.value < 50) {
+      qualityChecks.push('Low image quality');
+    }
+    if (face.attributes.headpose.yaw_angle > 30 || face.attributes.headpose.pitch_angle > 30) {
+      qualityChecks.push('Face not properly aligned');
+    }
+    if (face.attributes.eyestatus.left_eye_status.no_glass_eye_close > 50 || 
+        face.attributes.eyestatus.right_eye_status.no_glass_eye_close > 50) {
+      qualityChecks.push('Eyes are closed');
+    }
+
+    if (qualityChecks.length > 0) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Image quality issues detected',
+        issues: qualityChecks
+      });
+    }
+
+    // Compare with ID document if available
+    if (user.kycDocuments.identityFront) {
+      const compareResponse = await axios.post('https://api-us.faceplusplus.com/facepp/v3/compare', {
         api_key: process.env.FACEPP_API_KEY,
         api_secret: process.env.FACEPP_API_SECRET,
-        face_token1: faceppResponse.data.faces[0].face_token,
-        face_token2: faceppResponse.data.faces_compare[0].face_token
-      };
-
-      const compareResponse = await axios.post('https://api-us.faceplusplus.com/facepp/v3/compare', 
-        querystring.stringify(compareParams), {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded'
-          }
-        });
+        image_base64_1: user.kycDocuments.identityFront,
+        image_base64_2: image
+      }, {
+        timeout: 10000 // 10 seconds timeout
+      });
 
       if (compareResponse.data.confidence < 70) {
         return res.status(400).json({
           status: 'fail',
-          message: 'Face on ID document does not match your selfie. Please ensure you are using your own ID document.'
+          message: 'Face does not match ID document',
+          confidence: compareResponse.data.confidence
         });
       }
-    }
-
-    // Check face quality
-    const face = faceppResponse.data.faces[0];
-    const attributes = face.attributes;
-
-    // Validate face quality
-    if (attributes.blur.blurness.value > 50) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Image is too blurry. Please upload a clear photo.'
-      });
-    }
-
-    if (attributes.facequality.value < 50) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Face quality is too low. Please upload a better quality photo.'
-      });
-    }
-
-    // Check for multiple faces
-    if (faceppResponse.data.faces.length > 1) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Multiple faces detected. Please upload a photo with only your face visible.'
-      });
-    }
-
-    // Check face orientation
-    if (Math.abs(attributes.headpose.yaw_angle) > 20 || 
-        Math.abs(attributes.headpose.pitch_angle) > 20 || 
-        Math.abs(attributes.headpose.roll_angle) > 20) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Face is not facing forward. Please look directly at the camera.'
-      });
-    }
-
-    // Check for occlusions
-    if (attributes.mouthstatus.surgical_mask_or_respirator > 0.5) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Face mask detected. Please remove any face coverings.'
-      });
-    }
-
-    if (attributes.eyestatus.left_eye_status.no_glass_eye_opening < 0.5 || 
-        attributes.eyestatus.right_eye_status.no_glass_eye_opening < 0.5) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Eyes are not clearly visible. Please remove glasses if wearing any.'
-      });
     }
 
     // Create KYC record
@@ -7437,61 +7378,124 @@ app.post('/api/users/kyc/facial', protect, [
       user: user._id,
       type: 'facial',
       selfie: image,
-      documentFront: documentImage || undefined,
+      status: 'pending',
       metadata: {
         faceppResponse: faceppResponse.data,
-        confidence: documentImage ? compareResponse.data.confidence : null
+        comparisonConfidence: user.kycDocuments.identityFront ? compareResponse.data.confidence : null
       }
     });
 
-    // Update user's KYC status
+    // Update user's KYC status and save selfie
     user.kycStatus.facial = 'pending';
     user.kycDocuments.selfie = image;
     await user.save();
 
-    // Send notification to admin
-    const admins = await Admin.find({ role: { $in: ['super', 'kyc'] } });
-    for (const admin of admins) {
-      admin.notifications.push({
-        title: 'New Facial Verification',
-        message: `User ${user.firstName} ${user.lastName} has submitted facial verification.`,
-        type: 'info'
-      });
-      await admin.save();
-    }
+    // Log the verification attempt
+    await logActivity('submit-facial-kyc', 'kyc', kyc._id, user._id, 'User', req, {
+      faceppResponse: faceppResponse.data,
+      comparisonConfidence: user.kycDocuments.identityFront ? compareResponse.data.confidence : null
+    });
 
     res.status(201).json({
       status: 'success',
-      data: kyc,
-      message: 'Facial verification submitted successfully and pending review'
-    });
-
-    await logActivity('submit-facial-kyc', 'kyc', kyc._id, user._id, 'User', req, {
-      hasDocumentComparison: !!documentImage,
-      confidence: documentImage ? compareResponse.data.confidence : null
+      data: {
+        kycId: kyc._id,
+        message: 'Facial verification submitted successfully',
+        confidence: user.kycDocuments.identityFront ? compareResponse.data.confidence : null,
+        faceAttributes: {
+          age: face.attributes.age.value,
+          gender: face.attributes.gender.value,
+          ethnicity: face.attributes.ethnicity.value
+        }
+      }
     });
 
   } catch (err) {
     console.error('Facial KYC error:', err);
-    
-    // Handle Face++ API errors specifically
+
+    let errorMessage = 'An error occurred during facial verification';
     if (err.response && err.response.data && err.response.data.error_message) {
-      return res.status(400).json({
-        status: 'fail',
-        message: `Face++ API error: ${err.response.data.error_message}`
-      });
+      errorMessage = err.response.data.error_message;
+    } else if (err.code === 'ECONNABORTED') {
+      errorMessage = 'Verification service timed out. Please try again.';
     }
 
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred during facial verification'
+      message: errorMessage
     });
   }
 });
 
+// Admin Facial KYC Review Endpoint
+app.post('/api/admin/kyc/facial/:id/review', adminProtect, restrictTo('super', 'kyc'), [
+  body('status').isIn(['approved', 'rejected']).withMessage('Invalid status'),
+  body('rejectionReason').optional().trim().escape()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
 
+  try {
+    const { id } = req.params;
+    const { status, rejectionReason } = req.body;
 
+    const kyc = await KYC.findByIdAndUpdate(
+      id,
+      {
+        status,
+        rejectionReason: status === 'rejected' ? rejectionReason : undefined,
+        reviewedBy: req.admin._id,
+        reviewedAt: new Date()
+      },
+      { new: true }
+    ).populate('user', 'firstName lastName email');
 
+    if (!kyc || kyc.type !== 'facial') {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Facial KYC submission not found'
+      });
+    }
+
+    // Update user's KYC status
+    const user = await User.findById(kyc.user._id);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    user.kycStatus.facial = status === 'approved' ? 'verified' : 'rejected';
+    await user.save();
+
+    // Send notification to user
+    user.notifications.push({
+      title: 'Facial Verification Status',
+      message: `Your facial verification has been ${status}. ${status === 'rejected' ? rejectionReason : ''}`,
+      type: status === 'approved' ? 'success' : 'error'
+    });
+    await user.save();
+
+    res.status(200).json({
+      status: 'success',
+      data: kyc
+    });
+
+    await logActivity('review-facial-kyc', 'kyc', kyc._id, req.admin._id, 'Admin', req, { status, rejectionReason });
+  } catch (err) {
+    console.error('Review facial KYC error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while reviewing facial verification'
+    });
+  }
+});
 
 
 
@@ -7521,6 +7525,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
 
