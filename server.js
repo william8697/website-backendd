@@ -1908,8 +1908,8 @@ const initializePlans = async () => {
     const plans = [
       {
         name: 'Starter Plan',
-        description: '20% After 10 hours',
-        percentage: 10,
+        description: '12% After 10 hours',
+        percentage: 12,
         duration: 10,
         minAmount: 100,
         maxAmount: 499,
@@ -1917,8 +1917,8 @@ const initializePlans = async () => {
       },
       {
         name: 'Gold Plan',
-        description: '40% After 24 hours',
-        percentage: 15,
+        description: '20% After 24 hours',
+        percentage: 20,
         duration: 24,
         minAmount: 500,
         maxAmount: 1999,
@@ -1926,8 +1926,8 @@ const initializePlans = async () => {
       },
       {
         name: 'Advance Plan',
-        description: '60% After 48 hours',
-        percentage: 25,
+        description: '35% After 48 hours',
+        percentage: 35,
         duration: 48,
         minAmount: 2000,
         maxAmount: 9999,
@@ -1935,8 +1935,8 @@ const initializePlans = async () => {
       },
       {
         name: 'Exclusive Plan',
-        description: '80% After 72 hours',
-        percentage: 45,
+        description: '40% After 72 hours',
+        percentage: 40,
         duration: 72,
         minAmount: 10000,
         maxAmount: 30000,
@@ -1944,7 +1944,7 @@ const initializePlans = async () => {
       },
       {
         name: 'Expert Plan',
-        description: '100% After 96 hours',
+        description: '50% After 96 hours',
         percentage: 50,
         duration: 96,
         minAmount: 50000,
@@ -7525,6 +7525,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
 
