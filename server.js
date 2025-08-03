@@ -7171,127 +7171,92 @@ app.post('/api/logout', protect, async (req, res) => {
 
 
 
-// Get user profile data
+// Add this to your server.js in the User Endpoints section
 app.get('/api/users/profile', protect, async (req, res) => {
-    try {
-        // Find the user in database and exclude sensitive fields
-        const user = await User.findById(req.user.id)
-            .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v -twoFactorAuth.secret')
-            .lean();
+  try {
+    // Fetch user data from database with proper field selection
+    const user = await User.findById(req.user.id)
+      .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v -twoFactorAuth.secret')
+      .lean();
 
-        if (!user) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'User not found'
-            });
-        }
-
-        // Format the response to match frontend expectations
-        const profileData = {
-            firstName: user.firstName,
-            lastName: user.lastName,
-            email: user.email,
-            phone: user.phone,
-            country: user.country,
-            address: user.address || {
-                street: '',
-                city: '',
-                state: '',
-                postalCode: '',
-                country: ''
-            },
-            kycStatus: user.kycStatus || {
-                identity: 'unverified',
-                address: 'unverified',
-                facial: 'unverified'
-            },
-            kycDocuments: user.kycDocuments || {
-                identityFront: '',
-                identityBack: '',
-                proofOfAddress: '',
-                selfie: ''
-            },
-            balances: user.balances || {
-                main: 0,
-                active: 0,
-                matured: 0,
-                savings: 0,
-                loan: 0
-            },
-            preferences: user.preferences || {
-                notifications: {
-                    email: true,
-                    sms: false,
-                    push: true
-                },
-                theme: 'dark'
-            }
-        };
-
-        res.status(200).json({
-            status: 'success',
-            data: profileData
-        });
-
-        await logActivity('view-profile', 'user', user._id, user._id, 'User', req);
-
-    } catch (err) {
-        console.error('Get user profile error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while fetching user data'
-        });
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
     }
+
+    // Structure response to match frontend expectations
+    const responseData = {
+      firstName: user.firstName || '',
+      lastName: user.lastName || '',
+      email: user.email || '',
+      phone: user.phone || '',
+      country: user.country || '',
+      address: {
+        street: user.address?.street || '',
+        city: user.address?.city || '',
+        state: user.address?.state || '',
+        postalCode: user.address?.postalCode || '',
+        country: user.address?.country || ''
+      },
+      balance: user.balances?.main || 0
+    };
+
+    res.status(200).json(responseData);
+
+  } catch (err) {
+    console.error('Get user profile error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching profile data'
+    });
+  }
 });
 
-
-
-// Get user two-factor authentication settings
+// Add this endpoint for two-factor authentication settings
 app.get('/api/users/two-factor', protect, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id)
-            .select('twoFactorAuth')
-            .lean();
+  try {
+    const user = await User.findById(req.user.id)
+      .select('twoFactorAuth')
+      .lean();
 
-        if (!user) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'User not found'
-            });
-        }
-
-        // Format response with available 2FA methods
-        const responseData = {
-            methods: [
-                {
-                    id: 'authenticator',
-                    name: 'Authenticator App',
-                    description: 'Use an authenticator app like Google Authenticator',
-                    type: 'authenticator',
-                    active: user.twoFactorAuth?.enabled || false
-                },
-                {
-                    id: 'sms',
-                    name: 'SMS Verification',
-                    description: 'Receive verification codes via SMS',
-                    type: 'sms',
-                    active: false // Assuming SMS 2FA is not implemented yet
-                }
-            ]
-        };
-
-        res.status(200).json({
-            status: 'success',
-            data: responseData
-        });
-
-    } catch (err) {
-        console.error('Get two-factor settings error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while fetching two-factor settings'
-        });
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
     }
+
+    // Structure response to match frontend expectations
+    const responseData = {
+      methods: [
+        {
+          id: 'authenticator',
+          name: 'Authenticator App',
+          description: 'Use an authenticator app like Google Authenticator or Authy',
+          active: user.twoFactorAuth?.enabled || false,
+          type: 'authenticator'
+        },
+        {
+          id: 'sms',
+          name: 'SMS Verification',
+          description: 'Receive verification codes via SMS',
+          active: false, // Assuming SMS 2FA isn't implemented yet
+          type: 'sms'
+        }
+      ]
+    };
+
+    res.status(200).json(responseData);
+
+  } catch (err) {
+    console.error('Get two-factor methods error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching two-factor methods'
+    });
+  }
 });
 
 
@@ -7320,6 +7285,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
 
