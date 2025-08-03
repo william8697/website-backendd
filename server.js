@@ -7206,49 +7206,53 @@ app.get('/api/users/profile', protect, async (req, res) => {
         });
     }
 });
-// Endpoint to get user's two-factor authentication settings
+
+
+// GET /api/users/two-factor - Get user's 2FA settings
 app.get('/api/users/two-factor', protect, async (req, res) => {
     try {
-        // Find user and include twoFactorAuth secret (if admin needs it)
         const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
         
         if (!user) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'User not found'
-            });
+            return res.status(404).json({ status: 'fail', message: 'User not found' });
         }
 
-        // Prepare response data
-        const responseData = {
+        // Generate new secret if none exists
+        if (!user.twoFactorAuth.secret) {
+            const secret = speakeasy.generateSecret({ length: 20 });
+            user.twoFactorAuth.secret = secret.base32;
+            await user.save();
+        }
+
+        const otpauthUrl = speakeasy.otpauthURL({
+            secret: user.twoFactorAuth.secret,
+            label: `BitHash:${user.email}`,
+            issuer: 'BitHash',
+            encoding: 'base32'
+        });
+
+        res.status(200).json({
             status: 'success',
             data: {
-                methods: [
-                    {
-                        id: 'authenticator',
-                        name: 'Authenticator App',
-                        description: 'Use an authenticator app like Google Authenticator or Authy',
-                        type: 'authenticator',
-                        active: user.twoFactorAuth.enabled,
-                        // Only include setup data if 2FA is not already enabled
-                        setupData: !user.twoFactorAuth.enabled ? {
-                            secret: user.twoFactorAuth.secret,
-                            qrCodeUrl: `https://chart.googleapis.com/chart?chs=200x200&chld=M|0&cht=qr&chl=${encodeURIComponent(`otpauth://totp/BitHash:${user.email}?secret=${user.twoFactorAuth.secret}&issuer=BitHash`)}`
-                        } : null
-                    }
-                ]
+                methods: [{
+                    id: 'authenticator',
+                    name: 'Authenticator App',
+                    description: 'Use Google Authenticator or Authy',
+                    type: 'authenticator',
+                    active: user.twoFactorAuth.enabled,
+                    setupData: !user.twoFactorAuth.enabled ? {
+                        secret: user.twoFactorAuth.secret,
+                        qrCodeUrl: `https://chart.googleapis.com/chart?chs=200x200&chld=M|0&cht=qr&chl=${encodeURIComponent(otpauthUrl)}`
+                    } : null
+                }]
             }
-        };
-
-        res.status(200).json(responseData);
-
-        await logActivity('view-2fa-settings', 'user', user._id, user._id, 'User', req);
+        });
 
     } catch (err) {
-        console.error('Get two-factor settings error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while fetching two-factor settings'
+        console.error('2FA settings error:', err);
+        res.status(500).json({ 
+            status: 'error', 
+            message: 'Failed to fetch 2FA settings' 
         });
     }
 });
@@ -7281,3 +7285,4 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
