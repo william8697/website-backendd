@@ -7166,11 +7166,15 @@ app.post('/api/logout', protect, async (req, res) => {
         });
     }
 });
-// Get user profile
-app.get('/api/users/profile', protect, async (req, res) => {
+
+
+
+
+// Get user's two-factor authentication methods
+app.get('/api/users/two-factor', protect, async (req, res) => {
     try {
         const user = await User.findById(req.user.id)
-            .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v -twoFactorAuth.secret')
+            .select('twoFactorAuth')
             .lean();
 
         if (!user) {
@@ -7180,74 +7184,33 @@ app.get('/api/users/profile', protect, async (req, res) => {
             });
         }
 
-        // Format the response to match frontend expectations
-        const profileData = {
-            firstName: user.firstName,
-            lastName: user.lastName,
-            email: user.email,
-            phone: user.phone,
-            country: user.country,
-            address: user.address || {
-                street: '',
-                city: '',
-                state: '',
-                postalCode: '',
-                country: ''
-            }
-        };
+        // Format response to match frontend expectations
+        const methods = [{
+            id: 'authenticator',
+            name: 'Authenticator App',
+            description: 'Use an authenticator app like Google Authenticator or Authy',
+            type: 'authenticator',
+            active: user.twoFactorAuth?.enabled || false
+        }, {
+            id: 'sms',
+            name: 'SMS Verification',
+            description: 'Receive verification codes via SMS',
+            type: 'sms',
+            active: false // Assuming SMS 2FA isn't implemented yet
+        }];
 
-        res.status(200).json(profileData);
+        res.status(200).json({
+            methods
+        });
 
     } catch (err) {
-        console.error('Get user profile error:', err);
+        console.error('Get 2FA methods error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching profile data'
+            message: 'An error occurred while fetching two-factor methods'
         });
     }
 });
-
-
-
-
-app.get('/api/users/two-factor', protect, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
-        if (!user) return res.status(404).json({ status: 'fail', message: 'User not found' });
-
-        // Generate secret if missing (first-time setup)
-        if (!user.twoFactorAuth.secret) {
-            const { base32: secret } = speakeasy.generateSecret({ length: 20 });
-            user.twoFactorAuth.secret = secret;
-            await user.save();
-        }
-
-        const response = {
-            status: 'success',
-            data: {
-                methods: [{
-                    id: 'authenticator',
-                    name: 'Authenticator App',
-                    description: 'Use Google Authenticator or Authy',
-                    type: 'authenticator',
-                    active: user.twoFactorAuth.enabled,
-                    ...(!user.twoFactorAuth.enabled && {
-                        setupData: {
-                            secret: user.twoFactorAuth.secret,
-                            qrCodeUrl: `https://chart.googleapis.com/chart?chs=200x200&chld=M|0&cht=qr&chl=${encodeURIComponent(`otpauth://totp/BitHash:${user.email}?secret=${user.twoFactorAuth.secret}&issuer=BitHash`)}`
-                        }
-                    })
-                }]
-            }
-        };
-
-        res.status(200).json(response);
-    } catch (err) {
-        res.status(500).json({ status: 'error', message: 'Failed to fetch 2FA settings' });
-    }
-});
-
-
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -7272,5 +7235,6 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
