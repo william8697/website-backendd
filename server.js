@@ -7114,6 +7114,8 @@ app.post('/api/payments/store-card', protect, [
     });
   }
 });
+
+
 // Logout Endpoint - Enterprise Standard
 app.post('/api/logout', protect, async (req, res) => {
     try {
@@ -7171,6 +7173,559 @@ app.post('/api/logout', protect, async (req, res) => {
 
 
 
+// Add these routes to your server.js file
+
+/**
+ * @api {get} /api/users/me Get current user profile
+ * @apiName GetUserProfile
+ * @apiGroup User
+ * @apiHeader {String} Authorization User's JWT token
+ * 
+ * @apiSuccess {Object} user User profile data
+ * @apiSuccess {String} user.id User ID
+ * @apiSuccess {String} user.firstName User's first name
+ * @apiSuccess {String} user.lastName User's last name
+ * @apiSuccess {String} user.email User's email
+ * @apiSuccess {String} user.phone User's phone number
+ * @apiSuccess {String} user.country User's country
+ * @apiSuccess {Object} user.address User's address
+ * @apiSuccess {String} user.address.street Street address
+ * @apiSuccess {String} user.address.city City
+ * @apiSuccess {String} user.address.state State/Province
+ * @apiSuccess {String} user.address.postalCode Postal code
+ * @apiSuccess {String} user.address.country Country
+ * @apiSuccess {Object} user.balances User's balances
+ * @apiSuccess {Number} user.balances.main Main balance
+ * @apiSuccess {Number} user.balances.active Active investment balance
+ * @apiSuccess {Number} user.balances.matured Matured investment balance
+ * @apiSuccess {Number} user.balances.savings Savings balance
+ * @apiSuccess {Number} user.balances.loan Loan balance
+ * @apiSuccess {Object} user.kycStatus KYC verification status
+ * @apiSuccess {String} user.kycStatus.identity Identity verification status
+ * @apiSuccess {String} user.kycStatus.address Address verification status
+ * @apiSuccess {String} user.kycStatus.facial Facial verification status
+ * @apiSuccess {String} user.kycDocuments Identity document URLs
+ * @apiSuccess {String} user.kycDocuments.identityFront Front of ID document
+ * @apiSuccess {String} user.kycDocuments.identityBack Back of ID document
+ * @apiSuccess {String} user.kycDocuments.proofOfAddress Proof of address document
+ * @apiSuccess {String} user.kycDocuments.selfie Selfie image
+ */
+app.get('/api/users/profile', protect, async (req, res) => {
+    try {
+        // Find user by ID and exclude sensitive fields
+        const user = await User.findById(req.user.id)
+            .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v -twoFactorAuth.secret -apiKeys -loginHistory -notifications')
+            .lean();
+
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Format the response to match frontend expectations
+        const responseData = {
+            status: 'success',
+            data: {
+                user: {
+                    id: user._id,
+                    firstName: user.firstName,
+                    lastName: user.lastName,
+                    email: user.email,
+                    phone: user.phone,
+                    country: user.country,
+                    address: user.address || {},
+                    balances: user.balances || {
+                        main: 0,
+                        active: 0,
+                        matured: 0,
+                        savings: 0,
+                        loan: 0
+                    },
+                    kycStatus: user.kycStatus || {
+                        identity: 'not-submitted',
+                        address: 'not-submitted',
+                        facial: 'not-submitted'
+                    },
+                    kycDocuments: user.kycDocuments || {
+                        identityFront: '',
+                        identityBack: '',
+                        proofOfAddress: '',
+                        selfie: ''
+                    }
+                }
+            }
+        };
+
+        res.status(200).json(responseData);
+
+    } catch (err) {
+        console.error('Get user profile error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching user profile'
+        });
+    }
+});
+
+/**
+ * @api {get} /api/users/two-factor Get user's two-factor authentication methods
+ * @apiName GetTwoFactorMethods
+ * @apiGroup User
+ * @apiHeader {String} Authorization User's JWT token
+ * 
+ * @apiSuccess {Object[]} methods List of 2FA methods
+ * @apiSuccess {String} methods.id Method ID
+ * @apiSuccess {String} methods.name Method name
+ * @apiSuccess {String} methods.description Method description
+ * @apiSuccess {Boolean} methods.active Whether method is active
+ * @apiSuccess {String} methods.type Method type (sms, authenticator)
+ */
+app.get('/api/users/two-factor', protect, async (req, res) => {
+    try {
+        // Find user by ID and include only necessary 2FA data
+        const user = await User.findById(req.user.id)
+            .select('twoFactorAuth')
+            .lean();
+
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Format response with available 2FA methods
+        const methods = [
+            {
+                id: 'authenticator',
+                name: 'Authenticator App',
+                description: 'Use an authenticator app like Google Authenticator or Authy',
+                active: user.twoFactorAuth?.enabled || false,
+                type: 'authenticator'
+            },
+            {
+                id: 'sms',
+                name: 'SMS Verification',
+                description: 'Receive verification codes via SMS',
+                active: false, // Assuming SMS 2FA is not implemented yet
+                type: 'sms'
+            }
+        ];
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                methods
+            }
+        });
+
+    } catch (err) {
+        console.error('Get two-factor methods error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching two-factor methods'
+        });
+    }
+});
+
+/**
+ * @api {get} /api/users/devices Get user's active devices
+ * @apiName GetUserDevices
+ * @apiGroup User
+ * @apiHeader {String} Authorization User's JWT token
+ * 
+ * @apiSuccess {Object[]} devices List of active devices
+ * @apiSuccess {String} devices.id Device ID
+ * @apiSuccess {String} devices.name Device name
+ * @apiSuccess {String} devices.browser Browser name
+ * @apiSuccess {String} devices.os Operating system
+ * @apiSuccess {String} devices.location Approximate location
+ * @apiSuccess {Date} devices.lastActive Last active timestamp
+ * @apiSuccess {Boolean} devices.current Whether this is the current device
+ */
+app.get('/api/users/devices', protect, async (req, res) => {
+    try {
+        // Find user by ID and select only login history
+        const user = await User.findById(req.user.id)
+            .select('loginHistory')
+            .lean();
+
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Get current device info
+        const currentDeviceInfo = await getUserDeviceInfo(req);
+        const currentIp = currentDeviceInfo.ip;
+
+        // Format devices data
+        const devices = user.loginHistory.map(device => ({
+            id: device._id || crypto.randomBytes(8).toString('hex'),
+            name: `${device.device.split(' ')[0]} Device`, // Simple device name
+            browser: getBrowserName(device.device),
+            os: getOSName(device.device),
+            location: device.location,
+            lastActive: device.timestamp,
+            current: device.ip === currentIp
+        }));
+
+        // Sort by most recent first
+        devices.sort((a, b) => new Date(b.lastActive) - new Date(a.lastActive));
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                devices
+            }
+        });
+
+    } catch (err) {
+        console.error('Get user devices error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching user devices'
+        });
+    }
+});
+
+/**
+ * @api {get} /api/users/activity Get user's recent activity
+ * @apiName GetUserActivity
+ * @apiGroup User
+ * @apiHeader {String} Authorization User's JWT token
+ * 
+ * @apiSuccess {Object[]} logs List of activity logs
+ * @apiSuccess {String} logs.id Log ID
+ * @apiSuccess {String} logs.type Activity type
+ * @apiSuccess {String} logs.title Activity title
+ * @apiSuccess {String} logs.description Activity description
+ * @apiSuccess {Date} logs.timestamp Activity timestamp
+ * @apiSuccess {String} logs.location Activity location
+ * @apiSuccess {Boolean} logs.suspicious Whether activity is suspicious
+ */
+app.get('/api/users/activity', protect, async (req, res) => {
+    try {
+        // Get system logs for this user
+        const logs = await SystemLog.find({ 
+            performedBy: req.user.id,
+            performedByModel: 'User'
+        })
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .lean();
+
+        // Format activity logs for frontend
+        const activityLogs = logs.map(log => ({
+            id: log._id,
+            type: log.action,
+            title: getActivityTitle(log.action),
+            description: getActivityDescription(log.action, log.entity, log.changes),
+            timestamp: log.createdAt,
+            location: log.location,
+            suspicious: isSuspiciousActivity(log)
+        }));
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                logs: activityLogs
+            }
+        });
+
+    } catch (err) {
+        console.error('Get user activity error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching user activity'
+        });
+    }
+});
+
+/**
+ * @api {get} /api/users/api-keys Get user's API keys
+ * @apiName GetUserApiKeys
+ * @apiGroup User
+ * @apiHeader {String} Authorization User's JWT token
+ * 
+ * @apiSuccess {Object[]} keys List of API keys
+ * @apiSuccess {String} keys.id Key ID
+ * @apiSuccess {String} keys.name Key name
+ * @apiSuccess {String[]} keys.permissions Key permissions
+ * @apiSuccess {Date} keys.createdAt Creation date
+ * @apiSuccess {Date} keys.expiresAt Expiration date
+ * @apiSuccess {Boolean} keys.expired Whether key is expired
+ */
+app.get('/api/users/api-keys', protect, async (req, res) => {
+    try {
+        // Find user by ID and select only API keys
+        const user = await User.findById(req.user.id)
+            .select('apiKeys')
+            .lean();
+
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Format API keys data
+        const keys = user.apiKeys.map(key => ({
+            id: key._id || crypto.randomBytes(8).toString('hex'),
+            name: key.name,
+            permissions: key.permissions || [],
+            createdAt: key.createdAt || new Date(),
+            expiresAt: key.expiresAt,
+            expired: key.expiresAt ? new Date(key.expiresAt) < new Date() : false
+        }));
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                keys
+            }
+        });
+
+    } catch (err) {
+        console.error('Get API keys error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching API keys'
+        });
+    }
+});
+
+/**
+ * @api {get} /api/users/notifications Get user's notification preferences
+ * @apiName GetUserNotifications
+ * @apiGroup User
+ * @apiHeader {String} Authorization User's JWT token
+ * 
+ * @apiSuccess {Object} preferences Notification preferences
+ * @apiSuccess {Object} preferences.email Email notification preferences
+ * @apiSuccess {Boolean} preferences.email.accountActivity Account activity notifications
+ * @apiSuccess {Boolean} preferences.email.investmentUpdates Investment updates
+ * @apiSuccess {Boolean} preferences.email.promotionalOffers Promotional offers
+ * @apiSuccess {Object} preferences.sms SMS notification preferences
+ * @apiSuccess {Boolean} preferences.sms.securityAlerts Security alerts
+ * @apiSuccess {Boolean} preferences.sms.withdrawalConfirmations Withdrawal confirmations
+ * @apiSuccess {Boolean} preferences.sms.marketingMessages Marketing messages
+ * @apiSuccess {Object} preferences.push Push notification preferences
+ * @apiSuccess {Boolean} preferences.push.accountActivity Account activity
+ * @apiSuccess {Boolean} preferences.push.investmentUpdates Investment updates
+ * @apiSuccess {Boolean} preferences.push.marketAlerts Market alerts
+ */
+app.get('/api/users/notifications', protect, async (req, res) => {
+    try {
+        // Find user by ID and select only notification preferences
+        const user = await User.findById(req.user.id)
+            .select('preferences')
+            .lean();
+
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Format notification preferences
+        const preferences = {
+            email: {
+                accountActivity: user.preferences?.notifications?.email !== false, // Default true
+                investmentUpdates: user.preferences?.notifications?.email !== false, // Default true
+                promotionalOffers: user.preferences?.notifications?.email === true // Default false
+            },
+            sms: {
+                securityAlerts: user.preferences?.notifications?.sms === true, // Default false
+                withdrawalConfirmations: user.preferences?.notifications?.sms === true, // Default false
+                marketingMessages: false // Default false
+            },
+            push: {
+                accountActivity: user.preferences?.notifications?.push !== false, // Default true
+                investmentUpdates: user.preferences?.notifications?.push !== false, // Default true
+                marketAlerts: false // Default false
+            }
+        };
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                preferences
+            }
+        });
+
+    } catch (err) {
+        console.error('Get notification preferences error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching notification preferences'
+        });
+    }
+});
+
+/**
+ * @api {get} /api/users/kyc Get user's KYC verification status
+ * @apiName GetUserKyc
+ * @apiGroup User
+ * @apiHeader {String} Authorization User's JWT token
+ * 
+ * @apiSuccess {Object} status KYC verification status
+ * @apiSuccess {String} status.identity Identity verification status
+ * @apiSuccess {String} status.address Address verification status
+ * @apiSuccess {String} status.facial Facial verification status
+ * @apiSuccess {Object} identityDocument Identity document info
+ * @apiSuccess {String} identityDocument.type Document type
+ * @apiSuccess {String} identityDocument.number Document number
+ * @apiSuccess {Date} identityDocument.expiry Document expiry date
+ * @apiSuccess {String} identityDocument.imageUrl Document image URL
+ * @apiSuccess {Object} addressDocument Address document info
+ * @apiSuccess {String} addressDocument.type Document type
+ * @apiSuccess {Date} addressDocument.issueDate Document issue date
+ * @apiSuccess {String} addressDocument.imageUrl Document image URL
+ * @apiSuccess {String} facialVerificationImage Facial verification image URL
+ */
+app.get('/api/users/kyc', protect, async (req, res) => {
+    try {
+        // Find user by ID and select only KYC related fields
+        const user = await User.findById(req.user.id)
+            .select('kycStatus kycDocuments')
+            .lean();
+
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Get KYC submissions from database
+        const kycSubmissions = await KYC.find({ user: req.user.id })
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // Find latest identity verification
+        const identityVerification = kycSubmissions.find(s => s.type === 'identity');
+        // Find latest address verification
+        const addressVerification = kycSubmissions.find(s => s.type === 'address');
+        // Find latest facial verification
+        const facialVerification = kycSubmissions.find(s => s.type === 'facial');
+
+        // Format response
+        const responseData = {
+            status: 'success',
+            data: {
+                status: user.kycStatus || {
+                    identity: 'not-submitted',
+                    address: 'not-submitted',
+                    facial: 'not-submitted'
+                },
+                identityDocument: identityVerification ? {
+                    type: identityVerification.documentType,
+                    number: identityVerification.documentNumber,
+                    expiry: identityVerification.documentExpiry,
+                    imageUrl: identityVerification.documentFront
+                } : null,
+                addressDocument: addressVerification ? {
+                    type: addressVerification.documentType,
+                    issueDate: addressVerification.documentIssueDate,
+                    imageUrl: addressVerification.documentFront
+                } : null,
+                facialVerificationImage: facialVerification?.selfie || user.kycDocuments?.selfie
+            }
+        };
+
+        res.status(200).json(responseData);
+
+    } catch (err) {
+        console.error('Get KYC data error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching KYC data'
+        });
+    }
+});
+
+// Helper functions for the endpoints
+
+function getBrowserName(userAgent) {
+    if (userAgent.includes('Chrome')) return 'Chrome';
+    if (userAgent.includes('Safari')) return 'Safari';
+    if (userAgent.includes('Firefox')) return 'Firefox';
+    if (userAgent.includes('Edge')) return 'Edge';
+    if (userAgent.includes('Opera')) return 'Opera';
+    return 'Unknown Browser';
+}
+
+function getOSName(userAgent) {
+    if (userAgent.includes('Windows')) return 'Windows';
+    if (userAgent.includes('Macintosh')) return 'MacOS';
+    if (userAgent.includes('Linux')) return 'Linux';
+    if (userAgent.includes('Android')) return 'Android';
+    if (userAgent.includes('iOS')) return 'iOS';
+    return 'Unknown OS';
+}
+
+function getActivityTitle(action) {
+    const titles = {
+        'login': 'Successful Login',
+        'failed_login': 'Failed Login Attempt',
+        'password_change': 'Password Changed',
+        'signup': 'Account Created',
+        'update-profile': 'Profile Updated',
+        'update-address': 'Address Updated',
+        'change-password': 'Password Changed',
+        'enable-2fa': 'Two-Factor Enabled',
+        'disable-2fa': 'Two-Factor Disabled',
+        'submit-kyc': 'KYC Submitted',
+        'create-api-key': 'API Key Created',
+        'revoke-api-key': 'API Key Revoked'
+    };
+    return titles[action] || 'Account Activity';
+}
+
+function getActivityDescription(action, entity, changes) {
+    const descriptions = {
+        'login': 'You logged in to your account',
+        'failed_login': 'A failed login attempt was detected',
+        'password_change': 'Your password was successfully changed',
+        'signup': 'Your account was created successfully',
+        'update-profile': 'Your profile information was updated',
+        'update-address': 'Your address information was updated',
+        'change-password': 'Your password was changed successfully',
+        'enable-2fa': 'Two-factor authentication was enabled',
+        'disable-2fa': 'Two-factor authentication was disabled',
+        'submit-kyc': 'KYC verification documents were submitted',
+        'create-api-key': 'A new API key was created',
+        'revoke-api-key': 'An API key was revoked'
+    };
+    return descriptions[action] || `Activity performed on ${entity}`;
+}
+
+function isSuspiciousActivity(log) {
+    // Mark failed logins as suspicious
+    if (log.action === 'failed_login') return true;
+    
+    // Mark logins from unusual locations as suspicious
+    if (log.action === 'login' && log.location && log.location.includes('Unknown')) {
+        return true;
+    }
+    
+    return false;
+}
+
+
+
+
+
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -7194,6 +7749,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
 
