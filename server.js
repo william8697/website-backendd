@@ -7262,214 +7262,121 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
-// Enable Two-Factor Authentication
+
+
+
+// Enable 2FA endpoint
 app.post('/api/users/two-factor/:method/enable', protect, async (req, res) => {
-    try {
-        const { method } = req.params;
-        const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
-        
-        if (method !== 'authenticator' && method !== 'sms') {
-            return res.status(400).json({
-                status: 'fail',
-                message: 'Invalid two-factor authentication method'
-            });
-        }
+  try {
+    const { method } = req.params;
+    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
 
-        if (method === 'authenticator') {
-            // Generate TOTP secret for authenticator app
-            const secret = generateTOTPSecret();
-            user.twoFactorAuth.secret = secret.base32;
-            await user.save();
-
-            res.status(200).json({
-                status: 'success',
-                data: {
-                    secret: secret.otpauth_url,
-                    qrCodeUrl: `https://chart.googleapis.com/chart?chs=200x200&chld=M|0&cht=qr&chl=${encodeURIComponent(secret.otpauth_url)}`,
-                    requiresVerification: true
-                }
-            });
-        } else if (method === 'sms') {
-            // In a real implementation, you would send SMS verification code here
-            return res.status(501).json({
-                status: 'fail',
-                message: 'SMS two-factor authentication is not yet implemented'
-            });
-        }
-
-    } catch (err) {
-        console.error('Enable 2FA error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while enabling two-factor authentication'
-        });
+    if (method !== 'authenticator') {
+      return res.status(400).json({ status: 'fail', message: 'Only authenticator method supported' });
     }
+
+    if (user.twoFactorAuth.enabled) {
+      return res.status(400).json({ status: 'fail', message: '2FA already enabled' });
+    }
+
+    if (!user.twoFactorAuth.secret) {
+      const secret = generateTOTPSecret();
+      user.twoFactorAuth.secret = secret.base32;
+    }
+
+    const otpauthUrl = speakeasy.otpauthURL({
+      secret: user.twoFactorAuth.secret,
+      label: `BitHash:${user.email}`,
+      issuer: 'BitHash'
+    });
+
+    await user.save();
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        secret: user.twoFactorAuth.secret,
+        otpauthUrl,
+        qrCodeUrl: `https://chart.googleapis.com/chart?chs=200x200&chld=M|0&cht=qr&chl=${encodeURIComponent(otpauthUrl)}`,
+        requiresVerification: true
+      }
+    });
+
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: 'Error setting up 2FA' });
+  }
 });
 
-// Verify Two-Factor Authentication Setup
+// Verify 2FA token endpoint
 app.post('/api/users/two-factor/verify', protect, [
-    body('token').notEmpty().withMessage('Token is required'),
-    body('method').isIn(['authenticator', 'sms']).withMessage('Invalid method')
+  body('token').notEmpty().trim().escape()
 ], async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({
-            status: 'fail',
-            errors: errors.array()
-        });
+  try {
+    const { token } = req.body;
+    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
+
+    if (!user.twoFactorAuth.secret) {
+      return res.status(400).json({ status: 'fail', message: '2FA not configured' });
     }
 
-    try {
-        const { token, method } = req.body;
-        const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
+    const valid = speakeasy.totp.verify({
+      secret: user.twoFactorAuth.secret,
+      encoding: 'base32',
+      token,
+      window: 2
+    });
 
-        if (method === 'authenticator') {
-            if (!user.twoFactorAuth.secret) {
-                return res.status(400).json({
-                    status: 'fail',
-                    message: 'Two-factor authentication is not set up'
-                });
-            }
-
-            const isValidToken = verifyTOTP(token, user.twoFactorAuth.secret);
-            if (!isValidToken) {
-                return res.status(401).json({
-                    status: 'fail',
-                    message: 'Invalid verification token'
-                });
-            }
-
-            user.twoFactorAuth.enabled = true;
-            await user.save();
-
-            res.status(200).json({
-                status: 'success',
-                message: 'Two-factor authentication enabled successfully'
-            });
-
-            await logActivity('enable-2fa', 'user', user._id, user._id, 'User', req, { method: 'authenticator' });
-
-        } else if (method === 'sms') {
-            // SMS verification would be implemented here
-            return res.status(501).json({
-                status: 'fail',
-                message: 'SMS two-factor authentication is not yet implemented'
-            });
-        }
-    } catch (err) {
-        console.error('Verify 2FA error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while verifying two-factor authentication'
-        });
+    if (!valid) {
+      return res.status(401).json({ status: 'fail', message: 'Invalid token' });
     }
+
+    user.twoFactorAuth.enabled = true;
+    await user.save();
+
+    res.status(200).json({ status: 'success', message: '2FA enabled successfully' });
+
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: 'Verification failed' });
+  }
 });
 
-// Disable Two-Factor Authentication
+// Disable 2FA endpoint
 app.delete('/api/users/two-factor', protect, [
-    body('token').notEmpty().withMessage('Token is required'),
-    body('method').isIn(['authenticator', 'sms']).withMessage('Invalid method')
+  body('token').notEmpty().trim().escape()
 ], async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({
-            status: 'fail',
-            errors: errors.array()
-        });
+  try {
+    const { token } = req.body;
+    const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
+
+    if (!user.twoFactorAuth.enabled) {
+      return res.status(400).json({ status: 'fail', message: '2FA not enabled' });
     }
 
-    try {
-        const { token, method } = req.body;
-        const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
+    const valid = speakeasy.totp.verify({
+      secret: user.twoFactorAuth.secret,
+      encoding: 'base32',
+      token,
+      window: 2
+    });
 
-        if (!user.twoFactorAuth.enabled) {
-            return res.status(400).json({
-                status: 'fail',
-                message: 'Two-factor authentication is not enabled'
-            });
-        }
-
-        if (method === 'authenticator') {
-            if (!user.twoFactorAuth.secret) {
-                return res.status(400).json({
-                    status: 'fail',
-                    message: 'Two-factor authentication is not set up'
-                });
-            }
-
-            const isValidToken = verifyTOTP(token, user.twoFactorAuth.secret);
-            if (!isValidToken) {
-                return res.status(401).json({
-                    status: 'fail',
-                    message: 'Invalid verification token'
-                });
-            }
-
-            user.twoFactorAuth.enabled = false;
-            user.twoFactorAuth.secret = undefined;
-            await user.save();
-
-            res.status(200).json({
-                status: 'success',
-                message: 'Two-factor authentication disabled successfully'
-            });
-
-            await logActivity('disable-2fa', 'user', user._id, user._id, 'User', req, { method: 'authenticator' });
-
-        } else if (method === 'sms') {
-            // SMS verification would be implemented here
-            return res.status(501).json({
-                status: 'fail',
-                message: 'SMS two-factor authentication is not yet implemented'
-            });
-        }
-    } catch (err) {
-        console.error('Disable 2FA error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while disabling two-factor authentication'
-        });
+    if (!valid) {
+      return res.status(401).json({ status: 'fail', message: 'Invalid token' });
     }
+
+    user.twoFactorAuth.enabled = false;
+    user.twoFactorAuth.secret = undefined;
+    await user.save();
+
+    res.status(200).json({ status: 'success', message: '2FA disabled successfully' });
+
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: 'Failed to disable 2FA' });
+  }
 });
 
-// Get Two-Factor Authentication Status
-app.get('/api/users/two-factor', protect, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).select('twoFactorAuth');
-        
-        const methods = [
-            {
-                id: 'authenticator',
-                name: 'Authenticator App',
-                description: 'Use an authenticator app like Google Authenticator or Authy',
-                type: 'authenticator',
-                active: user.twoFactorAuth.enabled,
-                requiresVerification: user.twoFactorAuth.enabled
-            },
-            {
-                id: 'sms',
-                name: 'SMS Verification',
-                description: 'Receive verification codes via SMS',
-                type: 'sms',
-                active: false, // SMS not implemented
-                requiresVerification: false
-            }
-        ];
 
-        res.status(200).json({
-            status: 'success',
-            data: {
-                methods
-            }
-        });
-    } catch (err) {
-        console.error('Get 2FA status error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while fetching two-factor authentication status'
-        });
-    }
-});
+
+
 
 
 
@@ -7498,4 +7405,5 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
