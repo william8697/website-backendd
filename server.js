@@ -7215,6 +7215,186 @@ app.get('/api/users/profile', protect, async (req, res) => {
 
 
 
+// Enable Two-Factor Authentication via Authenticator
+app.post('/api/users/two-factor/authenticator/enable', protect, async (req, res) => {
+    try {
+        // Get user from database with 2FA secret
+        const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
+        
+        // Check if 2FA is already enabled
+        if (user.twoFactorAuth.enabled) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'Two-factor authentication is already enabled'
+            });
+        }
+
+        // Generate a new secret if one doesn't exist
+        if (!user.twoFactorAuth.secret) {
+            const secret = speakeasy.generateSecret({
+                length: 20,
+                name: `BitHash:${user.email}`,
+                issuer: 'BitHash'
+            });
+            user.twoFactorAuth.secret = secret.base32;
+        }
+
+        // Generate OTP auth URL for QR code
+        const otpauthUrl = speakeasy.otpauthURL({
+            secret: user.twoFactorAuth.secret,
+            label: encodeURIComponent(`BitHash:${user.email}`),
+            issuer: 'BitHash',
+            encoding: 'base32'
+        });
+
+        // Generate QR code URL using Google Charts API
+        const qrCodeUrl = `https://chart.googleapis.com/chart?chs=166x166&chld=L|0&cht=qr&chl=${encodeURIComponent(otpauthUrl)}`;
+
+        // Save the user (but don't enable 2FA yet - requires verification)
+        await user.save();
+
+        // Log the activity
+        await logActivity('init-2fa', 'user', user._id, user._id, 'User', req);
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                secret: user.twoFactorAuth.secret,
+                otpauthUrl,
+                qrCodeUrl,
+                requiresVerification: true
+            }
+        });
+
+    } catch (err) {
+        console.error('Error enabling 2FA:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while setting up two-factor authentication'
+        });
+    }
+});
+
+// Verify Two-Factor Authentication Token
+app.post('/api/users/two-factor/authenticator/verify', protect, [
+    body('token').notEmpty().withMessage('Token is required')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({
+            status: 'fail',
+            errors: errors.array()
+        });
+    }
+
+    try {
+        const { token } = req.body;
+        const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
+
+        if (!user.twoFactorAuth.secret) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'Two-factor authentication is not set up'
+            });
+        }
+
+        // Verify the token
+        const verified = speakeasy.totp.verify({
+            secret: user.twoFactorAuth.secret,
+            encoding: 'base32',
+            token,
+            window: 2 // Allow 2 steps (1 minute) of leeway
+        });
+
+        if (!verified) {
+            return res.status(401).json({
+                status: 'fail',
+                message: 'Invalid verification code'
+            });
+        }
+
+        // Enable 2FA for the user
+        user.twoFactorAuth.enabled = true;
+        await user.save();
+
+        // Log the activity
+        await logActivity('enable-2fa', 'user', user._id, user._id, 'User', req);
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Two-factor authentication enabled successfully'
+        });
+
+    } catch (err) {
+        console.error('Error verifying 2FA token:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while verifying two-factor authentication'
+        });
+    }
+});
+
+// Disable Two-Factor Authentication
+app.post('/api/users/two-factor/authenticator/disable', protect, [
+    body('token').notEmpty().withMessage('Token is required')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({
+            status: 'fail',
+            errors: errors.array()
+        });
+    }
+
+    try {
+        const { token } = req.body;
+        const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
+
+        if (!user.twoFactorAuth.enabled) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'Two-factor authentication is not enabled'
+            });
+        }
+
+        // Verify the token before disabling
+        const verified = speakeasy.totp.verify({
+            secret: user.twoFactorAuth.secret,
+            encoding: 'base32',
+            token,
+            window: 2
+        });
+
+        if (!verified) {
+            return res.status(401).json({
+                status: 'fail',
+                message: 'Invalid verification code'
+            });
+        }
+
+        // Disable 2FA and clear the secret
+        user.twoFactorAuth.enabled = false;
+        user.twoFactorAuth.secret = undefined;
+        await user.save();
+
+        // Log the activity
+        await logActivity('disable-2fa', 'user', user._id, user._id, 'User', req);
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Two-factor authentication disabled successfully'
+        });
+
+    } catch (err) {
+        console.error('Error disabling 2FA:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while disabling two-factor authentication'
+        });
+    }
+});
+
+
 // Get user's two-factor authentication methods
 app.get('/api/users/two-factor', protect, async (req, res) => {
     try {
@@ -7288,6 +7468,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
 
