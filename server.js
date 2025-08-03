@@ -7261,177 +7261,236 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
+// Add to server.js after other KYC routes
 
-
-
-
-
-// Enable two-factor authentication with authenticator app
-app.post('/api/users/two-factor/authenticator/enable', protect, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
-        
-        if (user.twoFactorAuth.enabled) {
-            return res.status(400).json({
-                status: 'fail',
-                message: 'Two-factor authentication is already enabled'
-            });
-        }
-
-        // Generate a new secret if one doesn't exist
-        if (!user.twoFactorAuth.secret) {
-            const secret = speakeasy.generateSecret({
-                length: 20,
-                name: `BitHash:${user.email}`,
-                issuer: 'BitHash LLC'
-            });
-            
-            user.twoFactorAuth.secret = secret.base32;
-            await user.save();
-        }
-
-        // Generate OTP auth URL for QR code
-        const otpauthUrl = speakeasy.otpauthURL({
-            secret: user.twoFactorAuth.secret,
-            label: encodeURIComponent(`BitHash:${user.email}`),
-            issuer: 'BitHash LLC',
-            encoding: 'base32'
-        });
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                secret: user.twoFactorAuth.secret,
-                qrCodeUrl: `https://chart.googleapis.com/chart?chs=200x200&chld=M|0&cht=qr&chl=${encodeURIComponent(otpauthUrl)}`
-            }
-        });
-
-        await logActivity('generate-2fa-secret', 'user', user._id, user._id, 'User', req);
-
-    } catch (err) {
-        console.error('Enable 2FA error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while enabling two-factor authentication'
-        });
-    }
-});
-
-// Verify two-factor authentication token
-app.post('/api/users/two-factor/authenticator/verify', protect, [
-    body('token').notEmpty().withMessage('Token is required')
+/**
+ * @api {post} /api/users/kyc/facial Submit Facial Verification
+ * @apiName SubmitFacialKYC
+ * @apiGroup KYC
+ * @apiPermission user
+ * 
+ * @apiHeader {String} Authorization User's JWT token
+ * 
+ * @apiParam {String} image Base64 encoded image of user's face
+ * @apiParam {String} [documentImage] Base64 encoded image of ID document (for comparison)
+ * 
+ * @apiSuccess {Object} kyc KYC submission record
+ * @apiSuccess {String} message Verification status message
+ */
+app.post('/api/users/kyc/facial', protect, [
+  body('image').notEmpty().withMessage('Facial image is required'),
+  body('documentImage').optional().notEmpty().withMessage('Document image cannot be empty if provided')
 ], async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { image, documentImage } = req.body;
+    const user = await User.findById(req.user.id);
+
+    // Check if facial verification is already submitted
+    const existingFacialKYC = await KYC.findOne({ 
+      user: user._id, 
+      type: 'facial',
+      status: { $in: ['pending', 'approved'] }
+    });
+    
+    if (existingFacialKYC) {
+      return res.status(400).json({
+        status: 'fail',
+        message: existingFacialKYC.status === 'approved' 
+          ? 'Facial verification already completed' 
+          : 'Facial verification already submitted and pending review'
+      });
+    }
+
+    // Validate image size and format
+    if (image.length > 5 * 1024 * 1024) { // 5MB max
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Image size exceeds maximum limit of 5MB'
+      });
+    }
+
+    // Prepare Face++ API request
+    const faceppParams = {
+      api_key: process.env.FACEPP_API_KEY,
+      api_secret: process.env.FACEPP_API_SECRET,
+      image_base64: image,
+      return_landmark: 1,
+      return_attributes: 'gender,age,smiling,headpose,facequality,blur,eyestatus,emotion,ethnicity,beauty,mouthstatus,eyegaze,skinstatus'
+    };
+
+    // If document image is provided, add it for comparison
+    if (documentImage) {
+      faceppParams.image_base64_compare = documentImage;
+    }
+
+    // Call Face++ API for facial detection and verification
+    const faceppResponse = await axios.post('https://api-us.faceplusplus.com/facepp/v3/detect', 
+      querystring.stringify(faceppParams), {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      });
+
+    // Check Face++ response
+    if (!faceppResponse.data.faces || faceppResponse.data.faces.length === 0) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'No faces detected in the image. Please upload a clear photo of your face.'
+      });
+    }
+
+    // If comparing with document image
+    if (documentImage) {
+      if (!faceppResponse.data.faces_compare || faceppResponse.data.faces_compare.length === 0) {
         return res.status(400).json({
-            status: 'fail',
-            errors: errors.array()
+          status: 'fail',
+          message: 'No faces detected in the document image. Please upload a clear photo of your ID.'
         });
+      }
+
+      // Compare faces between selfie and document
+      const compareParams = {
+        api_key: process.env.FACEPP_API_KEY,
+        api_secret: process.env.FACEPP_API_SECRET,
+        face_token1: faceppResponse.data.faces[0].face_token,
+        face_token2: faceppResponse.data.faces_compare[0].face_token
+      };
+
+      const compareResponse = await axios.post('https://api-us.faceplusplus.com/facepp/v3/compare', 
+        querystring.stringify(compareParams), {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          }
+        });
+
+      if (compareResponse.data.confidence < 70) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Face on ID document does not match your selfie. Please ensure you are using your own ID document.'
+        });
+      }
     }
 
-    try {
-        const { token } = req.body;
-        const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
+    // Check face quality
+    const face = faceppResponse.data.faces[0];
+    const attributes = face.attributes;
 
-        if (!user.twoFactorAuth.secret) {
-            return res.status(400).json({
-                status: 'fail',
-                message: 'Two-factor authentication is not set up'
-            });
-        }
-
-        const verified = speakeasy.totp.verify({
-            secret: user.twoFactorAuth.secret,
-            encoding: 'base32',
-            token,
-            window: 2
-        });
-
-        if (!verified) {
-            return res.status(401).json({
-                status: 'fail',
-                message: 'Invalid token'
-            });
-        }
-
-        // Enable 2FA for the user
-        user.twoFactorAuth.enabled = true;
-        await user.save();
-
-        res.status(200).json({
-            status: 'success',
-            message: 'Two-factor authentication enabled successfully'
-        });
-
-        await logActivity('enable-2fa', 'user', user._id, user._id, 'User', req);
-
-    } catch (err) {
-        console.error('Verify 2FA error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while verifying two-factor authentication'
-        });
+    // Validate face quality
+    if (attributes.blur.blurness.value > 50) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Image is too blurry. Please upload a clear photo.'
+      });
     }
+
+    if (attributes.facequality.value < 50) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Face quality is too low. Please upload a better quality photo.'
+      });
+    }
+
+    // Check for multiple faces
+    if (faceppResponse.data.faces.length > 1) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Multiple faces detected. Please upload a photo with only your face visible.'
+      });
+    }
+
+    // Check face orientation
+    if (Math.abs(attributes.headpose.yaw_angle) > 20 || 
+        Math.abs(attributes.headpose.pitch_angle) > 20 || 
+        Math.abs(attributes.headpose.roll_angle) > 20) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Face is not facing forward. Please look directly at the camera.'
+      });
+    }
+
+    // Check for occlusions
+    if (attributes.mouthstatus.surgical_mask_or_respirator > 0.5) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Face mask detected. Please remove any face coverings.'
+      });
+    }
+
+    if (attributes.eyestatus.left_eye_status.no_glass_eye_opening < 0.5 || 
+        attributes.eyestatus.right_eye_status.no_glass_eye_opening < 0.5) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Eyes are not clearly visible. Please remove glasses if wearing any.'
+      });
+    }
+
+    // Create KYC record
+    const kyc = await KYC.create({
+      user: user._id,
+      type: 'facial',
+      selfie: image,
+      documentFront: documentImage || undefined,
+      metadata: {
+        faceppResponse: faceppResponse.data,
+        confidence: documentImage ? compareResponse.data.confidence : null
+      }
+    });
+
+    // Update user's KYC status
+    user.kycStatus.facial = 'pending';
+    user.kycDocuments.selfie = image;
+    await user.save();
+
+    // Send notification to admin
+    const admins = await Admin.find({ role: { $in: ['super', 'kyc'] } });
+    for (const admin of admins) {
+      admin.notifications.push({
+        title: 'New Facial Verification',
+        message: `User ${user.firstName} ${user.lastName} has submitted facial verification.`,
+        type: 'info'
+      });
+      await admin.save();
+    }
+
+    res.status(201).json({
+      status: 'success',
+      data: kyc,
+      message: 'Facial verification submitted successfully and pending review'
+    });
+
+    await logActivity('submit-facial-kyc', 'kyc', kyc._id, user._id, 'User', req, {
+      hasDocumentComparison: !!documentImage,
+      confidence: documentImage ? compareResponse.data.confidence : null
+    });
+
+  } catch (err) {
+    console.error('Facial KYC error:', err);
+    
+    // Handle Face++ API errors specifically
+    if (err.response && err.response.data && err.response.data.error_message) {
+      return res.status(400).json({
+        status: 'fail',
+        message: `Face++ API error: ${err.response.data.error_message}`
+      });
+    }
+
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred during facial verification'
+    });
+  }
 });
 
-// Disable two-factor authentication
-app.post('/api/users/two-factor/authenticator/disable', protect, [
-    body('token').notEmpty().withMessage('Token is required')
-], async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({
-            status: 'fail',
-            errors: errors.array()
-        });
-    }
 
-    try {
-        const { token } = req.body;
-        const user = await User.findById(req.user.id).select('+twoFactorAuth.secret');
 
-        if (!user.twoFactorAuth.enabled) {
-            return res.status(400).json({
-                status: 'fail',
-                message: 'Two-factor authentication is not enabled'
-            });
-        }
-
-        // Verify token before disabling
-        const verified = speakeasy.totp.verify({
-            secret: user.twoFactorAuth.secret,
-            encoding: 'base32',
-            token,
-            window: 2
-        });
-
-        if (!verified) {
-            return res.status(401).json({
-                status: 'fail',
-                message: 'Invalid token'
-            });
-        }
-
-        // Disable 2FA and remove secret
-        user.twoFactorAuth.enabled = false;
-        user.twoFactorAuth.secret = undefined;
-        await user.save();
-
-        res.status(200).json({
-            status: 'success',
-            message: 'Two-factor authentication disabled successfully'
-        });
-
-        await logActivity('disable-2fa', 'user', user._id, user._id, 'User', req);
-
-    } catch (err) {
-        console.error('Disable 2FA error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while disabling two-factor authentication'
-        });
-    }
-});
 
 
 
@@ -7462,6 +7521,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
 
