@@ -1780,7 +1780,6 @@ module.exports = {
   Card,
   SupportTicket,
    ChatMessage,
- SupportMessage,
   SupportConversation,
   setupWebSocketServer
 };
@@ -6912,5 +6911,6 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
