@@ -6421,9 +6421,21 @@ app.get('/api/admin/transactions', adminProtect, restrictTo('super', 'finance'),
         const start = parseInt(req.query.start) || 0;
         const length = parseInt(req.query.length) || 10;
         const searchValue = req.query.search?.value || '';
-        const orderColumn = req.query.order?.[0]?.column || 0;
+        const orderColumn = parseInt(req.query.order?.[0]?.column) || 0;
         const orderDir = req.query.order?.[0]?.dir || 'asc';
-        const orderColumnName = req.query.columns?.[orderColumn]?.data || 'createdAt';
+        
+        // Map DataTables columns to database fields
+        const columnMap = [
+            '_id',              // column 0 - id
+            'user.name',        // column 1 - user.name
+            'type',             // column 2 - type
+            'amount',           // column 3 - amount
+            'status',           // column 4 - status
+            'createdAt',        // column 5 - created_at
+            null                // column 6 - actions (not sortable)
+        ];
+        
+        const orderColumnName = columnMap[orderColumn] || 'createdAt';
 
         // Build the query
         const query = {};
@@ -6445,13 +6457,20 @@ app.get('/api/admin/transactions', adminProtect, restrictTo('super', 'finance'),
         const totalFiltered = await Transaction.countDocuments(query);
 
         // Get transactions with pagination and sorting
-        const transactions = await Transaction.find(query)
+        let transactionsQuery = Transaction.find(query)
             .populate('user', 'name')
             .populate('processedBy', 'name')
-            .sort({ [orderColumnName]: orderDir === 'asc' ? 1 : -1 })
             .skip(start)
-            .limit(length)
-            .lean();
+            .limit(length);
+
+        // Only apply sorting if we have a valid column to sort by
+        if (orderColumnName) {
+            transactionsQuery = transactionsQuery.sort({ 
+                [orderColumnName]: orderDir === 'asc' ? 1 : -1 
+            });
+        }
+
+        const transactions = await transactionsQuery.lean();
 
         // Format data for DataTables
         const data = transactions.map(tx => ({
@@ -6463,9 +6482,10 @@ app.get('/api/admin/transactions', adminProtect, restrictTo('super', 'finance'),
             type: tx.type,
             amount: tx.amount,
             status: tx.status,
+            created_at: tx.createdAt,  // Match frontend expectation
+            // Add any other fields your DataTable expects
             method: tx.method,
             reference: tx.reference,
-            createdAt: tx.createdAt,
             processedBy: tx.processedBy?.name || null,
             processedAt: tx.processedAt,
             details: tx.details
@@ -6487,7 +6507,6 @@ app.get('/api/admin/transactions', adminProtect, restrictTo('super', 'finance'),
         });
     }
 });
-
 
 
 
@@ -6558,10 +6577,3 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
