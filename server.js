@@ -6880,7 +6880,6 @@ app.get('/api/admin/stats/user-growth', adminProtect, restrictTo('super', 'suppo
 
 
 
-
 // Admin Chat Endpoints
 app.get('/api/admin/support/chat/conversations', adminProtect, restrictTo('super', 'support'), async (req, res) => {
   try {
@@ -6896,7 +6895,6 @@ app.get('/api/admin/support/chat/conversations', adminProtect, restrictTo('super
       .sort({ lastMessage: -1 })
       .lean();
 
-    // Get last message and unread count for each conversation
     const enhancedConversations = await Promise.all(conversations.map(async conv => {
       const lastMessage = await ChatMessage.findOne({ conversation: conv._id })
         .sort({ createdAt: -1 })
@@ -6913,7 +6911,7 @@ app.get('/api/admin/support/chat/conversations', adminProtect, restrictTo('super
         last_message: lastMessage,
         unread_count: unreadCount
       };
-    });
+    }));
 
     res.status(200).json({
       status: 'success',
@@ -6932,7 +6930,6 @@ app.get('/api/admin/support/chat/messages/:userId', adminProtect, restrictTo('su
   try {
     const { userId } = req.params;
 
-    // Find or create conversation
     let conversation = await ChatConversation.findOne({ user: userId })
       .populate({
         path: 'user',
@@ -6945,7 +6942,6 @@ app.get('/api/admin/support/chat/messages/:userId', adminProtect, restrictTo('su
         admin: req.admin._id
       });
       
-      // Populate user data
       conversation = await ChatConversation.findById(conversation._id)
         .populate({
           path: 'user',
@@ -6953,7 +6949,6 @@ app.get('/api/admin/support/chat/messages/:userId', adminProtect, restrictTo('su
         });
     }
 
-    // Mark all user messages as read
     await ChatMessage.updateMany(
       { 
         conversation: conversation._id,
@@ -6963,11 +6958,9 @@ app.get('/api/admin/support/chat/messages/:userId', adminProtect, restrictTo('su
       { $set: { read: true } }
     );
 
-    // Reset unread count
     conversation.unreadCount = 0;
     await conversation.save();
 
-    // Get messages
     const messages = await ChatMessage.find({ conversation: conversation._id })
       .sort({ createdAt: 1 })
       .lean();
@@ -7006,7 +6999,6 @@ app.post('/api/admin/support/chat/send', adminProtect, restrictTo('super', 'supp
   try {
     const { user_id, message } = req.body;
 
-    // Find or create conversation
     let conversation = await ChatConversation.findOne({ user: user_id });
     if (!conversation) {
       conversation = await ChatConversation.create({
@@ -7015,7 +7007,6 @@ app.post('/api/admin/support/chat/send', adminProtect, restrictTo('super', 'supp
       });
     }
 
-    // Create message
     const chatMessage = await ChatMessage.create({
       conversation: conversation._id,
       sender: 'admin',
@@ -7023,11 +7014,9 @@ app.post('/api/admin/support/chat/send', adminProtect, restrictTo('super', 'supp
       message
     });
 
-    // Update conversation last message timestamp
     conversation.lastMessage = new Date();
     await conversation.save();
 
-    // Emit socket event
     if (socket) {
       socket.to(`user_${user_id}`).emit('new_message', {
         id: chatMessage._id,
@@ -7065,7 +7054,6 @@ app.post('/api/admin/support/chat/send', adminProtect, restrictTo('super', 'supp
 // User Chat Endpoints
 app.get('/api/support/chat/conversation', protect, async (req, res) => {
   try {
-    // Find or create conversation
     let conversation = await ChatConversation.findOne({ user: req.user.id })
       .populate({
         path: 'admin',
@@ -7077,7 +7065,6 @@ app.get('/api/support/chat/conversation', protect, async (req, res) => {
         user: req.user.id
       });
       
-      // Populate admin data if available
       conversation = await ChatConversation.findById(conversation._id)
         .populate({
           path: 'admin',
@@ -7085,7 +7072,6 @@ app.get('/api/support/chat/conversation', protect, async (req, res) => {
         });
     }
 
-    // Mark all admin messages as read
     await ChatMessage.updateMany(
       { 
         conversation: conversation._id,
@@ -7095,11 +7081,9 @@ app.get('/api/support/chat/conversation', protect, async (req, res) => {
       { $set: { read: true } }
     );
 
-    // Reset unread count
     conversation.unreadCount = 0;
     await conversation.save();
 
-    // Get messages
     const messages = await ChatMessage.find({ conversation: conversation._id })
       .sort({ createdAt: 1 })
       .lean();
@@ -7137,7 +7121,6 @@ app.post('/api/support/chat/send', protect, [
   try {
     const { message } = req.body;
 
-    // Find or create conversation
     let conversation = await ChatConversation.findOne({ user: req.user.id });
     if (!conversation) {
       conversation = await ChatConversation.create({
@@ -7145,7 +7128,6 @@ app.post('/api/support/chat/send', protect, [
       });
     }
 
-    // Create message
     const chatMessage = await ChatMessage.create({
       conversation: conversation._id,
       sender: 'user',
@@ -7153,12 +7135,10 @@ app.post('/api/support/chat/send', protect, [
       message
     });
 
-    // Update conversation last message timestamp and increment unread count
     conversation.lastMessage = new Date();
     conversation.unreadCount += 1;
     await conversation.save();
 
-    // Emit socket event to admins
     if (socket) {
       socket.emit('new_message', {
         id: chatMessage._id,
@@ -7197,10 +7177,9 @@ app.post('/api/support/chat/send', protect, [
   }
 });
 
-// Socket.io integration for real-time chat
-const initializeSocket = (io) => {
+// Socket.io initialization function
+function initializeSocket(io) {
   io.use((socket, next) => {
-    // Authenticate socket connection
     const token = socket.handshake.query.token;
     if (!token) {
       return next(new Error('Authentication error'));
@@ -7219,7 +7198,6 @@ const initializeSocket = (io) => {
   io.on('connection', (socket) => {
     console.log(`Socket connected: ${socket.id}`);
 
-    // Join appropriate rooms
     if (socket.isAdmin) {
       socket.join('admins');
     } else {
@@ -7229,11 +7207,8 @@ const initializeSocket = (io) => {
     socket.on('disconnect', () => {
       console.log(`Socket disconnected: ${socket.id}`);
     });
-
-    // Add more socket event handlers as needed
   });
-};
-
+}
 
 
 
@@ -7304,6 +7279,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
