@@ -6020,74 +6020,52 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
-// Admin Users Endpoint for DataTables
+
+
+// Admin User Management Routes
 app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async (req, res) => {
   try {
-    // Get query parameters from DataTables
-    const draw = parseInt(req.query.draw) || 1;
-    const start = parseInt(req.query.start) || 0;
-    const length = parseInt(req.query.length) || 10;
-    const searchValue = req.query.search?.value || '';
-    const orderColumn = req.query.order?.[0]?.column || 0;
-    const orderDir = req.query.order?.[0]?.dir || 'desc';
+    // Pagination
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
 
-    // Map DataTables columns to your schema
-    const columnMap = [
-      '_id',
-      null, // fullName (virtual)
-      'email',
-      'balances.main',
-      'status',
-      'lastLogin',
-      null // actions
-    ];
-
-    // Build sort object
-    let sort = {};
-    if (columnMap[orderColumn]) {
-      sort[columnMap[orderColumn]] = orderDir === 'asc' ? 1 : -1;
-    } else {
-      sort = { createdAt: -1 }; // Default sort
+    // Sorting
+    const sortBy = req.query.sortBy || '-createdAt';
+    
+    // Filtering
+    const filter = {};
+    if (req.query.search) {
+      filter.$or = [
+        { firstName: { $regex: req.query.search, $options: 'i' } },
+        { lastName: { $regex: req.query.search, $options: 'i' } },
+        { email: { $regex: req.query.search, $options: 'i' } }
+      ];
+    }
+    if (req.query.status) {
+      filter.status = req.query.status;
+    }
+    if (req.query.kycStatus) {
+      filter['kycStatus.identity'] = req.query.kycStatus;
     }
 
-    // Build query
-    const query = {
-      $or: [
-        { firstName: { $regex: searchValue, $options: 'i' } },
-        { lastName: { $regex: searchValue, $options: 'i' } },
-        { email: { $regex: searchValue, $options: 'i' } }
-      ]
-    };
-
     // Get users with pagination
-    const users = await User.find(searchValue ? query : {})
-      .sort(sort)
-      .skip(start)
-      .limit(length)
+    const users = await User.find(filter)
+      .sort(sortBy)
+      .skip(skip)
+      .limit(limit)
       .select('-password -twoFactorAuth.secret -passwordResetToken -passwordResetExpires');
 
-    // Get total count
-    const totalRecords = await User.countDocuments();
-    const filteredRecords = searchValue ? await User.countDocuments(query) : totalRecords;
-
-    // Format response for DataTables
-    const data = users.map(user => ({
-      _id: user._id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-      balance: user.balances?.main || 0,
-      status: user.status,
-      lastLogin: user.lastLogin,
-      // Add empty action field that will be populated by frontend render
-      actions: ''
-    }));
+    // Get total count for pagination
+    const total = await User.countDocuments(filter);
 
     res.status(200).json({
-      draw,
-      recordsTotal: totalRecords,
-      recordsFiltered: filteredRecords,
-      data
+      status: 'success',
+      results: users.length,
+      total,
+      data: {
+        users
+      }
     });
 
     await logActivity('view_users', 'user', null, req.admin._id, 'Admin', req);
@@ -6099,10 +6077,6 @@ app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async 
     });
   }
 });
-
-
-
-
 
 
 
@@ -6172,6 +6146,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
