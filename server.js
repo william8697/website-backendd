@@ -6022,104 +6022,55 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
-// Robust Admin Users Endpoint for DataTables
+// Admin Users Routes
 app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async (req, res) => {
   try {
-    // Validate and parse DataTables parameters with defaults
-    const draw = parseInt(req.query.draw) || 1;
-    const start = parseInt(req.query.start) || 0;
-    const length = parseInt(req.query.length) || 10;
-    const searchValue = req.query.search?.value || '';
-    const order = req.query.order?.[0] || { column: 0, dir: 'desc' };
+    // Parse query parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
     
-    // Column mapping that matches your DataTables configuration
-    const columnMap = {
-      0: '_id',         // ID column
-      1: null,          // Full Name (composite field)
-      2: 'email',       // Email column
-      3: 'balances.main', // Balance column
-      4: 'status',      // Status column
-      5: 'lastLogin'    // Last Login column
-    };
-
-    // Build the MongoDB query
-    const query = {};
-    
-    // Search functionality
-    if (searchValue) {
-      const searchRegex = { $regex: searchValue, $options: 'i' };
-      query.$or = [
-        { firstName: searchRegex },
-        { lastName: searchRegex },
-        { email: searchRegex },
-        { 'balances.main': isNaN(searchValue) ? null : parseFloat(searchValue) }
-      ].filter(condition => condition !== null);
+    // Build filter object
+    const filter = {};
+    if (req.query.search) {
+      filter.$or = [
+        { firstName: { $regex: req.query.search, $options: 'i' } },
+        { lastName: { $regex: req.query.search, $options: 'i' } },
+        { email: { $regex: req.query.search, $options: 'i' } }
+      ];
     }
-
-    // Determine sort field
-    const sortField = columnMap[order.column] || '_id';
-    const sortOrder = order.dir === 'asc' ? 1 : -1;
-
-    // Get users with proper pagination and sorting
-    const users = await User.find(query)
-      .sort({ [sortField]: sortOrder })
-      .skip(start)
-      .limit(length)
-      .select('firstName lastName email status balances lastLogin')
-      .lean();
-
-    // Get record counts
-    const [totalRecords, filteredRecords] = await Promise.all([
-      User.countDocuments(),
-      searchValue ? User.countDocuments(query) : Promise.resolve(totalRecords)
-    ]);
-
-    // Format data for DataTables
-    const formattedData = users.map(user => ({
-      _id: user._id,
-      name: `${user.firstName} ${user.lastName}`,
-      email: user.email,
-      balance: user.balances?.main ? `$${user.balances.main.toFixed(2)}` : '$0.00',
-      status: `<span class="admin-badge ${user.status === 'active' ? 'badge-success' : 'badge-danger'}">
-                ${user.status.charAt(0).toUpperCase() + user.status.slice(1)}
-              </span>`,
-      lastLogin: user.lastLogin ? new Date(user.lastLogin).toLocaleString() : 'Never',
-      action: `
-        <button class="admin-btn btn-outline-primary btn-sm edit-user" data-id="${user._id}">
-          <i class="fas fa-edit"></i> Edit
-        </button>
-        <button class="admin-btn btn-outline-success btn-sm add-balance" data-id="${user._id}">
-          <i class="fas fa-plus-circle"></i> Add Balance
-        </button>
-      `
-    }));
-
-    // Ensure we always return a valid DataTables response
-    const response = {
-      draw,
-      recordsTotal: totalRecords || 0,
-      recordsFiltered: filteredRecords || 0,
-      data: formattedData || []
-    };
-
-    res.status(200).json(response);
-    await logActivity('view_users', 'user', null, req.admin._id, 'Admin', req);
-
-  } catch (err) {
-    console.error('DataTables Users Error:', err);
+    if (req.query.status) {
+      filter.status = req.query.status;
+    }
     
-    // Return a valid DataTables response even on error
+    // Get users with pagination
+    const users = await User.find(filter)
+      .select('-password -twoFactorAuth.secret -passwordResetToken -passwordResetExpires')
+      .skip(skip)
+      .limit(limit)
+      .sort({ createdAt: -1 });
+    
+    // Get total count for pagination
+    const total = await User.countDocuments(filter);
+    
+    res.status(200).json({
+      status: 'success',
+      results: users.length,
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      data: {
+        users
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching users:', err);
     res.status(500).json({
-      draw: req.query.draw || 0,
-      recordsTotal: 0,
-      recordsFiltered: 0,
-      data: [],
-      error: 'Error loading user data'
+      status: 'error',
+      message: 'Failed to fetch users'
     });
   }
 });
-
-
 
 
 
@@ -6185,6 +6136,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
