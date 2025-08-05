@@ -6020,7 +6020,59 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
+// Admin Routes
+app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    // Pagination
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
 
+    // Sorting
+    const sortBy = req.query.sortBy || '-createdAt';
+    
+    // Filtering
+    const filter = {};
+    if (req.query.status) filter.status = req.query.status;
+    if (req.query.search) {
+      filter.$or = [
+        { firstName: { $regex: req.query.search, $options: 'i' } },
+        { lastName: { $regex: req.query.search, $options: 'i' } },
+        { email: { $regex: req.query.search, $options: 'i' } }
+      ];
+    }
+
+    // Get users with pagination
+    const users = await User.find(filter)
+      .sort(sortBy)
+      .skip(skip)
+      .limit(limit)
+      .select('-password -twoFactorAuth.secret -passwordResetToken -passwordResetExpires');
+
+    // Get total count for pagination
+    const total = await User.countDocuments(filter);
+
+    // Format response
+    res.status(200).json({
+      status: 'success',
+      results: users.length,
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      data: {
+        users
+      }
+    });
+
+    await logActivity('view_users', 'user', null, req.admin._id, 'Admin', req);
+  } catch (err) {
+    console.error('Error fetching users:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching users'
+    });
+  }
+});
 
 
 
@@ -6095,5 +6147,6 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
