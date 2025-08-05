@@ -6508,7 +6508,252 @@ app.get('/api/admin/transactions', adminProtect, restrictTo('super', 'finance'),
     }
 });
 
+// Admin Activity Log
+app.get('/api/admin/activity', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+    try {
+        const { limit = 20, page = 1 } = req.query;
+        const skip = (page - 1) * limit;
 
+        const activities = await SystemLog.find()
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .populate('performedBy', 'firstName lastName email')
+            .populate({
+                path: 'entityId',
+                select: 'firstName lastName email reference amount', // Include relevant fields for different entities
+                options: { 
+                    transform: (doc) => {
+                        if (!doc) return null;
+                        // Transform based on entity type
+                        if (doc instanceof User) {
+                            return { name: doc.fullName, email: doc.email };
+                        } else if (doc instanceof Transaction) {
+                            return { reference: doc.reference, amount: doc.amount };
+                        }
+                        return doc;
+                    }
+                }
+            })
+            .lean();
+
+        const total = await SystemLog.countDocuments();
+
+        // Format activities for frontend
+        const formattedActivities = activities.map(activity => {
+            let user = 'System';
+            if (activity.performedBy) {
+                user = activity.performedByModel === 'User' 
+                    ? `${activity.performedBy.firstName} ${activity.performedBy.lastName}`
+                    : activity.performedBy.name;
+            }
+
+            return {
+                id: activity._id,
+                type: activity.action,
+                description: getActivityDescription(activity),
+                user: {
+                    id: activity.performedBy?._id,
+                    name: user,
+                    email: activity.performedBy?.email
+                },
+                created_at: activity.createdAt,
+                changes: activity.changes || {}
+            };
+        });
+
+        res.status(200).json({
+            status: 'success',
+            data: formattedActivities,
+            total,
+            page: parseInt(page),
+            pages: Math.ceil(total / limit)
+        });
+
+    } catch (err) {
+        console.error('Admin activity error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching activity logs'
+        });
+    }
+});
+
+// Helper function to generate activity description
+function getActivityDescription(activity) {
+    switch(activity.action) {
+        case 'login':
+            return `${activity.performedBy?.name || 'User'} logged in`;
+        case 'logout':
+            return `${activity.performedBy?.name || 'User'} logged out`;
+        case 'deposit':
+            return `Deposit ${activity.entityId?.reference || ''} of $${activity.changes?.amount || ''}`;
+        case 'withdrawal':
+            return `Withdrawal request ${activity.entityId?.reference || ''} of $${activity.changes?.amount || ''}`;
+        case 'investment':
+            return `Investment created for $${activity.changes?.amount || ''}`;
+        case 'signup':
+            return `New user registered: ${activity.entityId?.name || ''}`;
+        case 'update-profile':
+            return `Profile information updated`;
+        case 'change-password':
+            return `Password changed`;
+        case 'submit-kyc':
+            return `KYC documents submitted`;
+        case 'create-withdrawal':
+            return `Withdrawal request created`;
+        case 'admin-login':
+            return `Admin logged in`;
+        default:
+            return activity.action.replace(/-/g, ' ');
+    }
+}
+
+// Admin Revenue Stats
+app.get('/api/admin/stats/revenue', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+    try {
+        const { period = '30' } = req.query;
+        const days = parseInt(period);
+        
+        if (isNaN(days) || ![7, 30, 90, 365].includes(days)) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'Invalid period. Valid values are 7, 30, 90, or 365'
+            });
+        }
+
+        const cacheKey = `revenue-stats-${days}`;
+        const cachedData = await redis.get(cacheKey);
+        
+        if (cachedData) {
+            return res.status(200).json({
+                status: 'success',
+                data: JSON.parse(cachedData)
+            });
+        }
+
+        const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        
+        // Get daily deposits
+        const deposits = await Transaction.aggregate([
+            { 
+                $match: { 
+                    type: 'deposit', 
+                    status: 'completed',
+                    createdAt: { $gte: startDate }
+                } 
+            },
+            {
+                $group: {
+                    _id: {
+                        $dateToString: { format: '%Y-%m-%d', date: '$createdAt' }
+                    },
+                    amount: { $sum: '$amount' }
+                }
+            },
+            { $sort: { '_id': 1 } }
+        ]);
+
+        // Get daily withdrawals
+        const withdrawals = await Transaction.aggregate([
+            { 
+                $match: { 
+                    type: 'withdrawal', 
+                    status: 'completed',
+                    createdAt: { $gte: startDate }
+                } 
+            },
+            {
+                $group: {
+                    _id: {
+                        $dateToString: { format: '%Y-%m-%d', date: '$createdAt' }
+                    },
+                    amount: { $sum: '$amount' }
+                }
+            },
+            { $sort: { '_id': 1 } }
+        ]);
+
+        // Get daily fees (revenue)
+        const fees = await Transaction.aggregate([
+            { 
+                $match: { 
+                    fee: { $gt: 0 },
+                    createdAt: { $gte: startDate }
+                } 
+            },
+            {
+                $group: {
+                    _id: {
+                        $dateToString: { format: '%Y-%m-%d', date: '$createdAt' }
+                    },
+                    amount: { $sum: '$fee' }
+                }
+            },
+            { $sort: { '_id': 1 } }
+        ]);
+
+        // Generate all dates in the period
+        const dateLabels = [];
+        const dateMap = {};
+        for (let i = 0; i < days; i++) {
+            const date = new Date(startDate);
+            date.setDate(date.getDate() + i);
+            const dateStr = date.toISOString().split('T')[0];
+            dateLabels.push(dateStr);
+            dateMap[dateStr] = i;
+        }
+
+        // Initialize arrays with zeros
+        const depositData = new Array(days).fill(0);
+        const withdrawalData = new Array(days).fill(0);
+        const revenueData = new Array(days).fill(0);
+
+        // Fill in actual data
+        deposits.forEach(item => {
+            const index = dateMap[item._id];
+            if (index !== undefined) {
+                depositData[index] = item.amount;
+            }
+        });
+
+        withdrawals.forEach(item => {
+            const index = dateMap[item._id];
+            if (index !== undefined) {
+                withdrawalData[index] = item.amount;
+            }
+        });
+
+        fees.forEach(item => {
+            const index = dateMap[item._id];
+            if (index !== undefined) {
+                revenueData[index] = item.amount;
+            }
+        });
+
+        const responseData = {
+            labels: dateLabels,
+            deposits: depositData,
+            withdrawals: withdrawalData,
+            revenue: revenueData
+        };
+
+        // Cache for 1 hour
+        await redis.set(cacheKey, JSON.stringify(responseData), 'EX', 3600);
+
+        res.status(200).json({
+            status: 'success',
+            data: responseData
+        });
+
+    } catch (err) {
+        console.error('Revenue stats error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching revenue statistics'
+        });
+    }
+});
 
 
 
@@ -6577,3 +6822,4 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
