@@ -6022,59 +6022,60 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
-
-// Admin Users Endpoint for DataTables (Corrected Version)
+// Robust Admin Users Endpoint for DataTables
 app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async (req, res) => {
   try {
-    // DataTables parameters
+    // Validate and parse DataTables parameters with defaults
     const draw = parseInt(req.query.draw) || 1;
     const start = parseInt(req.query.start) || 0;
-    const length = parseInt(req.query.length) || 25;
+    const length = parseInt(req.query.length) || 10;
     const searchValue = req.query.search?.value || '';
-    const order = req.query.order?.[0] || {};
-    const orderColumnIndex = order.column || 0;
-    const orderDirection = order.dir || 'desc';
+    const order = req.query.order?.[0] || { column: 0, dir: 'desc' };
+    
+    // Column mapping that matches your DataTables configuration
+    const columnMap = {
+      0: '_id',         // ID column
+      1: null,          // Full Name (composite field)
+      2: 'email',       // Email column
+      3: 'balances.main', // Balance column
+      4: 'status',      // Status column
+      5: 'lastLogin'    // Last Login column
+    };
 
-    // Map DataTables columns to database fields
-    const columnMap = [
-      '_id',                 // Column 0 - ID
-      null,                  // Column 1 - Full Name (virtual field)
-      'email',               // Column 2 - Email
-      'balances.main',       // Column 3 - Balance
-      'status',              // Column 4 - Status
-      'lastLogin',           // Column 5 - Last Login
-      null                   // Column 6 - Actions (not in database)
-    ];
-
-    const orderField = columnMap[orderColumnIndex] || '_id';
-
-    // Build query
+    // Build the MongoDB query
     const query = {};
     
-    // Search filter
+    // Search functionality
     if (searchValue) {
+      const searchRegex = { $regex: searchValue, $options: 'i' };
       query.$or = [
-        { firstName: { $regex: searchValue, $options: 'i' } },
-        { lastName: { $regex: searchValue, $options: 'i' } },
-        { email: { $regex: searchValue, $options: 'i' } },
+        { firstName: searchRegex },
+        { lastName: searchRegex },
+        { email: searchRegex },
         { 'balances.main': isNaN(searchValue) ? null : parseFloat(searchValue) }
-      ].filter(Boolean);
+      ].filter(condition => condition !== null);
     }
 
-    // Get users with pagination
+    // Determine sort field
+    const sortField = columnMap[order.column] || '_id';
+    const sortOrder = order.dir === 'asc' ? 1 : -1;
+
+    // Get users with proper pagination and sorting
     const users = await User.find(query)
-      .sort({ [orderField]: orderDirection === 'asc' ? 1 : -1 })
+      .sort({ [sortField]: sortOrder })
       .skip(start)
       .limit(length)
       .select('firstName lastName email status balances lastLogin')
       .lean();
 
-    // Get total records
-    const totalRecords = await User.countDocuments();
-    const filteredRecords = searchValue ? await User.countDocuments(query) : totalRecords;
+    // Get record counts
+    const [totalRecords, filteredRecords] = await Promise.all([
+      User.countDocuments(),
+      searchValue ? User.countDocuments(query) : Promise.resolve(totalRecords)
+    ]);
 
-    // Transform data to match DataTables expected format
-    const data = users.map(user => ({
+    // Format data for DataTables
+    const formattedData = users.map(user => ({
       _id: user._id,
       name: `${user.firstName} ${user.lastName}`,
       email: user.email,
@@ -6093,20 +6094,27 @@ app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async 
       `
     }));
 
-    res.status(200).json({
+    // Ensure we always return a valid DataTables response
+    const response = {
       draw,
-      recordsTotal: totalRecords,
-      recordsFiltered: filteredRecords,
-      data
-    });
+      recordsTotal: totalRecords || 0,
+      recordsFiltered: filteredRecords || 0,
+      data: formattedData || []
+    };
 
+    res.status(200).json(response);
     await logActivity('view_users', 'user', null, req.admin._id, 'Admin', req);
+
   } catch (err) {
-    console.error('Error fetching users:', err);
+    console.error('DataTables Users Error:', err);
+    
+    // Return a valid DataTables response even on error
     res.status(500).json({
       draw: req.query.draw || 0,
-      error: 'An error occurred while fetching users',
-      details: process.env.NODE_ENV === 'development' ? err.message : undefined
+      recordsTotal: 0,
+      recordsFiltered: 0,
+      data: [],
+      error: 'Error loading user data'
     });
   }
 });
@@ -6177,6 +6185,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
