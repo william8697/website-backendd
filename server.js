@@ -272,6 +272,40 @@ UserSchema.index({ createdAt: -1 });
 
 const User = mongoose.model('User', UserSchema);
 
+
+const ChatMessageSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'User is required'],
+    index: true
+  },
+  admin: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    index: true
+  },
+  message: {
+    type: String,
+    required: [true, 'Message is required'],
+    trim: true
+  },
+  isAdmin: {
+    type: Boolean,
+    default: false
+  },
+  read: {
+    type: Boolean,
+    default: false
+  }
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+const ChatMessage = mongoose.model('ChatMessage', ChatMessageSchema);
+
 const AdminSchema = new mongoose.Schema({
   email: { 
     type: String, 
@@ -1029,74 +1063,42 @@ const NewsletterSubscriber = mongoose.model('NewsletterSubscriber', NewsletterSu
 
 
 
-
-
-
-// Add after other schema definitions
-const SupportMessageSchema = new mongoose.Schema({
-  conversationId: { 
-    type: String, 
-    required: true,
-    index: true 
-  },
-  sender: {
-    type: String,
-    enum: ['user', 'agent', 'ai'],
-    required: true
-  },
-  senderId: {
+// Chat Support Schema
+const ChatMessageSchema = new mongoose.Schema({
+  user: {
     type: mongoose.Schema.Types.ObjectId,
-    required: true,
-    refPath: 'senderModel'
+    ref: 'User',
+    required: [true, 'User is required'],
+    index: true
   },
-  senderModel: {
-    type: String,
-    enum: ['User', 'Admin'],
-    required: true
-  },
-  recipientId: {
+  admin: {
     type: mongoose.Schema.Types.ObjectId,
-    refPath: 'recipientModel'
-  },
-  recipientModel: {
-    type: String,
-    enum: ['User', 'Admin']
+    ref: 'Admin',
+    index: true
   },
   message: {
     type: String,
-    required: true
+    required: [true, 'Message is required'],
+    trim: true
   },
-  attachments: [{
-    url: String,
-    type: String,
-    name: String,
-    size: Number
-  }],
-  isRead: {
+  isAdmin: {
     type: Boolean,
     default: false
   },
-  metadata: {
-    ip: String,
-    userAgent: String,
-    location: String
-  },
-  aiFeedback: {
-    helpful: Boolean,
-    correction: String
+  read: {
+    type: Boolean,
+    default: false
   }
-}, { 
+}, {
   timestamps: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
 });
 
-SupportMessageSchema.index({ conversationId: 1 });
-SupportMessageSchema.index({ senderId: 1, senderModel: 1 });
-SupportMessageSchema.index({ recipientId: 1, recipientModel: 1 });
-SupportMessageSchema.index({ createdAt: -1 });
+const ChatMessage = mongoose.model('ChatMessage', ChatMessageSchema);
 
-const SupportMessage = mongoose.model('SupportMessage', SupportMessageSchema);
+
+
 
 const SupportConversationSchema = new mongoose.Schema({
   conversationId: {
@@ -1814,6 +1816,7 @@ module.exports = {
   NewsletterSubscriber,
   Card,
   SupportTicket,
+   ChatMessage,
  SupportMessage,
   SupportConversation,
   setupWebSocketServer
@@ -6882,7 +6885,270 @@ app.get('/api/admin/stats/user-growth', adminProtect, restrictTo('super', 'suppo
 
 
 
+// Admin Chat Endpoints
+app.get('/api/admin/support/chat/conversations', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    // Get all unique users who have chat messages
+    const conversations = await ChatMessage.aggregate([
+      {
+        $group: {
+          _id: '$user',
+          lastMessage: { $last: '$$ROOT' },
+          unreadCount: {
+            $sum: {
+              $cond: [{ $and: [{ $eq: ['$read', false] }, { $eq: ['$isAdmin', false] }] }, 1, 0]
+            }
+          }
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      {
+        $unwind: '$user'
+      },
+      {
+        $project: {
+          'user.password': 0,
+          'user.passwordChangedAt': 0,
+          'user.passwordResetToken': 0,
+          'user.passwordResetExpires': 0,
+          'user.twoFactorAuth.secret': 0
+        }
+      },
+      {
+        $sort: { 'lastMessage.createdAt': -1 }
+      }
+    ]);
 
+    res.status(200).json({
+      status: 'success',
+      data: conversations.map(conv => ({
+        user: conv.user,
+        last_message: conv.lastMessage,
+        unread_count: conv.unreadCount
+      }))
+    });
+  } catch (err) {
+    console.error('Get chat conversations error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching chat conversations'
+    });
+  }
+});
+
+app.get('/api/admin/support/chat/messages/:userId', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Validate user exists
+    const user = await User.findById(userId).select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -twoFactorAuth.secret');
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Get all messages between admin and user
+    const messages = await ChatMessage.find({
+      $or: [
+        { user: userId, admin: null },
+        { user: userId, admin: req.admin._id }
+      ]
+    }).sort({ createdAt: 1 });
+
+    // Mark user's messages as read
+    await ChatMessage.updateMany(
+      {
+        user: userId,
+        isAdmin: false,
+        read: false
+      },
+      {
+        $set: { read: true }
+      }
+    );
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        user,
+        messages
+      }
+    });
+  } catch (err) {
+    console.error('Get chat messages error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching chat messages'
+    });
+  }
+});
+
+app.post('/api/admin/support/chat/send', adminProtect, restrictTo('super', 'support'), [
+  body('user_id').isMongoId().withMessage('Invalid user ID'),
+  body('message').trim().notEmpty().withMessage('Message is required').escape()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { user_id, message } = req.body;
+
+    // Validate user exists
+    const user = await User.findById(user_id);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Create message
+    const chatMessage = await ChatMessage.create({
+      user: user_id,
+      admin: req.admin._id,
+      message,
+      isAdmin: true
+    });
+
+    // Emit socket event
+    if (socket) {
+      socket.to(`user_${user_id}`).emit('new_message', {
+        message: chatMessage,
+        admin: {
+          _id: req.admin._id,
+          name: req.admin.name,
+          email: req.admin.email,
+          role: req.admin.role
+        }
+      });
+    }
+
+    // Send notification to user
+    user.notifications.push({
+      title: 'New Support Message',
+      message: `You have a new message from support: "${message.substring(0, 50)}${message.length > 50 ? '...' : ''}"`,
+      type: 'info'
+    });
+    await user.save();
+
+    res.status(201).json({
+      status: 'success',
+      data: chatMessage
+    });
+
+    await logActivity('send-chat-message', 'chat', chatMessage._id, req.admin._id, 'Admin', req, {
+      user_id,
+      message_length: message.length
+    });
+  } catch (err) {
+    console.error('Send chat message error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while sending chat message'
+    });
+  }
+});
+
+// User Chat Endpoints
+app.get('/api/support/chat/messages', protect, async (req, res) => {
+  try {
+    // Get all messages between user and admin
+    const messages = await ChatMessage.find({
+      $or: [
+        { user: req.user.id, admin: null },
+        { user: req.user.id, admin: { $exists: true } }
+      ]
+    }).sort({ createdAt: 1 });
+
+    // Mark admin's messages as read
+    await ChatMessage.updateMany(
+      {
+        user: req.user.id,
+        isAdmin: true,
+        read: false
+      },
+      {
+        $set: { read: true }
+      }
+    );
+
+    res.status(200).json({
+      status: 'success',
+      data: messages
+    });
+  } catch (err) {
+    console.error('Get user chat messages error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching chat messages'
+    });
+  }
+});
+
+app.post('/api/support/chat/send', protect, [
+  body('message').trim().notEmpty().withMessage('Message is required').escape()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { message } = req.body;
+
+    // Create message
+    const chatMessage = await ChatMessage.create({
+      user: req.user.id,
+      message,
+      isAdmin: false
+    });
+
+    // Emit socket event
+    if (socket) {
+      socket.emit('new_message', {
+        message: chatMessage,
+        user: {
+          _id: req.user._id,
+          firstName: req.user.firstName,
+          lastName: req.user.lastName,
+          email: req.user.email
+        }
+      });
+    }
+
+    res.status(201).json({
+      status: 'success',
+      data: chatMessage
+    });
+
+    await logActivity('send-chat-message', 'chat', chatMessage._id, req.user._id, 'User', req, {
+      message_length: message.length
+    });
+  } catch (err) {
+    console.error('Send user chat message error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while sending chat message'
+    });
+  }
+});
 
 
 
@@ -6950,9 +7216,3 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
