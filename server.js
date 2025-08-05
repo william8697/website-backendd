@@ -25,6 +25,16 @@ const WebSocket = require('ws');
 const OpenAI = require('openai');
 // Initialize Express app
 const app = express();
+const http = require('http');
+const server = http.createServer(app);
+const { Server } = require('socket.io');
+const io = new Server(server, {
+  cors: {
+    origin: ['https://bithhash.vercel.app', 'https://website-backendd-1.onrender.com'],
+    methods: ['GET', 'POST'],
+    credentials: true
+  }
+});
 
 // Enhanced Security Middleware
 app.use(helmet({
@@ -7261,512 +7271,83 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
+// Add this near the top of your server.js, after initializing Express but before routes
 
 
-// Facial KYC Verification Endpoint
-app.post('/api/users/kyc/facial', protect, [
-  body('image').notEmpty().withMessage('Image is required')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+// Socket.IO authentication middleware
+io.use(async (socket, next) => {
   try {
-    const { image } = req.body;
-    const user = await User.findById(req.user.id);
-
-    // Check if facial KYC is already verified
-    if (user.kycStatus.facial === 'verified') {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Facial verification has already been completed'
-      });
-    }
-
-    // Check for existing pending facial KYC
-    const existingKYC = await KYC.findOne({ 
-      user: user._id, 
-      type: 'facial',
-      status: 'pending'
-    });
-    
-    if (existingKYC) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'You already have a pending facial verification'
-      });
-    }
-
-    // Verify with Face++ API
-    const faceppResponse = await axios.post('https://api-us.faceplusplus.com/facepp/v3/detect', {
-      api_key: process.env.FACEPP_API_KEY,
-      api_secret: process.env.FACEPP_API_SECRET,
-      image_base64: image,
-      return_landmark: 1,
-      return_attributes: 'gender,age,smiling,headpose,facequality,blur,eyestatus,emotion,ethnicity,beauty,mouthstatus,eyegaze,skinstatus'
-    }, {
-      timeout: 10000 // 10 seconds timeout
-    });
-
-    // Validate Face++ response
-    if (!faceppResponse.data.faces || faceppResponse.data.faces.length === 0) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'No face detected in the image'
-      });
-    }
-
-    if (faceppResponse.data.faces.length > 1) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Multiple faces detected. Please upload an image with only your face'
-      });
-    }
-
-    const face = faceppResponse.data.faces[0];
-    const qualityChecks = [];
-
-    // Perform quality checks
-    if (face.attributes.blur.value > 50) {
-      qualityChecks.push('Image is too blurry');
-    }
-    if (face.attributes.facequality.value < 50) {
-      qualityChecks.push('Low image quality');
-    }
-    if (face.attributes.headpose.yaw_angle > 30 || face.attributes.headpose.pitch_angle > 30) {
-      qualityChecks.push('Face not properly aligned');
-    }
-    if (face.attributes.eyestatus.left_eye_status.no_glass_eye_close > 50 || 
-        face.attributes.eyestatus.right_eye_status.no_glass_eye_close > 50) {
-      qualityChecks.push('Eyes are closed');
-    }
-
-    if (qualityChecks.length > 0) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Image quality issues detected',
-        issues: qualityChecks
-      });
-    }
-
-    // Compare with ID document if available
-    if (user.kycDocuments.identityFront) {
-      const compareResponse = await axios.post('https://api-us.faceplusplus.com/facepp/v3/compare', {
-        api_key: process.env.FACEPP_API_KEY,
-        api_secret: process.env.FACEPP_API_SECRET,
-        image_base64_1: user.kycDocuments.identityFront,
-        image_base64_2: image
-      }, {
-        timeout: 10000 // 10 seconds timeout
-      });
-
-      if (compareResponse.data.confidence < 70) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'Face does not match ID document',
-          confidence: compareResponse.data.confidence
-        });
-      }
-    }
-
-    // Create KYC record
-    const kyc = await KYC.create({
-      user: user._id,
-      type: 'facial',
-      selfie: image,
-      status: 'pending',
-      metadata: {
-        faceppResponse: faceppResponse.data,
-        comparisonConfidence: user.kycDocuments.identityFront ? compareResponse.data.confidence : null
-      }
-    });
-
-    // Update user's KYC status and save selfie
-    user.kycStatus.facial = 'pending';
-    user.kycDocuments.selfie = image;
-    await user.save();
-
-    // Log the verification attempt
-    await logActivity('submit-facial-kyc', 'kyc', kyc._id, user._id, 'User', req, {
-      faceppResponse: faceppResponse.data,
-      comparisonConfidence: user.kycDocuments.identityFront ? compareResponse.data.confidence : null
-    });
-
-    res.status(201).json({
-      status: 'success',
-      data: {
-        kycId: kyc._id,
-        message: 'Facial verification submitted successfully',
-        confidence: user.kycDocuments.identityFront ? compareResponse.data.confidence : null,
-        faceAttributes: {
-          age: face.attributes.age.value,
-          gender: face.attributes.gender.value,
-          ethnicity: face.attributes.ethnicity.value
-        }
-      }
-    });
-
-  } catch (err) {
-    console.error('Facial KYC error:', err);
-
-    let errorMessage = 'An error occurred during facial verification';
-    if (err.response && err.response.data && err.response.data.error_message) {
-      errorMessage = err.response.data.error_message;
-    } else if (err.code === 'ECONNABORTED') {
-      errorMessage = 'Verification service timed out. Please try again.';
-    }
-
-    res.status(500).json({
-      status: 'error',
-      message: errorMessage
-    });
-  }
-});
-
-// Admin Facial KYC Review Endpoint
-app.post('/api/admin/kyc/facial/:id/review', adminProtect, restrictTo('super', 'kyc'), [
-  body('status').isIn(['approved', 'rejected']).withMessage('Invalid status'),
-  body('rejectionReason').optional().trim().escape()
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { id } = req.params;
-    const { status, rejectionReason } = req.body;
-
-    const kyc = await KYC.findByIdAndUpdate(
-      id,
-      {
-        status,
-        rejectionReason: status === 'rejected' ? rejectionReason : undefined,
-        reviewedBy: req.admin._id,
-        reviewedAt: new Date()
-      },
-      { new: true }
-    ).populate('user', 'firstName lastName email');
-
-    if (!kyc || kyc.type !== 'facial') {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Facial KYC submission not found'
-      });
-    }
-
-    // Update user's KYC status
-    const user = await User.findById(kyc.user._id);
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-
-    user.kycStatus.facial = status === 'approved' ? 'verified' : 'rejected';
-    await user.save();
-
-    // Send notification to user
-    user.notifications.push({
-      title: 'Facial Verification Status',
-      message: `Your facial verification has been ${status}. ${status === 'rejected' ? rejectionReason : ''}`,
-      type: status === 'approved' ? 'success' : 'error'
-    });
-    await user.save();
-
-    res.status(200).json({
-      status: 'success',
-      data: kyc
-    });
-
-    await logActivity('review-facial-kyc', 'kyc', kyc._id, req.admin._id, 'Admin', req, { status, rejectionReason });
-  } catch (err) {
-    console.error('Review facial KYC error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while reviewing facial verification'
-    });
-  }
-});
-
-// Add this to your server.js after the HTTP server is created
-
-// WebSocket Server Setup
-const setupWebSocketServer = (server) => {
-  const wss = new WebSocket.Server({ 
-    server,
-    path: '/socket.io',
-    clientTracking: true
-  });
-
-  // Track connected admin clients
-  const adminClients = new Map();
-  const userClients = new Map();
-
-  // Authentication middleware for WebSocket
-  const authenticateWS = (info, callback) => {
-    try {
-      const token = info.req.url.split('token=')[1];
-      if (!token) {
-        return callback(false, 401, 'Unauthorized');
-      }
-
-      jwt.verify(token, JWT_SECRET, (err, decoded) => {
-        if (err) {
-          return callback(false, 401, 'Invalid token');
-        }
-
-        info.req.user = decoded;
-        callback(true);
-      });
-    } catch (err) {
-      callback(false, 401, 'Authentication error');
-    }
-  };
-
-  // WebSocket server events
-  wss.on('connection', (ws, req) => {
-    const token = req.url.split('token=')[1];
+    const token = socket.handshake.auth.token;
     if (!token) {
-      ws.close(1008, 'Unauthorized');
-      return;
+      return next(new Error('Authentication error'));
     }
 
-    jwt.verify(token, JWT_SECRET, async (err, decoded) => {
-      if (err) {
-        ws.close(1008, 'Invalid token');
-        return;
-      }
+    const decoded = verifyJWT(token);
+    if (!decoded.isAdmin) {
+      return next(new Error('Unauthorized'));
+    }
 
-      // Admin connection
-      if (decoded.role === 'admin') {
-        adminClients.set(decoded.id, ws);
-        console.log(`Admin ${decoded.id} connected`);
+    const admin = await Admin.findById(decoded.id);
+    if (!admin) {
+      return next(new Error('Admin not found'));
+    }
 
-        // Send initial stats
-        sendInitialStats(ws);
+    socket.admin = admin;
+    next();
+  } catch (err) {
+    next(new Error('Authentication failed'));
+  }
+});
 
-        ws.on('close', () => {
-          adminClients.delete(decoded.id);
-          console.log(`Admin ${decoded.id} disconnected`);
-        });
-      }
-      // User connection (for chat)
-      else {
-        userClients.set(decoded.id, ws);
-        console.log(`User ${decoded.id} connected`);
+// Socket.IO connection handler
+io.on('connection', (socket) => {
+  console.log(`Admin connected: ${socket.admin.email}`);
 
-        ws.on('close', () => {
-          userClients.delete(decoded.id);
-          console.log(`User ${decoded.id} disconnected`);
-        });
-      }
+  // Join admin to their private room
+  socket.join(`admin_${socket.admin._id}`);
 
-      // Message handler
-      ws.on('message', (message) => {
-        handleWebSocketMessage(ws, decoded, message);
-      });
-    });
+  // Handle real-time events
+  socket.on('subscribe', (data) => {
+    if (data.channel === 'notifications') {
+      socket.join('notifications');
+    } else if (data.channel === 'transactions') {
+      socket.join('transactions');
+    }
   });
 
-  // Send initial dashboard stats to admin
-  const sendInitialStats = async (ws) => {
-    try {
-      const [
-        totalUsers,
-        activeInvestments,
-        totalDeposits,
-        pendingWithdrawals,
-        openTickets,
-        unreadMessages
-      ] = await Promise.all([
-        User.countDocuments(),
-        Investment.countDocuments({ status: 'active' }),
-        Transaction.aggregate([{ $match: { type: 'deposit', status: 'completed' } }, { $group: { _id: null, total: { $sum: '$amount' } }]),
-        Transaction.countDocuments({ type: 'withdrawal', status: 'pending' }),
-        SupportTicket.countDocuments({ status: 'open' }),
-        SupportMessage.countDocuments({ recipientId: null, isRead: false })
-      ]);
-
-      ws.send(JSON.stringify({
-        event: 'initial_stats',
-        data: {
-          total_users: totalUsers,
-          active_investments: activeInvestments,
-          total_deposits: totalDeposits[0]?.total || 0,
-          pending_withdrawals: pendingWithdrawals,
-          open_tickets: openTickets,
-          unread_messages: unreadMessages
-        }
-      }));
-    } catch (err) {
-      console.error('Error sending initial stats:', err);
+  socket.on('unsubscribe', (data) => {
+    if (data.channel === 'notifications') {
+      socket.leave('notifications');
+    } else if (data.channel === 'transactions') {
+      socket.leave('transactions');
     }
-  };
+  });
 
-  // Handle incoming WebSocket messages
-  const handleWebSocketMessage = (ws, user, message) => {
-    try {
-      const { event, data } = JSON.parse(message);
+  socket.on('disconnect', () => {
+    console.log(`Admin disconnected: ${socket.admin.email}`);
+  });
+});
 
-      switch (event) {
-        case 'chat_message':
-          handleChatMessage(user, data);
-          break;
-        case 'join_conversation':
-          handleJoinConversation(ws, user, data);
-          break;
-        case 'typing':
-          handleTypingIndicator(user, data);
-          break;
-        default:
-          console.log('Unknown WebSocket event:', event);
-      }
-    } catch (err) {
-      console.error('Error handling WebSocket message:', err);
-    }
-  };
-
-  // Handle chat messages
-  const handleChatMessage = async (sender, messageData) => {
-    try {
-      const { conversationId, message } = messageData;
-      
-      // Save message to database
-      const newMessage = new SupportMessage({
-        conversationId,
-        sender: sender.role === 'admin' ? 'agent' : 'user',
-        senderId: sender.id,
-        senderModel: sender.role === 'admin' ? 'Admin' : 'User',
-        message,
-        isRead: false,
-        metadata: {
-          ip: sender.ip,
-          userAgent: sender.userAgent
-        }
-      });
-
-      const savedMessage = await newMessage.save();
-
-      // Update conversation last message
-      await SupportConversation.updateOne(
-        { conversationId },
-        { $set: { lastMessageAt: new Date() } }
-      );
-
-      // Find recipient (admin or user)
-      let recipientWs;
-      if (sender.role === 'admin') {
-        const conversation = await SupportConversation.findOne({ conversationId });
-        if (conversation) {
-          recipientWs = userClients.get(conversation.userId.toString());
-        }
-      } else {
-        const conversation = await SupportConversation.findOne({ conversationId });
-        if (conversation && conversation.agentId) {
-          recipientWs = adminClients.get(conversation.agentId.toString());
-        }
-      }
-
-      // Send message to recipient
-      if (recipientWs) {
-        recipientWs.send(JSON.stringify({
-          event: 'new_message',
-          data: {
-            conversationId,
-            message: savedMessage,
-            sender: sender.role === 'admin' ? 'admin' : 'user'
-          }
-        }));
-      }
-
-      // Broadcast to all admins for unassigned chats
-      if (sender.role === 'user') {
-        const conversation = await SupportConversation.findOne({ conversationId });
-        if (!conversation.agentId) {
-          broadcastToAdmins({
-            event: 'unassigned_message',
-            data: {
-              conversationId,
-              message: savedMessage,
-              userId: sender.id
-            }
-          });
-        }
-      }
-    } catch (err) {
-      console.error('Error handling chat message:', err);
-    }
-  };
-
-  // Broadcast message to all connected admins
-  const broadcastToAdmins = (message) => {
-    adminClients.forEach((ws) => {
-      ws.send(JSON.stringify(message));
-    });
-  };
-
-  // Handle real-time events from the system
-  const broadcastEvent = (event, data) => {
-    const message = JSON.stringify({ event, data });
-    adminClients.forEach((ws) => {
-      ws.send(message);
-    });
-  };
-
-  // Listen for database changes and broadcast events
-  const startChangeStreams = () => {
-    // User changes
-    const userChangeStream = User.watch();
-    userChangeStream.on('change', (change) => {
-      if (change.operationType === 'insert') {
-        broadcastEvent('new_user', change.fullDocument);
-      }
-    });
-
-    // Transaction changes
-    const transactionChangeStream = Transaction.watch();
-    transactionChangeStream.on('change', (change) => {
-      if (change.operationType === 'insert') {
-        if (change.fullDocument.type === 'deposit') {
-          broadcastEvent('new_deposit', change.fullDocument);
-        } else if (change.fullDocument.type === 'withdrawal') {
-          broadcastEvent('new_withdrawal', change.fullDocument);
-        }
-      }
-    });
-
-    // Support ticket changes
-    const ticketChangeStream = SupportTicket.watch();
-    ticketChangeStream.on('change', (change) => {
-      if (change.operationType === 'insert') {
-        broadcastEvent('new_ticket', change.fullDocument);
-      }
-    });
-  };
-
-  // Start change streams
-  startChangeStreams();
-
-  return wss;
+// Helper function to emit events
+const emitAdminEvent = (event, data, adminId = null) => {
+  if (adminId) {
+    io.to(`admin_${adminId}`).emit(event, data);
+  } else {
+    io.emit(event, data);
+  }
 };
 
-// Initialize WebSocket server after HTTP server is created
-const server = app.listen(process.env.PORT || 3000, () => {
-  console.log(`Server running on port ${process.env.PORT || 3000}`);
+// Example usage in your existing routes:
+// When a new deposit comes in:
+// emitAdminEvent('new_deposit', { amount: 100, user: { name: 'John Doe' } });
+
+// When a new withdrawal comes in:
+// emitAdminEvent('new_withdrawal', { amount: 50, user: { name: 'Jane Smith' } });
+
+// Replace app.listen with server.listen at the bottom of your file
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
-
-const wss = setupWebSocketServer(server);
-
-
 
 
 // Error handling middleware
@@ -7792,6 +7373,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
 
