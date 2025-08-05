@@ -1063,43 +1063,6 @@ const NewsletterSubscriber = mongoose.model('NewsletterSubscriber', NewsletterSu
 
 
 
-// Chat Support Schema
-const ChatMessageSchema = new mongoose.Schema({
-  user: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: [true, 'User is required'],
-    index: true
-  },
-  admin: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Admin',
-    index: true
-  },
-  message: {
-    type: String,
-    required: [true, 'Message is required'],
-    trim: true
-  },
-  isAdmin: {
-    type: Boolean,
-    default: false
-  },
-  read: {
-    type: Boolean,
-    default: false
-  }
-}, {
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
-
-const ChatMessage = mongoose.model('ChatMessage', ChatMessageSchema);
-
-
-
-
 const SupportConversationSchema = new mongoose.Schema({
   conversationId: {
     type: String,
@@ -7216,3 +7179,4 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
