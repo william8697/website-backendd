@@ -6073,6 +6073,95 @@ app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async 
 });
 
 
+// Get approved deposits
+app.get('/api/admin/deposits/approved', adminProtect, restrictTo('finance', 'super'), async (req, res) => {
+  try {
+    // Pagination
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // Sorting
+    const sortBy = req.query.sortBy || '-createdAt';
+    const sortOrder = req.query.sortOrder || 'desc';
+
+    // Build query
+    const query = {
+      status: 'completed',
+      type: 'deposit'
+    };
+
+    // Date filtering
+    if (req.query.startDate && req.query.endDate) {
+      query.createdAt = {
+        $gte: new Date(req.query.startDate),
+        $lte: new Date(req.query.endDate)
+      };
+    }
+
+    // Search by user email or name
+    if (req.query.search) {
+      const users = await User.find({
+        $or: [
+          { email: { $regex: req.query.search, $options: 'i' } },
+          { firstName: { $regex: req.query.search, $options: 'i' } },
+          { lastName: { $regex: req.query.search, $options: 'i' } }
+        ]
+      }).select('_id');
+
+      query.user = { $in: users.map(u => u._id) };
+    }
+
+    // Get approved deposits with user details
+    const deposits = await Transaction.find(query)
+      .populate('user', 'firstName lastName email')
+      .populate('processedBy', 'name')
+      .sort({ [sortBy]: sortOrder })
+      .skip(skip)
+      .limit(limit);
+
+    // Count total documents for pagination
+    const total = await Transaction.countDocuments(query);
+
+    // Calculate total amount
+    const totalAmountResult = await Transaction.aggregate([
+      { $match: query },
+      { $group: { _id: null, totalAmount: { $sum: '$amount' } } }
+    ]);
+    const totalAmount = totalAmountResult.length > 0 ? totalAmountResult[0].totalAmount : 0;
+
+    res.status(200).json({
+      status: 'success',
+      results: deposits.length,
+      total,
+      totalAmount,
+      data: {
+        deposits
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching approved deposits:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching approved deposits'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -6136,6 +6225,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
