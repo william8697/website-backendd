@@ -5977,199 +5977,133 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
-// Admin Stats Endpoint - Production Grade
-app.get('/api/admin/stats', adminProtect, restrictTo('super', 'support', 'finance'), async (req, res) => {
+// In your server.js, add this endpoint for DataTables-compatible user listing
+app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async (req, res) => {
     try {
-        // Cache key for Redis
-        const cacheKey = `admin-stats:${req.admin._id}`;
+        // Parse DataTables request parameters
+        const draw = parseInt(req.query.draw) || 1;
+        const start = parseInt(req.query.start) || 0;
+        const length = parseInt(req.query.length) || 10;
+        const searchValue = req.query.search?.value || '';
+        const searchRegex = req.query.search?.regex === 'true';
         
-        // Try to get cached stats first
-        const cachedStats = await redis.get(cacheKey);
-        if (cachedStats) {
-            return res.status(200).json({
-                status: 'success',
-                data: JSON.parse(cachedStats)
+        // Parse ordering
+        const orderColumnIndex = req.query.order?.[0]?.column || 0;
+        const orderDirection = req.query.order?.[0]?.dir || 'asc';
+        const orderColumnName = req.query.columns?.[orderColumnIndex]?.data || 'createdAt';
+        
+        // Parse column filters
+        const columnFilters = {};
+        if (req.query.columns) {
+            Object.keys(req.query.columns).forEach(key => {
+                const col = req.query.columns[key];
+                if (col.search?.value && col.searchable === 'true') {
+                    columnFilters[col.data] = {
+                        value: col.search.value,
+                        regex: col.search.regex === 'true'
+                    };
+                }
             });
         }
 
-        // Get all stats in parallel for maximum performance
-        const [
-            totalUsers,
-            activeUsers,
-            suspendedUsers,
-            verifiedUsers,
-            pendingDeposits,
-            pendingWithdrawals,
-            totalDeposits,
-            totalWithdrawals,
-            activeInvestments,
-            completedInvestments,
-            pendingLoans,
-            activeLoans,
-            pendingKYCs,
-            newUsersLast24h,
-            depositsLast24h,
-            withdrawalsLast24h
-        ] = await Promise.all([
-            User.countDocuments(),
-            User.countDocuments({ status: 'active' }),
-            User.countDocuments({ status: 'suspended' }),
-            User.countDocuments({
-                'kycStatus.identity': 'verified',
-                'kycStatus.address': 'verified', 
-                'kycStatus.facial': 'verified'
-            }),
-            Transaction.countDocuments({ type: 'deposit', status: 'pending' }),
-            Transaction.countDocuments({ type: 'withdrawal', status: 'pending' }),
-            Transaction.aggregate([
-                { $match: { type: 'deposit', status: 'completed' } },
-                { $group: { _id: null, total: { $sum: '$amount' } } }
-            ]),
-            Transaction.aggregate([
-                { $match: { type: 'withdrawal', status: 'completed' } },
-                { $group: { _id: null, total: { $sum: '$amount' } } }
-            ]),
-            Investment.countDocuments({ status: 'active' }),
-            Investment.countDocuments({ status: 'completed' }),
-            Loan.countDocuments({ status: 'pending' }),
-            Loan.countDocuments({ status: 'active' }),
-            KYC.countDocuments({ status: 'pending' }),
-            User.countDocuments({ 
-                createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } 
-            }),
-            Transaction.aggregate([
-                { 
-                    $match: { 
-                        type: 'deposit', 
-                        status: 'completed',
-                        createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
-                    } 
-                },
-                { $group: { _id: null, total: { $sum: '$amount' } } }
-            ]),
-            Transaction.aggregate([
-                { 
-                    $match: { 
-                        type: 'withdrawal', 
-                        status: 'completed',
-                        createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
-                    } 
-                },
-                { $group: { _id: null, total: { $sum: '$amount' } } }
-            ])
-        ]);
+        // Build the query
+        const query = {};
+        
+        // Global search
+        if (searchValue) {
+            query.$or = [
+                { firstName: { $regex: searchValue, $options: 'i' } },
+                { lastName: { $regex: searchValue, $options: 'i' } },
+                { email: { $regex: searchValue, $options: 'i' } },
+                { status: { $regex: searchValue, $options: 'i' } },
+                { 'balances.main': isNaN(searchValue) ? 0 : parseFloat(searchValue) }
+            ];
+        }
 
-        // Calculate percentage changes (for dashboard trends)
-        const previousPeriodUsers = await User.countDocuments({
-            createdAt: { 
-                $gte: new Date(Date.now() - 48 * 60 * 60 * 1000),
-                $lt: new Date(Date.now() - 24 * 60 * 60 * 1000)
+        // Column-specific searches
+        Object.keys(columnFilters).forEach(col => {
+            const filter = columnFilters[col];
+            if (col === 'balance') {
+                query['balances.main'] = isNaN(filter.value) ? 0 : parseFloat(filter.value);
+            } else if (col === 'status') {
+                query[col] = filter.regex ? 
+                    { $regex: filter.value, $options: 'i' } : 
+                    filter.value;
+            } else if (col === 'created_at') {
+                const date = new Date(filter.value);
+                if (!isNaN(date.getTime())) {
+                    query.createdAt = {
+                        $gte: new Date(date.setHours(0, 0, 0, 0)),
+                        $lt: new Date(date.setHours(23, 59, 59, 999))
+                    };
+                }
+            } else {
+                query[col] = filter.regex ? 
+                    { $regex: filter.value, $options: 'i' } : 
+                    filter.value;
             }
         });
-        const usersChange = previousPeriodUsers > 0 
-            ? ((newUsersLast24h - previousPeriodUsers) / previousPeriodUsers * 100).toFixed(2)
-            : 100;
 
-        const previousPeriodDeposits = await Transaction.aggregate([
-            { 
-                $match: { 
-                    type: 'deposit',
-                    status: 'completed',
-                    createdAt: { 
-                        $gte: new Date(Date.now() - 48 * 60 * 60 * 1000),
-                        $lt: new Date(Date.now() - 24 * 60 * 60 * 1000)
-                    }
-                } 
-            },
-            { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]);
-        const prevDeposits = previousPeriodDeposits[0]?.total || 0;
-        const depositsChange = prevDeposits > 0
-            ? ((depositsLast24h[0]?.total || 0 - prevDeposits) / prevDeposits * 100).toFixed(2)
-            : 100;
+        // Build sort object
+        const sort = {};
+        if (orderColumnName === 'name') {
+            sort['firstName'] = orderDirection === 'asc' ? 1 : -1;
+            sort['lastName'] = orderDirection === 'asc' ? 1 : -1;
+        } else if (orderColumnName === 'balance') {
+            sort['balances.main'] = orderDirection === 'asc' ? 1 : -1;
+        } else {
+            sort[orderColumnName] = orderDirection === 'asc' ? 1 : -1;
+        }
 
-        const previousPeriodWithdrawals = await Transaction.aggregate([
-            { 
-                $match: { 
-                    type: 'withdrawal',
-                    status: 'completed',
-                    createdAt: { 
-                        $gte: new Date(Date.now() - 48 * 60 * 60 * 1000),
-                        $lt: new Date(Date.now() - 24 * 60 * 60 * 1000)
-                    }
-                } 
-            },
-            { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]);
-        const prevWithdrawals = previousPeriodWithdrawals[0]?.total || 0;
-        const withdrawalsChange = prevWithdrawals > 0
-            ? ((withdrawalsLast24h[0]?.total || 0 - prevWithdrawals) / prevWithdrawals * 100).toFixed(2)
-            : 100;
+        // Get total count
+        const totalRecords = await User.countDocuments();
+        
+        // Get filtered count
+        const filteredRecords = await User.countDocuments(query);
+        
+        // Get paginated data
+        const users = await User.find(query)
+            .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v -twoFactorAuth.secret')
+            .sort(sort)
+            .skip(start)
+            .limit(length)
+            .lean();
 
-        // Platform revenue (1% of all withdrawals + investment fees)
-        const platformRevenue = await Transaction.aggregate([
-            {
-                $match: {
-                    $or: [
-                        { type: 'withdrawal', status: 'completed' },
-                        { type: 'investment', status: 'completed' }
-                    ]
-                }
-            },
-            {
-                $group: {
-                    _id: null,
-                    total: { 
-                        $sum: {
-                            $cond: [
-                                { $eq: ["$type", "withdrawal"] },
-                                { $multiply: ["$amount", 0.01] }, // 1% withdrawal fee
-                                "$fee" // Investment fees
-                            ]
-                        }
-                    }
-                }
-            }
-        ]);
+        // Format response for DataTables
+        const responseData = users.map(user => ({
+            id: user._id,
+            name: `${user.firstName} ${user.lastName}`,
+            email: user.email,
+            balance: user.balances?.main ? `$${user.balances.main.toFixed(2)}` : '$0.00',
+            status: user.status,
+            created_at: moment(user.createdAt).format('MMM D, YYYY'),
+            action: `
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                        <i class="fas fa-ellipsis-v"></i>
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item edit-user" href="#" data-id="${user._id}"><i class="fas fa-edit"></i> Edit</a></li>
+                        <li><a class="dropdown-item suspend-user" href="#" data-id="${user._id}" data-status="${user.status === 'suspended' ? 'active' : 'suspended'}">
+                            <i class="fas ${user.status === 'suspended' ? 'fa-check-circle' : 'fa-ban'}"></i> ${user.status === 'suspended' ? 'Activate' : 'Suspend'}
+                        </a></li>
+                        <li><a class="dropdown-item delete-user" href="#" data-id="${user._id}"><i class="fas fa-trash"></i> Delete</a></li>
+                    </ul>
+                </div>
+            `
+        }));
 
-        // Prepare response data
-        const stats = {
-            total_users: totalUsers,
-            active_users: activeUsers,
-            suspended_users: suspendedUsers,
-            verified_users: verifiedUsers,
-            pending_deposits: pendingDeposits,
-            pending_withdrawals: pendingWithdrawals,
-            total_deposits: totalDeposits[0]?.total || 0,
-            total_withdrawals: totalWithdrawals[0]?.total || 0,
-            active_investments: activeInvestments,
-            completed_investments: completedInvestments,
-            pending_loans: pendingLoans,
-            active_loans: activeLoans,
-            pending_kycs: pendingKYCs,
-            new_users_last_24h: newUsersLast24h,
-            deposits_last_24h: depositsLast24h[0]?.total || 0,
-            withdrawals_last_24h: withdrawalsLast24h[0]?.total || 0,
-            platform_revenue: platformRevenue[0]?.total || 0,
-            users_change: usersChange,
-            deposits_change: depositsChange,
-            withdrawals_change: withdrawalsChange,
-            revenue_change: depositsChange // Revenue change follows deposits trend
-        };
-
-        // Cache the stats for 5 minutes
-        await redis.set(cacheKey, JSON.stringify(stats), 'EX', 300);
-
-        res.status(200).json({
-            status: 'success',
-            data: stats
+        res.json({
+            draw,
+            recordsTotal: totalRecords,
+            recordsFiltered: filteredRecords,
+            data: responseData
         });
 
     } catch (err) {
-        console.error('Admin stats error:', err);
+        console.error('Admin users DataTable error:', err);
         res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while fetching admin stats'
+            error: 'An error occurred while fetching users data'
         });
     }
 });
@@ -6249,6 +6183,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
