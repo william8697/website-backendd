@@ -7497,7 +7497,274 @@ app.post('/api/admin/kyc/facial/:id/review', adminProtect, restrictTo('super', '
   }
 });
 
+// Add this to your server.js after the HTTP server is created
 
+// WebSocket Server Setup
+const setupWebSocketServer = (server) => {
+  const wss = new WebSocket.Server({ 
+    server,
+    path: '/socket.io',
+    clientTracking: true
+  });
+
+  // Track connected admin clients
+  const adminClients = new Map();
+  const userClients = new Map();
+
+  // Authentication middleware for WebSocket
+  const authenticateWS = (info, callback) => {
+    try {
+      const token = info.req.url.split('token=')[1];
+      if (!token) {
+        return callback(false, 401, 'Unauthorized');
+      }
+
+      jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        if (err) {
+          return callback(false, 401, 'Invalid token');
+        }
+
+        info.req.user = decoded;
+        callback(true);
+      });
+    } catch (err) {
+      callback(false, 401, 'Authentication error');
+    }
+  };
+
+  // WebSocket server events
+  wss.on('connection', (ws, req) => {
+    const token = req.url.split('token=')[1];
+    if (!token) {
+      ws.close(1008, 'Unauthorized');
+      return;
+    }
+
+    jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+      if (err) {
+        ws.close(1008, 'Invalid token');
+        return;
+      }
+
+      // Admin connection
+      if (decoded.role === 'admin') {
+        adminClients.set(decoded.id, ws);
+        console.log(`Admin ${decoded.id} connected`);
+
+        // Send initial stats
+        sendInitialStats(ws);
+
+        ws.on('close', () => {
+          adminClients.delete(decoded.id);
+          console.log(`Admin ${decoded.id} disconnected`);
+        });
+      }
+      // User connection (for chat)
+      else {
+        userClients.set(decoded.id, ws);
+        console.log(`User ${decoded.id} connected`);
+
+        ws.on('close', () => {
+          userClients.delete(decoded.id);
+          console.log(`User ${decoded.id} disconnected`);
+        });
+      }
+
+      // Message handler
+      ws.on('message', (message) => {
+        handleWebSocketMessage(ws, decoded, message);
+      });
+    });
+  });
+
+  // Send initial dashboard stats to admin
+  const sendInitialStats = async (ws) => {
+    try {
+      const [
+        totalUsers,
+        activeInvestments,
+        totalDeposits,
+        pendingWithdrawals,
+        openTickets,
+        unreadMessages
+      ] = await Promise.all([
+        User.countDocuments(),
+        Investment.countDocuments({ status: 'active' }),
+        Transaction.aggregate([{ $match: { type: 'deposit', status: 'completed' } }, { $group: { _id: null, total: { $sum: '$amount' } }]),
+        Transaction.countDocuments({ type: 'withdrawal', status: 'pending' }),
+        SupportTicket.countDocuments({ status: 'open' }),
+        SupportMessage.countDocuments({ recipientId: null, isRead: false })
+      ]);
+
+      ws.send(JSON.stringify({
+        event: 'initial_stats',
+        data: {
+          total_users: totalUsers,
+          active_investments: activeInvestments,
+          total_deposits: totalDeposits[0]?.total || 0,
+          pending_withdrawals: pendingWithdrawals,
+          open_tickets: openTickets,
+          unread_messages: unreadMessages
+        }
+      }));
+    } catch (err) {
+      console.error('Error sending initial stats:', err);
+    }
+  };
+
+  // Handle incoming WebSocket messages
+  const handleWebSocketMessage = (ws, user, message) => {
+    try {
+      const { event, data } = JSON.parse(message);
+
+      switch (event) {
+        case 'chat_message':
+          handleChatMessage(user, data);
+          break;
+        case 'join_conversation':
+          handleJoinConversation(ws, user, data);
+          break;
+        case 'typing':
+          handleTypingIndicator(user, data);
+          break;
+        default:
+          console.log('Unknown WebSocket event:', event);
+      }
+    } catch (err) {
+      console.error('Error handling WebSocket message:', err);
+    }
+  };
+
+  // Handle chat messages
+  const handleChatMessage = async (sender, messageData) => {
+    try {
+      const { conversationId, message } = messageData;
+      
+      // Save message to database
+      const newMessage = new SupportMessage({
+        conversationId,
+        sender: sender.role === 'admin' ? 'agent' : 'user',
+        senderId: sender.id,
+        senderModel: sender.role === 'admin' ? 'Admin' : 'User',
+        message,
+        isRead: false,
+        metadata: {
+          ip: sender.ip,
+          userAgent: sender.userAgent
+        }
+      });
+
+      const savedMessage = await newMessage.save();
+
+      // Update conversation last message
+      await SupportConversation.updateOne(
+        { conversationId },
+        { $set: { lastMessageAt: new Date() } }
+      );
+
+      // Find recipient (admin or user)
+      let recipientWs;
+      if (sender.role === 'admin') {
+        const conversation = await SupportConversation.findOne({ conversationId });
+        if (conversation) {
+          recipientWs = userClients.get(conversation.userId.toString());
+        }
+      } else {
+        const conversation = await SupportConversation.findOne({ conversationId });
+        if (conversation && conversation.agentId) {
+          recipientWs = adminClients.get(conversation.agentId.toString());
+        }
+      }
+
+      // Send message to recipient
+      if (recipientWs) {
+        recipientWs.send(JSON.stringify({
+          event: 'new_message',
+          data: {
+            conversationId,
+            message: savedMessage,
+            sender: sender.role === 'admin' ? 'admin' : 'user'
+          }
+        }));
+      }
+
+      // Broadcast to all admins for unassigned chats
+      if (sender.role === 'user') {
+        const conversation = await SupportConversation.findOne({ conversationId });
+        if (!conversation.agentId) {
+          broadcastToAdmins({
+            event: 'unassigned_message',
+            data: {
+              conversationId,
+              message: savedMessage,
+              userId: sender.id
+            }
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Error handling chat message:', err);
+    }
+  };
+
+  // Broadcast message to all connected admins
+  const broadcastToAdmins = (message) => {
+    adminClients.forEach((ws) => {
+      ws.send(JSON.stringify(message));
+    });
+  };
+
+  // Handle real-time events from the system
+  const broadcastEvent = (event, data) => {
+    const message = JSON.stringify({ event, data });
+    adminClients.forEach((ws) => {
+      ws.send(message);
+    });
+  };
+
+  // Listen for database changes and broadcast events
+  const startChangeStreams = () => {
+    // User changes
+    const userChangeStream = User.watch();
+    userChangeStream.on('change', (change) => {
+      if (change.operationType === 'insert') {
+        broadcastEvent('new_user', change.fullDocument);
+      }
+    });
+
+    // Transaction changes
+    const transactionChangeStream = Transaction.watch();
+    transactionChangeStream.on('change', (change) => {
+      if (change.operationType === 'insert') {
+        if (change.fullDocument.type === 'deposit') {
+          broadcastEvent('new_deposit', change.fullDocument);
+        } else if (change.fullDocument.type === 'withdrawal') {
+          broadcastEvent('new_withdrawal', change.fullDocument);
+        }
+      }
+    });
+
+    // Support ticket changes
+    const ticketChangeStream = SupportTicket.watch();
+    ticketChangeStream.on('change', (change) => {
+      if (change.operationType === 'insert') {
+        broadcastEvent('new_ticket', change.fullDocument);
+      }
+    });
+  };
+
+  // Start change streams
+  startChangeStreams();
+
+  return wss;
+};
+
+// Initialize WebSocket server after HTTP server is created
+const server = app.listen(process.env.PORT || 3000, () => {
+  console.log(`Server running on port ${process.env.PORT || 3000}`);
+});
+
+const wss = setupWebSocketServer(server);
 
 
 
@@ -7525,6 +7792,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   setupWebSocketServer(server);  // This initializes WebSocket
 });
+
 
 
 
