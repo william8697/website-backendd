@@ -6759,7 +6759,76 @@ app.get('/api/admin/stats/revenue', adminProtect, restrictTo('super', 'finance')
 
 
 
+// Admin Dashboard Stats - User Growth
+app.get('/api/admin/stats/user-growth', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+    try {
+        const { period = '30' } = req.query;
+        const days = parseInt(period);
+        
+        if (isNaN(days) || days <= 0) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'Invalid period parameter'
+            });
+        }
 
+        const startDate = new Date();
+        startDate.setDate(startDate.getDate() - days);
+
+        // Get user growth data grouped by day
+        const userGrowth = await User.aggregate([
+            {
+                $match: {
+                    createdAt: { $gte: startDate }
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+                    },
+                    count: { $sum: 1 }
+                }
+            },
+            {
+                $sort: { "_id": 1 }
+            }
+        ]);
+
+        // Format data for chart
+        const labels = [];
+        const data = [];
+
+        // Fill in missing dates with 0 counts
+        const currentDate = new Date(startDate);
+        const today = new Date();
+        
+        while (currentDate <= today) {
+            const dateStr = currentDate.toISOString().split('T')[0];
+            const foundDay = userGrowth.find(day => day._id === dateStr);
+            
+            labels.push(dateStr);
+            data.push(foundDay ? foundDay.count : 0);
+            
+            currentDate.setDate(currentDate.getDate() + 1);
+        }
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                labels,
+                data,
+                total: userGrowth.reduce((sum, day) => sum + day.count, 0)
+            }
+        });
+    } catch (err) {
+        console.error('User growth stats error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching user growth stats'
+        });
+    }
+});
 
 
 
@@ -6827,6 +6896,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
