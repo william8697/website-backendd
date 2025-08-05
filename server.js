@@ -6022,62 +6022,76 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
-// Admin User Management Routes
+// Admin Users Endpoint for DataTables
 app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async (req, res) => {
   try {
-    // Pagination
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
+    // DataTables parameters
+    const draw = parseInt(req.query.draw) || 1;
+    const start = parseInt(req.query.start) || 0;
+    const length = parseInt(req.query.length) || 10;
+    const searchValue = req.query.search?.value || '';
+    const order = req.query.order?.[0] || {};
+    const orderColumn = req.query.columns?.[order.column]?.data || '_id';
+    const orderDirection = order.dir || 'desc';
 
-    // Sorting
-    const sortBy = req.query.sortBy || '-createdAt';
+    // Build query
+    const query = {};
     
-    // Filtering
-    const filter = {};
-    if (req.query.search) {
-      filter.$or = [
-        { firstName: { $regex: req.query.search, $options: 'i' } },
-        { lastName: { $regex: req.query.search, $options: 'i' } },
-        { email: { $regex: req.query.search, $options: 'i' } }
+    // Search filter
+    if (searchValue) {
+      query.$or = [
+        { firstName: { $regex: searchValue, $options: 'i' } },
+        { lastName: { $regex: searchValue, $options: 'i' } },
+        { email: { $regex: searchValue, $options: 'i' } }
       ];
     }
+
+    // Status filter
     if (req.query.status) {
-      filter.status = req.query.status;
-    }
-    if (req.query.kycStatus) {
-      filter['kycStatus.identity'] = req.query.kycStatus;
+      query.status = req.query.status;
     }
 
     // Get users with pagination
-    const users = await User.find(filter)
-      .sort(sortBy)
-      .skip(skip)
-      .limit(limit)
-      .select('-password -twoFactorAuth.secret -passwordResetToken -passwordResetExpires');
+    const users = await User.find(query)
+      .sort({ [orderColumn]: orderDirection === 'asc' ? 1 : -1 })
+      .skip(start)
+      .limit(length)
+      .select('firstName lastName email status lastLogin')
+      .lean();
 
-    // Get total count for pagination
-    const total = await User.countDocuments(filter);
+    // Get total records
+    const totalRecords = await User.countDocuments();
+    const filteredRecords = await User.countDocuments(query);
+
+    // Transform data to match DataTables expected format
+    const data = users.map(user => ({
+      _id: user._id,
+      name: `${user.firstName} ${user.lastName}`,
+      email: user.email,
+      status: user.status,
+      lastLogin: user.lastLogin ? new Date(user.lastLogin).toLocaleString() : 'Never',
+      action: `
+        <button class="admin-btn btn-outline-primary btn-sm edit-user" data-id="${user._id}">Edit</button>
+        <button class="admin-btn btn-outline-primary btn-sm add-balance" data-id="${user._id}">Add Balance</button>
+      `
+    }));
 
     res.status(200).json({
-      status: 'success',
-      results: users.length,
-      total,
-      data: {
-        users
-      }
+      draw,
+      recordsTotal: totalRecords,
+      recordsFiltered: filteredRecords,
+      data
     });
 
     await logActivity('view_users', 'user', null, req.admin._id, 'Admin', req);
   } catch (err) {
     console.error('Error fetching users:', err);
     res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching users'
+      draw: req.query.draw || 0,
+      error: 'An error occurred while fetching users'
     });
   }
 });
-
 
 
 
@@ -6146,6 +6160,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
