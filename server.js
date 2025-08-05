@@ -7212,7 +7212,262 @@ function initializeSocket(io) {
 
 
 
+// Admin Deposit Management
+app.get('/api/admin/deposits/pending', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+    try {
+        const pendingDeposits = await Transaction.find({ 
+            type: 'deposit', 
+            status: 'pending' 
+        })
+        .populate('user', 'firstName lastName email')
+        .sort({ createdAt: 1 });
 
+        res.status(200).json({
+            status: 'success',
+            data: pendingDeposits
+        });
+    } catch (err) {
+        console.error('Pending deposits error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching pending deposits'
+        });
+    }
+});
+
+app.get('/api/admin/deposits/completed', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+    try {
+        const completedDeposits = await Transaction.find({ 
+            type: 'deposit', 
+            status: 'completed' 
+        })
+        .populate('user', 'firstName lastName email')
+        .sort({ createdAt: -1 })
+        .limit(100);
+
+        res.status(200).json({
+            status: 'success',
+            data: completedDeposits
+        });
+    } catch (err) {
+        console.error('Completed deposits error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching completed deposits'
+        });
+    }
+});
+
+app.get('/api/admin/deposits/all', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+    try {
+        const { page = 1, limit = 50 } = req.query;
+        const skip = (page - 1) * limit;
+
+        const allDeposits = await Transaction.find({ type: 'deposit' })
+            .populate('user', 'firstName lastName email')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+
+        const total = await Transaction.countDocuments({ type: 'deposit' });
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                deposits: allDeposits,
+                total,
+                page: parseInt(page),
+                pages: Math.ceil(total / limit)
+            }
+        });
+    } catch (err) {
+        console.error('All deposits error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching all deposits'
+        });
+    }
+});
+
+app.get('/api/admin/deposits/:id', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+    try {
+        const deposit = await Transaction.findOne({
+            _id: req.params.id,
+            type: 'deposit'
+        }).populate('user', 'firstName lastName email');
+
+        if (!deposit) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'Deposit not found'
+            });
+        }
+
+        res.status(200).json({
+            status: 'success',
+            data: deposit
+        });
+    } catch (err) {
+        console.error('Get deposit error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching deposit'
+        });
+    }
+});
+
+app.post('/api/admin/deposits/:id/process', adminProtect, restrictTo('super', 'finance'), [
+    body('status').isIn(['completed', 'cancelled']).withMessage('Invalid status'),
+    body('notes').optional().trim().escape()
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({
+            status: 'fail',
+            errors: errors.array()
+        });
+    }
+
+    try {
+        const { id } = req.params;
+        const { status, notes } = req.body;
+
+        const deposit = await Transaction.findOneAndUpdate(
+            { _id: id, type: 'deposit', status: 'pending' },
+            {
+                status,
+                adminNotes: notes,
+                processedBy: req.admin._id,
+                processedAt: new Date()
+            },
+            { new: true }
+        ).populate('user', 'firstName lastName email');
+
+        if (!deposit) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'Pending deposit not found'
+            });
+        }
+
+        if (status === 'completed') {
+            // Credit the amount to user's balance
+            const user = await User.findById(deposit.user._id);
+            if (user) {
+                user.balances.main += deposit.amount;
+                await user.save();
+
+                // Create a transaction record for the credit
+                await Transaction.create({
+                    user: user._id,
+                    type: 'transfer',
+                    amount: deposit.amount,
+                    status: 'completed',
+                    method: 'internal',
+                    reference: `CREDIT-${deposit.reference}`,
+                    details: `Credit for deposit ${deposit.reference}`,
+                    netAmount: deposit.amount
+                });
+
+                // Send notification to user
+                user.notifications.push({
+                    title: 'Deposit Completed',
+                    message: `Your deposit of $${deposit.amount} has been completed and credited to your account.`,
+                    type: 'success'
+                });
+                await user.save();
+            }
+        }
+
+        res.status(200).json({
+            status: 'success',
+            data: deposit
+        });
+
+        await logActivity('process-deposit', 'transaction', deposit._id, req.admin._id, 'Admin', req, { status, notes });
+    } catch (err) {
+        console.error('Process deposit error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while processing deposit'
+        });
+    }
+});
+
+app.post('/api/admin/deposits/process-batch', adminProtect, restrictTo('super', 'finance'), [
+    body('ids').isArray().withMessage('IDs must be an array'),
+    body('ids.*').isMongoId().withMessage('Invalid ID format'),
+    body('status').isIn(['completed', 'cancelled']).withMessage('Invalid status')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({
+            status: 'fail',
+            errors: errors.array()
+        });
+    }
+
+    try {
+        const { ids, status } = req.body;
+
+        const deposits = await Transaction.updateMany(
+            { _id: { $in: ids }, type: 'deposit', status: 'pending' },
+            {
+                status,
+                processedBy: req.admin._id,
+                processedAt: new Date()
+            }
+        );
+
+        if (status === 'completed') {
+            // Credit all completed deposits
+            const completedDeposits = await Transaction.find({ _id: { $in: ids }, status: 'completed' });
+            for (const deposit of completedDeposits) {
+                const user = await User.findById(deposit.user);
+                if (user) {
+                    user.balances.main += deposit.amount;
+                    await user.save();
+
+                    // Create a transaction record for the credit
+                    await Transaction.create({
+                        user: user._id,
+                        type: 'transfer',
+                        amount: deposit.amount,
+                        status: 'completed',
+                        method: 'internal',
+                        reference: `CREDIT-${deposit.reference}`,
+                        details: `Credit for deposit ${deposit.reference}`,
+                        netAmount: deposit.amount
+                    });
+
+                    // Send notification to user
+                    user.notifications.push({
+                        title: 'Deposit Completed',
+                        message: `Your deposit of $${deposit.amount} has been completed and credited to your account.`,
+                        type: 'success'
+                    });
+                    await user.save();
+                }
+            }
+        }
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                matched: deposits.n,
+                modified: deposits.nModified
+            }
+        });
+
+        await logActivity('batch-process-deposits', 'transaction', null, req.admin._id, 'Admin', req, { ids, status });
+    } catch (err) {
+        console.error('Batch process deposits error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while batch processing deposits'
+        });
+    }
+});
 
 
 
@@ -7279,6 +7534,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
