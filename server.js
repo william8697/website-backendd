@@ -6022,17 +6022,31 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
-// Admin Users Endpoint for DataTables
+
+// Admin Users Endpoint for DataTables (Corrected Version)
 app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async (req, res) => {
   try {
     // DataTables parameters
     const draw = parseInt(req.query.draw) || 1;
     const start = parseInt(req.query.start) || 0;
-    const length = parseInt(req.query.length) || 10;
+    const length = parseInt(req.query.length) || 25;
     const searchValue = req.query.search?.value || '';
     const order = req.query.order?.[0] || {};
-    const orderColumn = req.query.columns?.[order.column]?.data || '_id';
+    const orderColumnIndex = order.column || 0;
     const orderDirection = order.dir || 'desc';
+
+    // Map DataTables columns to database fields
+    const columnMap = [
+      '_id',                 // Column 0 - ID
+      null,                  // Column 1 - Full Name (virtual field)
+      'email',               // Column 2 - Email
+      'balances.main',       // Column 3 - Balance
+      'status',              // Column 4 - Status
+      'lastLogin',           // Column 5 - Last Login
+      null                   // Column 6 - Actions (not in database)
+    ];
+
+    const orderField = columnMap[orderColumnIndex] || '_id';
 
     // Build query
     const query = {};
@@ -6042,37 +6056,40 @@ app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async 
       query.$or = [
         { firstName: { $regex: searchValue, $options: 'i' } },
         { lastName: { $regex: searchValue, $options: 'i' } },
-        { email: { $regex: searchValue, $options: 'i' } }
-      ];
-    }
-
-    // Status filter
-    if (req.query.status) {
-      query.status = req.query.status;
+        { email: { $regex: searchValue, $options: 'i' } },
+        { 'balances.main': isNaN(searchValue) ? null : parseFloat(searchValue) }
+      ].filter(Boolean);
     }
 
     // Get users with pagination
     const users = await User.find(query)
-      .sort({ [orderColumn]: orderDirection === 'asc' ? 1 : -1 })
+      .sort({ [orderField]: orderDirection === 'asc' ? 1 : -1 })
       .skip(start)
       .limit(length)
-      .select('firstName lastName email status lastLogin')
+      .select('firstName lastName email status balances lastLogin')
       .lean();
 
     // Get total records
     const totalRecords = await User.countDocuments();
-    const filteredRecords = await User.countDocuments(query);
+    const filteredRecords = searchValue ? await User.countDocuments(query) : totalRecords;
 
     // Transform data to match DataTables expected format
     const data = users.map(user => ({
       _id: user._id,
       name: `${user.firstName} ${user.lastName}`,
       email: user.email,
-      status: user.status,
+      balance: user.balances?.main ? `$${user.balances.main.toFixed(2)}` : '$0.00',
+      status: `<span class="admin-badge ${user.status === 'active' ? 'badge-success' : 'badge-danger'}">
+                ${user.status.charAt(0).toUpperCase() + user.status.slice(1)}
+              </span>`,
       lastLogin: user.lastLogin ? new Date(user.lastLogin).toLocaleString() : 'Never',
       action: `
-        <button class="admin-btn btn-outline-primary btn-sm edit-user" data-id="${user._id}">Edit</button>
-        <button class="admin-btn btn-outline-primary btn-sm add-balance" data-id="${user._id}">Add Balance</button>
+        <button class="admin-btn btn-outline-primary btn-sm edit-user" data-id="${user._id}">
+          <i class="fas fa-edit"></i> Edit
+        </button>
+        <button class="admin-btn btn-outline-success btn-sm add-balance" data-id="${user._id}">
+          <i class="fas fa-plus-circle"></i> Add Balance
+        </button>
       `
     }));
 
@@ -6088,11 +6105,11 @@ app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async 
     console.error('Error fetching users:', err);
     res.status(500).json({
       draw: req.query.draw || 0,
-      error: 'An error occurred while fetching users'
+      error: 'An error occurred while fetching users',
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 });
-
 
 
 
@@ -6160,6 +6177,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
