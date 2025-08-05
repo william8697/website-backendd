@@ -6459,99 +6459,301 @@ app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async 
     }
 });
 
-// Admin Transactions Endpoint (DataTables compatible)
+// Admin Transactions Endpoints
 app.get('/api/admin/transactions', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
-    try {
-        // Parse DataTables request parameters
-        const draw = parseInt(req.query.draw) || 1;
-        const start = parseInt(req.query.start) || 0;
-        const length = parseInt(req.query.length) || 10;
-        const searchValue = req.query.search?.value || '';
-        const orderColumn = parseInt(req.query.order?.[0]?.column) || 0;
-        const orderDir = req.query.order?.[0]?.dir || 'asc';
-        
-        // Map DataTables columns to database fields
-        const columnMap = [
-            '_id',              // column 0 - id
-            'user.name',        // column 1 - user.name
-            'type',             // column 2 - type
-            'amount',           // column 3 - amount
-            'status',           // column 4 - status
-            'createdAt',        // column 5 - created_at
-            null                // column 6 - actions (not sortable)
-        ];
-        
-        const orderColumnName = columnMap[orderColumn] || 'createdAt';
+  try {
+    // DataTables server-side processing parameters
+    const draw = parseInt(req.query.draw) || 1;
+    const start = parseInt(req.query.start) || 0;
+    const length = parseInt(req.query.length) || 10;
+    const search = req.query.search?.value || '';
+    const order = req.query.order?.[0] || {};
+    const orderColumn = req.query.columns?.[order.column]?.data || 'createdAt';
+    const orderDirection = order.dir || 'desc';
 
-        // Build the query
-        const query = {};
-        
-        // Search filter
-        if (searchValue) {
-            query.$or = [
-                { reference: { $regex: searchValue, $options: 'i' } },
-                { 'user.name': { $regex: searchValue, $options: 'i' } },
-                { type: { $regex: searchValue, $options: 'i' } },
-                { status: { $regex: searchValue, $options: 'i' } }
-            ];
-        }
-
-        // Get total count
-        const totalRecords = await Transaction.countDocuments();
-
-        // Get filtered count
-        const totalFiltered = await Transaction.countDocuments(query);
-
-        // Get transactions with pagination and sorting
-        let transactionsQuery = Transaction.find(query)
-            .populate('user', 'name')
-            .populate('processedBy', 'name')
-            .skip(start)
-            .limit(length);
-
-        // Only apply sorting if we have a valid column to sort by
-        if (orderColumnName) {
-            transactionsQuery = transactionsQuery.sort({ 
-                [orderColumnName]: orderDir === 'asc' ? 1 : -1 
-            });
-        }
-
-        const transactions = await transactionsQuery.lean();
-
-        // Format data for DataTables
-        const data = transactions.map(tx => ({
-            id: tx._id,
-            user: {
-                name: tx.user?.name || 'Deleted User',
-                _id: tx.user?._id || null
-            },
-            type: tx.type,
-            amount: tx.amount,
-            status: tx.status,
-            created_at: tx.createdAt,  // Match frontend expectation
-            // Add any other fields your DataTable expects
-            method: tx.method,
-            reference: tx.reference,
-            processedBy: tx.processedBy?.name || null,
-            processedAt: tx.processedAt,
-            details: tx.details
-        }));
-
-        res.status(200).json({
-            draw,
-            recordsTotal: totalRecords,
-            recordsFiltered: totalFiltered,
-            data
-        });
-
-        await logActivity('view-transactions', 'transaction', null, req.admin._id, 'Admin', req);
-    } catch (err) {
-        console.error('Get transactions error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while fetching transactions'
-        });
+    // Build the query
+    const query = {};
+    
+    // Search filter
+    if (search) {
+      query.$or = [
+        { reference: { $regex: search, $options: 'i' } },
+        { 'user.name': { $regex: search, $options: 'i' } },
+        { type: { $regex: search, $options: 'i' } },
+        { status: { $regex: search, $options: 'i' } }
+      ];
     }
+
+    // Status filter if provided
+    if (req.query.status) {
+      query.status = req.query.status;
+    }
+
+    // Type filter if provided
+    if (req.query.type) {
+      query.type = req.query.type;
+    }
+
+    // Date range filter if provided
+    if (req.query.startDate && req.query.endDate) {
+      query.createdAt = {
+        $gte: new Date(req.query.startDate),
+        $lte: new Date(req.query.endDate)
+      };
+    }
+
+    // Get total count
+    const totalRecords = await Transaction.countDocuments();
+
+    // Get filtered count
+    const filteredRecords = await Transaction.countDocuments(query);
+
+    // Get paginated and sorted data
+    const transactions = await Transaction.find(query)
+      .populate('user', 'name email')
+      .populate('processedBy', 'name')
+      .sort({ [orderColumn]: orderDirection === 'asc' ? 1 : -1 })
+      .skip(start)
+      .limit(length)
+      .lean();
+
+    // Format data for DataTables
+    const data = transactions.map(transaction => ({
+      id: transaction._id,
+      user: {
+        _id: transaction.user?._id,
+        name: transaction.user?.name,
+        email: transaction.user?.email
+      },
+      type: transaction.type,
+      amount: transaction.amount,
+      status: transaction.status,
+      method: transaction.method,
+      reference: transaction.reference,
+      createdAt: transaction.createdAt,
+      processedBy: transaction.processedBy?.name,
+      adminNotes: transaction.adminNotes
+    }));
+
+    res.status(200).json({
+      draw,
+      recordsTotal: totalRecords,
+      recordsFiltered: filteredRecords,
+      data
+    });
+  } catch (err) {
+    console.error('Get transactions error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching transactions'
+    });
+  }
+});
+
+app.get('/api/admin/transactions/:id', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+  try {
+    const transaction = await Transaction.findById(req.params.id)
+      .populate('user', 'name email')
+      .populate('processedBy', 'name')
+      .lean();
+
+    if (!transaction) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Transaction not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: transaction
+    });
+  } catch (err) {
+    console.error('Get transaction error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching transaction'
+    });
+  }
+});
+
+app.post('/api/admin/transactions/:id/approve', adminProtect, restrictTo('super', 'finance'), [
+  body('notes').optional().trim().escape()
+], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { notes } = req.body;
+
+    const transaction = await Transaction.findOneAndUpdate(
+      { _id: id, status: 'pending' },
+      {
+        status: 'completed',
+        adminNotes: notes,
+        processedBy: req.admin._id,
+        processedAt: new Date()
+      },
+      { new: true }
+    ).populate('user', 'name email');
+
+    if (!transaction) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Pending transaction not found'
+      });
+    }
+
+    // For deposit transactions, credit the user's account
+    if (transaction.type === 'deposit') {
+      const user = await User.findById(transaction.user._id);
+      if (user) {
+        user.balances.main += transaction.amount;
+        await user.save();
+
+        // Send notification to user
+        user.notifications.push({
+          title: 'Deposit Approved',
+          message: `Your deposit of $${transaction.amount} has been approved and credited to your account.`,
+          type: 'success'
+        });
+        await user.save();
+      }
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: transaction
+    });
+
+    await logActivity('approve-transaction', 'transaction', transaction._id, req.admin._id, 'Admin', req, { status: 'completed' });
+  } catch (err) {
+    console.error('Approve transaction error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while approving transaction'
+    });
+  }
+});
+
+app.post('/api/admin/transactions/:id/decline', adminProtect, restrictTo('super', 'finance'), [
+  body('reason').optional().trim().escape()
+], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    const transaction = await Transaction.findOneAndUpdate(
+      { _id: id, status: 'pending' },
+      {
+        status: 'cancelled',
+        adminNotes: reason,
+        processedBy: req.admin._id,
+        processedAt: new Date()
+      },
+      { new: true }
+    ).populate('user', 'name email');
+
+    if (!transaction) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Pending transaction not found'
+      });
+    }
+
+    // For withdrawal transactions, refund the amount to user's balance
+    if (transaction.type === 'withdrawal') {
+      const user = await User.findById(transaction.user._id);
+      if (user) {
+        user.balances.main += transaction.amount;
+        await user.save();
+
+        // Send notification to user
+        user.notifications.push({
+          title: 'Withdrawal Declined',
+          message: `Your withdrawal of $${transaction.amount} has been declined. ${reason || ''}`,
+          type: 'error'
+        });
+        await user.save();
+      }
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: transaction
+    });
+
+    await logActivity('decline-transaction', 'transaction', transaction._id, req.admin._id, 'Admin', req, { status: 'cancelled', reason });
+  } catch (err) {
+    console.error('Decline transaction error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while declining transaction'
+    });
+  }
+});
+
+app.post('/api/admin/transactions/export', adminProtect, restrictTo('super', 'finance'), [
+  body('startDate').optional().isISO8601().withMessage('Invalid start date format'),
+  body('endDate').optional().isISO8601().withMessage('Invalid end date format'),
+  body('type').optional().isIn(['deposit', 'withdrawal', 'transfer', 'investment', 'interest', 'referral', 'loan']).withMessage('Invalid transaction type'),
+  body('status').optional().isIn(['pending', 'completed', 'failed', 'cancelled']).withMessage('Invalid transaction status')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { startDate, endDate, type, status } = req.body;
+
+    // Build the query
+    const query = {};
+    
+    if (type) query.type = type;
+    if (status) query.status = status;
+    
+    if (startDate && endDate) {
+      query.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+
+    // Get transactions
+    const transactions = await Transaction.find(query)
+      .populate('user', 'name email')
+      .populate('processedBy', 'name')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Format data for CSV/Excel
+    const formattedData = transactions.map(transaction => ({
+      ID: transaction._id,
+      Date: transaction.createdAt.toISOString(),
+      User: transaction.user?.name || 'N/A',
+      Email: transaction.user?.email || 'N/A',
+      Type: transaction.type.charAt(0).toUpperCase() + transaction.type.slice(1),
+      Amount: `$${transaction.amount.toFixed(2)}`,
+      Status: transaction.status.charAt(0).toUpperCase() + transaction.status.slice(1),
+      Method: transaction.method.toUpperCase(),
+      Reference: transaction.reference,
+      'Processed By': transaction.processedBy?.name || 'N/A',
+      Notes: transaction.adminNotes || 'N/A'
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: formattedData
+    });
+  } catch (err) {
+    console.error('Export transactions error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while exporting transactions'
+    });
+  }
 });
 
 // Admin Activity Log
@@ -7534,6 +7736,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
