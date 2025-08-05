@@ -25,16 +25,9 @@ const WebSocket = require('ws');
 const OpenAI = require('openai');
 // Initialize Express app
 const app = express();
-const http = require('http');
-const server = http.createServer(app);
+const { createServer } = require('http');
 const { Server } = require('socket.io');
-const io = new Server(server, {
-  cors: {
-    origin: ['https://bithhash.vercel.app', 'https://website-backendd-1.onrender.com'],
-    methods: ['GET', 'POST'],
-    credentials: true
-  }
-});
+
 
 // Enhanced Security Middleware
 app.use(helmet({
@@ -7271,84 +7264,6 @@ app.get('/api/users/two-factor', protect, async (req, res) => {
 
 
 
-// Add this near the top of your server.js, after initializing Express but before routes
-
-
-// Socket.IO authentication middleware
-io.use(async (socket, next) => {
-  try {
-    const token = socket.handshake.auth.token;
-    if (!token) {
-      return next(new Error('Authentication error'));
-    }
-
-    const decoded = verifyJWT(token);
-    if (!decoded.isAdmin) {
-      return next(new Error('Unauthorized'));
-    }
-
-    const admin = await Admin.findById(decoded.id);
-    if (!admin) {
-      return next(new Error('Admin not found'));
-    }
-
-    socket.admin = admin;
-    next();
-  } catch (err) {
-    next(new Error('Authentication failed'));
-  }
-});
-
-// Socket.IO connection handler
-io.on('connection', (socket) => {
-  console.log(`Admin connected: ${socket.admin.email}`);
-
-  // Join admin to their private room
-  socket.join(`admin_${socket.admin._id}`);
-
-  // Handle real-time events
-  socket.on('subscribe', (data) => {
-    if (data.channel === 'notifications') {
-      socket.join('notifications');
-    } else if (data.channel === 'transactions') {
-      socket.join('transactions');
-    }
-  });
-
-  socket.on('unsubscribe', (data) => {
-    if (data.channel === 'notifications') {
-      socket.leave('notifications');
-    } else if (data.channel === 'transactions') {
-      socket.leave('transactions');
-    }
-  });
-
-  socket.on('disconnect', () => {
-    console.log(`Admin disconnected: ${socket.admin.email}`);
-  });
-});
-
-// Helper function to emit events
-const emitAdminEvent = (event, data, adminId = null) => {
-  if (adminId) {
-    io.to(`admin_${adminId}`).emit(event, data);
-  } else {
-    io.emit(event, data);
-  }
-};
-
-// Example usage in your existing routes:
-// When a new deposit comes in:
-// emitAdminEvent('new_deposit', { amount: 100, user: { name: 'John Doe' } });
-
-// When a new withdrawal comes in:
-// emitAdminEvent('new_withdrawal', { amount: 50, user: { name: 'Jane Smith' } });
-
-// Replace app.listen with server.listen at the bottom of your file
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -7367,19 +7282,48 @@ app.use((req, res) => {
   });
 });
 
-// Start server with WebSocket support
+// Create HTTP server and Socket.IO
 const PORT = process.env.PORT || 3000;
-const server = app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  setupWebSocketServer(server);  // This initializes WebSocket
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: {
+    origin: ['https://bithhash.vercel.app', 'https://website-backendd-1.onrender.com'],
+    methods: ['GET', 'POST']
+  }
 });
 
+// Socket.IO connection handler
+io.on('connection', (socket) => {
+  console.log('New client connected:', socket.id);
 
+  // Verify admin token for admin connections
+  socket.on('authenticate', async (token) => {
+    try {
+      const decoded = verifyJWT(token);
+      if (!decoded.isAdmin) {
+        socket.disconnect();
+        return;
+      }
 
+      const admin = await Admin.findById(decoded.id);
+      if (!admin) {
+        socket.disconnect();
+        return;
+      }
 
+      socket.adminId = admin._id;
+      console.log(`Admin ${admin.email} connected`);
+    } catch (err) {
+      socket.disconnect();
+    }
+  });
 
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+  });
+});
 
-
-
-
-
+// Start server
+httpServer.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
