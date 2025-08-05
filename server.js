@@ -6413,7 +6413,80 @@ app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async 
     }
 });
 
+// Admin Transactions Endpoint (DataTables compatible)
+app.get('/api/admin/transactions', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+    try {
+        // Parse DataTables request parameters
+        const draw = parseInt(req.query.draw) || 1;
+        const start = parseInt(req.query.start) || 0;
+        const length = parseInt(req.query.length) || 10;
+        const searchValue = req.query.search?.value || '';
+        const orderColumn = req.query.order?.[0]?.column || 0;
+        const orderDir = req.query.order?.[0]?.dir || 'asc';
+        const orderColumnName = req.query.columns?.[orderColumn]?.data || 'createdAt';
 
+        // Build the query
+        const query = {};
+        
+        // Search filter
+        if (searchValue) {
+            query.$or = [
+                { reference: { $regex: searchValue, $options: 'i' } },
+                { 'user.name': { $regex: searchValue, $options: 'i' } },
+                { type: { $regex: searchValue, $options: 'i' } },
+                { status: { $regex: searchValue, $options: 'i' } }
+            ];
+        }
+
+        // Get total count
+        const totalRecords = await Transaction.countDocuments();
+
+        // Get filtered count
+        const totalFiltered = await Transaction.countDocuments(query);
+
+        // Get transactions with pagination and sorting
+        const transactions = await Transaction.find(query)
+            .populate('user', 'name')
+            .populate('processedBy', 'name')
+            .sort({ [orderColumnName]: orderDir === 'asc' ? 1 : -1 })
+            .skip(start)
+            .limit(length)
+            .lean();
+
+        // Format data for DataTables
+        const data = transactions.map(tx => ({
+            id: tx._id,
+            user: {
+                name: tx.user?.name || 'Deleted User',
+                _id: tx.user?._id || null
+            },
+            type: tx.type,
+            amount: tx.amount,
+            status: tx.status,
+            method: tx.method,
+            reference: tx.reference,
+            createdAt: tx.createdAt,
+            processedBy: tx.processedBy?.name || null,
+            processedAt: tx.processedAt,
+            details: tx.details
+        }));
+
+        res.status(200).json({
+            draw,
+            recordsTotal: totalRecords,
+            recordsFiltered: totalFiltered,
+            data
+        });
+
+        await logActivity('view-transactions', 'transaction', null, req.admin._id, 'Admin', req);
+    } catch (err) {
+        console.error('Get transactions error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching transactions'
+        });
+    }
+});
 
 
 
@@ -6485,6 +6558,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
