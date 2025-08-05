@@ -3579,7 +3579,331 @@ app.post('/api/admin/auth/reset-password', [
   }
 });
 
+// Add this endpoint after your existing admin routes in server.js
+app.get('/api/admin/stats', adminProtect, restrictTo('super', 'support', 'finance'), async (req, res) => {
+    try {
+        // Cache key with admin ID to separate stats per admin level
+        const cacheKey = `admin-stats:${req.admin._id}`;
+        
+        // Try to get cached stats first
+        const cachedStats = await redis.get(cacheKey);
+        if (cachedStats) {
+            return res.status(200).json({
+                status: 'success',
+                data: JSON.parse(cachedStats)
+            });
+        }
 
+        // Calculate time periods for analytics
+        const now = new Date();
+        const twentyFourHoursAgo = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+        const sevenDaysAgo = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
+        const thirtyDaysAgo = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
+
+        // Parallelize all database queries
+        const [
+            totalUsers,
+            activeUsers,
+            newUsers24h,
+            totalDeposits,
+            pendingWithdrawals,
+            completedWithdrawals,
+            revenueStats,
+            openTickets,
+            unreadAdminNotifications,
+            userGrowthData,
+            depositTrends,
+            withdrawalTrends
+        ] = await Promise.all([
+            // User counts
+            User.countDocuments(),
+            User.countDocuments({ status: 'active' }),
+            User.countDocuments({ createdAt: { $gte: twentyFourHoursAgo } }),
+
+            // Deposit stats
+            Transaction.aggregate([
+                { 
+                    $match: { 
+                        type: 'deposit',
+                        status: 'completed'
+                    } 
+                },
+                { 
+                    $group: { 
+                        _id: null, 
+                        totalAmount: { $sum: '$amount' },
+                        count: { $sum: 1 }
+                    } 
+                }
+            ]),
+
+            // Withdrawal stats
+            Transaction.aggregate([
+                { 
+                    $match: { 
+                        type: 'withdrawal',
+                        status: 'pending'
+                    } 
+                },
+                { 
+                    $group: { 
+                        _id: null, 
+                        totalAmount: { $sum: '$amount' },
+                        count: { $sum: 1 }
+                    } 
+                }
+            ]),
+
+            // Completed withdrawals
+            Transaction.aggregate([
+                { 
+                    $match: { 
+                        type: 'withdrawal',
+                        status: 'completed',
+                        createdAt: { $gte: thirtyDaysAgo }
+                    } 
+                },
+                { 
+                    $group: { 
+                        _id: null, 
+                        totalAmount: { $sum: '$amount' },
+                        count: { $sum: 1 }
+                    } 
+                }
+            ]),
+
+            // Revenue calculations (fees from deposits and withdrawals)
+            Transaction.aggregate([
+                {
+                    $match: {
+                        status: 'completed',
+                        fee: { $gt: 0 }
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        totalFees: { $sum: '$fee' },
+                        depositFees: {
+                            $sum: {
+                                $cond: [{ $eq: ['$type', 'deposit'] }, '$fee', 0]
+                            }
+                        },
+                        withdrawalFees: {
+                            $sum: {
+                                $cond: [{ $eq: ['$type', 'withdrawal'] }, '$fee', 0]
+                            }
+                        }
+                    }
+                }
+            ]),
+
+            // Support tickets
+            SystemLog.countDocuments({
+                entity: 'ticket',
+                'changes.status': 'open'
+            }),
+
+            // Admin notifications
+            SystemLog.countDocuments({
+                entity: 'notification',
+                'changes.isRead': false,
+                performedByModel: 'Admin',
+                performedBy: req.admin._id
+            }),
+
+            // User growth trends
+            User.aggregate([
+                {
+                    $match: {
+                        createdAt: { $gte: sevenDaysAgo }
+                    }
+                },
+                {
+                    $group: {
+                        _id: {
+                            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+                        },
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { _id: 1 } }
+            ]),
+
+            // Deposit trends
+            Transaction.aggregate([
+                {
+                    $match: {
+                        type: 'deposit',
+                        status: 'completed',
+                        createdAt: { $gte: sevenDaysAgo }
+                    }
+                },
+                {
+                    $group: {
+                        _id: {
+                            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+                        },
+                        amount: { $sum: '$amount' },
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { _id: 1 } }
+            ]),
+
+            // Withdrawal trends
+            Transaction.aggregate([
+                {
+                    $match: {
+                        type: 'withdrawal',
+                        status: 'completed',
+                        createdAt: { $gte: sevenDaysAgo }
+                    }
+                },
+                {
+                    $group: {
+                        _id: {
+                            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+                        },
+                        amount: { $sum: '$amount' },
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { _id: 1 } }
+            ])
+        ]);
+
+        // Calculate percentage changes
+        const calculateChange = (current, previous) => {
+            if (previous === 0) return current > 0 ? 100 : 0;
+            return ((current - previous) / previous) * 100;
+        };
+
+        // Get previous period data for comparison
+        const previousPeriodEnd = sevenDaysAgo;
+        const previousPeriodStart = new Date(sevenDaysAgo.getTime() - (7 * 24 * 60 * 60 * 1000));
+
+        const [
+            previousUsers,
+            previousDeposits,
+            previousWithdrawals
+        ] = await Promise.all([
+            User.countDocuments({
+                createdAt: { 
+                    $gte: previousPeriodStart,
+                    $lt: previousPeriodEnd
+                }
+            }),
+            Transaction.aggregate([
+                {
+                    $match: {
+                        type: 'deposit',
+                        status: 'completed',
+                        createdAt: { 
+                            $gte: previousPeriodStart,
+                            $lt: previousPeriodEnd
+                        }
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        amount: { $sum: '$amount' }
+                    }
+                }
+            ]),
+            Transaction.aggregate([
+                {
+                    $match: {
+                        type: 'withdrawal',
+                        status: 'completed',
+                        createdAt: { 
+                            $gte: previousPeriodStart,
+                            $lt: previousPeriodEnd
+                        }
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        amount: { $sum: '$amount' }
+                    }
+                }
+            ])
+        ]);
+
+        // Calculate changes
+        const usersChange = calculateChange(newUsers24h, previousUsers);
+        const depositsChange = calculateChange(
+            totalDeposits[0]?.totalAmount || 0,
+            previousDeposits[0]?.amount || 0
+        );
+        const withdrawalsChange = calculateChange(
+            completedWithdrawals[0]?.totalAmount || 0,
+            previousWithdrawals[0]?.amount || 0
+        );
+        const revenueChange = calculateChange(
+            revenueStats[0]?.totalFees || 0,
+            // In a real implementation, you'd fetch previous revenue data
+            (revenueStats[0]?.totalFees || 0) * 0.9 // Placeholder for demo
+        );
+
+        // Format response data
+        const statsData = {
+            // User statistics
+            total_users: totalUsers,
+            active_users: activeUsers,
+            new_users: newUsers24h,
+            users_change: parseFloat(usersChange.toFixed(2)),
+            
+            // Deposit statistics
+            total_deposits: totalDeposits[0]?.totalAmount || 0,
+            deposits_count: totalDeposits[0]?.count || 0,
+            deposits_change: parseFloat(depositsChange.toFixed(2)),
+            
+            // Withdrawal statistics
+            pending_withdrawals: pendingWithdrawals[0]?.totalAmount || 0,
+            pending_withdrawals_count: pendingWithdrawals[0]?.count || 0,
+            total_withdrawals: completedWithdrawals[0]?.totalAmount || 0,
+            withdrawals_change: parseFloat(withdrawalsChange.toFixed(2)),
+            
+            // Revenue statistics
+            platform_revenue: revenueStats[0]?.totalFees || 0,
+            deposit_fees: revenueStats[0]?.depositFees || 0,
+            withdrawal_fees: revenueStats[0]?.withdrawalFees || 0,
+            revenue_change: parseFloat(revenueChange.toFixed(2)),
+            
+            // Support statistics
+            open_tickets: openTickets,
+            unread_notifications: unreadAdminNotifications,
+            
+            // Trends data
+            trends: {
+                user_growth: userGrowthData,
+                deposit_trends: depositTrends,
+                withdrawal_trends: withdrawalTrends
+            },
+            
+            // Timestamp
+            last_updated: now.toISOString()
+        };
+
+        // Cache the results for 5 minutes
+        await redis.setex(cacheKey, 300, JSON.stringify(statsData));
+
+        res.status(200).json({
+            status: 'success',
+            data: statsData
+        });
+
+    } catch (err) {
+        console.error('Admin stats error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching admin statistics'
+        });
+    }
+});
 
 
 
@@ -6039,4 +6363,5 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
