@@ -6755,7 +6755,99 @@ app.get('/api/admin/stats/revenue', adminProtect, restrictTo('super', 'finance')
     }
 });
 
+// Admin User Growth Statistics
+app.get('/api/admin/stats/user-growth', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+    try {
+        const { period = '30' } = req.query;
+        const days = parseInt(period);
+        
+        if (isNaN(days) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'Invalid period parameter'
+            });
+        }
 
+        // Calculate start date based on period
+        const startDate = new Date();
+        startDate.setDate(startDate.getDate() - days);
+
+        // Generate date labels for the chart
+        const dateLabels = [];
+        for (let i = 0; i <= days; i++) {
+            const date = new Date(startDate);
+            date.setDate(date.getDate() + i);
+            dateLabels.push(date.toISOString().split('T')[0]);
+        }
+
+        // Aggregate user growth data
+        const userGrowth = await User.aggregate([
+            {
+                $match: {
+                    createdAt: { $gte: startDate }
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+                    },
+                    count: { $sum: 1 }
+                }
+            },
+            {
+                $sort: { _id: 1 }
+            }
+        ]);
+
+        // Create a map of dates to counts for easy lookup
+        const growthMap = new Map();
+        userGrowth.forEach(item => {
+            growthMap.set(item._id, item.count);
+        });
+
+        // Fill in the data with zeros for days with no registrations
+        const growthData = dateLabels.map(date => {
+            return growthMap.get(date) || 0;
+        });
+
+        // Calculate total growth for the period
+        const totalGrowth = growthData.reduce((sum, count) => sum + count, 0);
+
+        // Calculate percentage change compared to previous period
+        const previousStartDate = new Date(startDate);
+        previousStartDate.setDate(previousStartDate.getDate() - days);
+        
+        const previousPeriodCount = await User.countDocuments({
+            createdAt: { 
+                $gte: previousStartDate,
+                $lt: startDate
+            }
+        });
+
+        const percentageChange = previousPeriodCount > 0 
+            ? ((totalGrowth - previousPeriodCount) / previousPeriodCount) * 100
+            : totalGrowth > 0 ? 100 : 0;
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                period: days,
+                total: totalGrowth,
+                percentage_change: percentageChange.toFixed(2),
+                labels: dateLabels,
+                values: growthData
+            }
+        });
+
+    } catch (err) {
+        console.error('User growth stats error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching user growth statistics'
+        });
+    }
+});
 
 
 
@@ -6822,4 +6914,5 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
