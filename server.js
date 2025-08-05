@@ -6194,7 +6194,224 @@ async function calculatePercentageChanges() {
     }
 }
 
-
+// Add this route in your server.js file
+app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+    try {
+        // Parse DataTables request parameters
+        const draw = parseInt(req.query.draw) || 1;
+        const start = parseInt(req.query.start) || 0;
+        const length = parseInt(req.query.length) || 10;
+        const searchValue = req.query.search?.value || '';
+        const searchRegex = req.query.search?.regex === 'true';
+        
+        // Parse columns
+        const columns = [];
+        let i = 0;
+        while (req.query[`columns[${i}][data]`]) {
+            columns.push({
+                data: req.query[`columns[${i}][data]`],
+                name: req.query[`columns[${i}][name]`],
+                searchable: req.query[`columns[${i}][searchable]`] === 'true',
+                orderable: req.query[`columns[${i}][orderable]`] === 'true',
+                search: {
+                    value: req.query[`columns[${i}][search][value]`] || '',
+                    regex: req.query[`columns[${i}][search][regex]`] === 'true'
+                }
+            });
+            i++;
+        }
+        
+        // Parse ordering
+        const order = [];
+        i = 0;
+        while (req.query[`order[${i}][column]`]) {
+            const columnIndex = parseInt(req.query[`order[${i}][column]`]);
+            const column = columns[columnIndex];
+            if (column && column.orderable) {
+                order.push({
+                    column: column.data,
+                    dir: req.query[`order[${i}][dir]`] || 'asc'
+                });
+            }
+            i++;
+        }
+        
+        // Build the MongoDB query
+        const query = {};
+        
+        // Global search
+        if (searchValue) {
+            const searchConditions = [];
+            
+            columns.forEach(col => {
+                if (col.searchable) {
+                    if (col.data === 'status') {
+                        // Special handling for status field
+                        const statusMap = {
+                            'active': 'active',
+                            'inactive': 'inactive',
+                            'suspended': 'suspended',
+                            'pending': 'pending'
+                        };
+                        
+                        const searchTerm = searchValue.toLowerCase();
+                        const statusValue = Object.entries(statusMap)
+                            .find(([key, val]) => key.includes(searchTerm) || val.includes(searchTerm))?.[1];
+                        
+                        if (statusValue) {
+                            searchConditions.push({ status: statusValue });
+                        }
+                    } else if (col.data === 'balance') {
+                        // Numeric search for balance
+                        if (!isNaN(searchValue)) {
+                            searchConditions.push({ 'balances.main': parseFloat(searchValue) });
+                        }
+                    } else if (col.data === 'created_at') {
+                        // Date search
+                        const date = new Date(searchValue);
+                        if (!isNaN(date.getTime())) {
+                            searchConditions.push({ createdAt: date });
+                        }
+                    } else {
+                        // Text search for name, email, etc.
+                        const fieldSearch = {};
+                        const field = col.data === 'name' ? ['firstName', 'lastName'] : [col.data];
+                        
+                        field.forEach(f => {
+                            if (searchRegex) {
+                                fieldSearch[f] = { $regex: searchValue, $options: 'i' };
+                            } else {
+                                fieldSearch[f] = { $regex: `^${searchValue}`, $options: 'i' };
+                            }
+                        });
+                        
+                        if (field.length > 1) {
+                            searchConditions.push({
+                                $or: Object.entries(fieldSearch).map(([k, v]) => ({ [k]: v }))
+                            });
+                        } else {
+                            searchConditions.push(fieldSearch);
+                        }
+                    }
+                }
+            });
+            
+            if (searchConditions.length > 0) {
+                query.$or = searchConditions;
+            }
+        }
+        
+        // Column-specific search
+        columns.forEach(col => {
+            if (col.search.value) {
+                if (col.data === 'status') {
+                    query.status = col.search.value;
+                } else if (col.data === 'balance') {
+                    if (!isNaN(col.search.value)) {
+                        query['balances.main'] = parseFloat(col.search.value);
+                    }
+                } else if (col.data === 'created_at') {
+                    const date = new Date(col.search.value);
+                    if (!isNaN(date.getTime())) {
+                        query.createdAt = date;
+                    }
+                } else {
+                    const field = col.data === 'name' ? ['firstName', 'lastName'] : [col.data];
+                    
+                    field.forEach(f => {
+                        if (col.search.regex) {
+                            query[f] = { $regex: col.search.value, $options: 'i' };
+                        } else {
+                            query[f] = { $regex: `^${col.search.value}`, $options: 'i' };
+                        }
+                    });
+                }
+            }
+        });
+        
+        // Build sort object
+        const sort = {};
+        order.forEach(o => {
+            if (o.column === 'name') {
+                sort['firstName'] = o.dir === 'asc' ? 1 : -1;
+                sort['lastName'] = o.dir === 'asc' ? 1 : -1;
+            } else {
+                sort[o.column] = o.dir === 'asc' ? 1 : -1;
+            }
+        });
+        
+        // Default sort if none specified
+        if (Object.keys(sort).length === 0) {
+            sort.createdAt = -1;
+        }
+        
+        // Get total records count
+        const totalRecords = await User.countDocuments();
+        
+        // Get filtered count (for pagination)
+        const filteredCount = await User.countDocuments(query);
+        
+        // Get paginated data
+        const users = await User.find(query)
+            .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires -__v -twoFactorAuth.secret')
+            .sort(sort)
+            .skip(start)
+            .limit(length)
+            .lean();
+        
+        // Format data for DataTables
+        const data = users.map(user => {
+            return {
+                id: user._id,
+                name: `${user.firstName} ${user.lastName}`,
+                email: user.email,
+                balance: user.balances?.main || 0,
+                status: user.status,
+                created_at: user.createdAt,
+                // Add action buttons
+                action: `
+                    <div style="display: flex; gap: 5px;">
+                        <button class="btn btn-sm btn-primary edit-user-btn" data-id="${user._id}">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        ${user.status === 'active' ? `
+                            <button class="btn btn-sm btn-warning suspend-user-btn" data-id="${user._id}">
+                                <i class="fas fa-ban"></i>
+                            </button>
+                        ` : `
+                            <button class="btn btn-sm btn-success activate-user-btn" data-id="${user._id}">
+                                <i class="fas fa-check"></i>
+                            </button>
+                        `}
+                        <button class="btn btn-sm btn-danger delete-user-btn" data-id="${user._id}">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                `
+            };
+        });
+        
+        // Send response
+        res.status(200).json({
+            draw: draw,
+            recordsTotal: totalRecords,
+            recordsFiltered: filteredCount,
+            data: data
+        });
+        
+        await logActivity('view-users', 'user', null, req.admin._id, 'Admin', req, {
+            search: searchValue,
+            filters: query
+        });
+        
+    } catch (err) {
+        console.error('Admin users list error:', err);
+        res.status(500).json({
+            draw: req.query.draw || 1,
+            error: 'An error occurred while fetching users'
+        });
+    }
+});
 
 
 
@@ -6268,6 +6485,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
