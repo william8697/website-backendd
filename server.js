@@ -6459,302 +6459,6 @@ app.get('/api/admin/users', adminProtect, restrictTo('super', 'support'), async 
     }
 });
 
-// Admin Transactions Endpoints
-app.get('/api/admin/transactions', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
-  try {
-    // DataTables server-side processing parameters
-    const draw = parseInt(req.query.draw) || 1;
-    const start = parseInt(req.query.start) || 0;
-    const length = parseInt(req.query.length) || 10;
-    const search = req.query.search?.value || '';
-    const order = req.query.order?.[0] || {};
-    const orderColumn = req.query.columns?.[order.column]?.data || 'createdAt';
-    const orderDirection = order.dir || 'desc';
-
-    // Build the query
-    const query = {};
-    
-    // Search filter
-    if (search) {
-      query.$or = [
-        { reference: { $regex: search, $options: 'i' } },
-        { 'user.name': { $regex: search, $options: 'i' } },
-        { type: { $regex: search, $options: 'i' } },
-        { status: { $regex: search, $options: 'i' } }
-      ];
-    }
-
-    // Status filter if provided
-    if (req.query.status) {
-      query.status = req.query.status;
-    }
-
-    // Type filter if provided
-    if (req.query.type) {
-      query.type = req.query.type;
-    }
-
-    // Date range filter if provided
-    if (req.query.startDate && req.query.endDate) {
-      query.createdAt = {
-        $gte: new Date(req.query.startDate),
-        $lte: new Date(req.query.endDate)
-      };
-    }
-
-    // Get total count
-    const totalRecords = await Transaction.countDocuments();
-
-    // Get filtered count
-    const filteredRecords = await Transaction.countDocuments(query);
-
-    // Get paginated and sorted data
-    const transactions = await Transaction.find(query)
-      .populate('user', 'name email')
-      .populate('processedBy', 'name')
-      .sort({ [orderColumn]: orderDirection === 'asc' ? 1 : -1 })
-      .skip(start)
-      .limit(length)
-      .lean();
-
-    // Format data for DataTables
-    const data = transactions.map(transaction => ({
-      id: transaction._id,
-      user: {
-        _id: transaction.user?._id,
-        name: transaction.user?.name,
-        email: transaction.user?.email
-      },
-      type: transaction.type,
-      amount: transaction.amount,
-      status: transaction.status,
-      method: transaction.method,
-      reference: transaction.reference,
-      createdAt: transaction.createdAt,
-      processedBy: transaction.processedBy?.name,
-      adminNotes: transaction.adminNotes
-    }));
-
-    res.status(200).json({
-      draw,
-      recordsTotal: totalRecords,
-      recordsFiltered: filteredRecords,
-      data
-    });
-  } catch (err) {
-    console.error('Get transactions error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching transactions'
-    });
-  }
-});
-
-app.get('/api/admin/transactions/:id', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
-  try {
-    const transaction = await Transaction.findById(req.params.id)
-      .populate('user', 'name email')
-      .populate('processedBy', 'name')
-      .lean();
-
-    if (!transaction) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Transaction not found'
-      });
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: transaction
-    });
-  } catch (err) {
-    console.error('Get transaction error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching transaction'
-    });
-  }
-});
-
-app.post('/api/admin/transactions/:id/approve', adminProtect, restrictTo('super', 'finance'), [
-  body('notes').optional().trim().escape()
-], async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { notes } = req.body;
-
-    const transaction = await Transaction.findOneAndUpdate(
-      { _id: id, status: 'pending' },
-      {
-        status: 'completed',
-        adminNotes: notes,
-        processedBy: req.admin._id,
-        processedAt: new Date()
-      },
-      { new: true }
-    ).populate('user', 'name email');
-
-    if (!transaction) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Pending transaction not found'
-      });
-    }
-
-    // For deposit transactions, credit the user's account
-    if (transaction.type === 'deposit') {
-      const user = await User.findById(transaction.user._id);
-      if (user) {
-        user.balances.main += transaction.amount;
-        await user.save();
-
-        // Send notification to user
-        user.notifications.push({
-          title: 'Deposit Approved',
-          message: `Your deposit of $${transaction.amount} has been approved and credited to your account.`,
-          type: 'success'
-        });
-        await user.save();
-      }
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: transaction
-    });
-
-    await logActivity('approve-transaction', 'transaction', transaction._id, req.admin._id, 'Admin', req, { status: 'completed' });
-  } catch (err) {
-    console.error('Approve transaction error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while approving transaction'
-    });
-  }
-});
-
-app.post('/api/admin/transactions/:id/decline', adminProtect, restrictTo('super', 'finance'), [
-  body('reason').optional().trim().escape()
-], async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { reason } = req.body;
-
-    const transaction = await Transaction.findOneAndUpdate(
-      { _id: id, status: 'pending' },
-      {
-        status: 'cancelled',
-        adminNotes: reason,
-        processedBy: req.admin._id,
-        processedAt: new Date()
-      },
-      { new: true }
-    ).populate('user', 'name email');
-
-    if (!transaction) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Pending transaction not found'
-      });
-    }
-
-    // For withdrawal transactions, refund the amount to user's balance
-    if (transaction.type === 'withdrawal') {
-      const user = await User.findById(transaction.user._id);
-      if (user) {
-        user.balances.main += transaction.amount;
-        await user.save();
-
-        // Send notification to user
-        user.notifications.push({
-          title: 'Withdrawal Declined',
-          message: `Your withdrawal of $${transaction.amount} has been declined. ${reason || ''}`,
-          type: 'error'
-        });
-        await user.save();
-      }
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: transaction
-    });
-
-    await logActivity('decline-transaction', 'transaction', transaction._id, req.admin._id, 'Admin', req, { status: 'cancelled', reason });
-  } catch (err) {
-    console.error('Decline transaction error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while declining transaction'
-    });
-  }
-});
-
-app.post('/api/admin/transactions/export', adminProtect, restrictTo('super', 'finance'), [
-  body('startDate').optional().isISO8601().withMessage('Invalid start date format'),
-  body('endDate').optional().isISO8601().withMessage('Invalid end date format'),
-  body('type').optional().isIn(['deposit', 'withdrawal', 'transfer', 'investment', 'interest', 'referral', 'loan']).withMessage('Invalid transaction type'),
-  body('status').optional().isIn(['pending', 'completed', 'failed', 'cancelled']).withMessage('Invalid transaction status')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { startDate, endDate, type, status } = req.body;
-
-    // Build the query
-    const query = {};
-    
-    if (type) query.type = type;
-    if (status) query.status = status;
-    
-    if (startDate && endDate) {
-      query.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
-      };
-    }
-
-    // Get transactions
-    const transactions = await Transaction.find(query)
-      .populate('user', 'name email')
-      .populate('processedBy', 'name')
-      .sort({ createdAt: -1 })
-      .lean();
-
-    // Format data for CSV/Excel
-    const formattedData = transactions.map(transaction => ({
-      ID: transaction._id,
-      Date: transaction.createdAt.toISOString(),
-      User: transaction.user?.name || 'N/A',
-      Email: transaction.user?.email || 'N/A',
-      Type: transaction.type.charAt(0).toUpperCase() + transaction.type.slice(1),
-      Amount: `$${transaction.amount.toFixed(2)}`,
-      Status: transaction.status.charAt(0).toUpperCase() + transaction.status.slice(1),
-      Method: transaction.method.toUpperCase(),
-      Reference: transaction.reference,
-      'Processed By': transaction.processedBy?.name || 'N/A',
-      Notes: transaction.adminNotes || 'N/A'
-    }));
-
-    res.status(200).json({
-      status: 'success',
-      data: formattedData
-    });
-  } catch (err) {
-    console.error('Export transactions error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while exporting transactions'
-    });
-  }
-});
 
 // Admin Activity Log
 app.get('/api/admin/activity', adminProtect, restrictTo('super', 'support'), async (req, res) => {
@@ -7674,6 +7378,244 @@ app.post('/api/admin/deposits/process-batch', adminProtect, restrictTo('super', 
 
 
 
+
+
+
+// Admin Transactions Endpoint
+app.get('/api/admin/transactions/all', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+  try {
+    const { tab = 'all', draw = '1', start = '0', length = '10', search, order, columns } = req.query;
+    
+    // Parse DataTables parameters
+    const page = parseInt(start) / parseInt(length) + 1;
+    const limit = parseInt(length);
+    const skip = (page - 1) * limit;
+    
+    // Build the query
+    const query = {};
+    
+    // Apply tab filter
+    if (tab !== 'all') {
+      query.status = tab;
+    }
+    
+    // Apply search
+    if (search && search.value) {
+      const searchRegex = new RegExp(search.value, 'i');
+      query.$or = [
+        { reference: { $regex: searchRegex } },
+        { 'user.name': { $regex: searchRegex } },
+        { type: { $regex: searchRegex } },
+        { method: { $regex: searchRegex } }
+      ];
+    }
+    
+    // Build sort
+    let sort = { createdAt: -1 }; // Default sort
+    if (order && order.length > 0) {
+      const orderColumn = columns[order[0].column];
+      if (orderColumn && orderColumn.data) {
+        sort = { [orderColumn.data]: order[0].dir === 'asc' ? 1 : -1 };
+      }
+    }
+    
+    // Get transactions with user data
+    const transactions = await Transaction.aggregate([
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+      { $match: query },
+      { $sort: sort },
+      { $skip: skip },
+      { $limit: limit },
+      {
+        $project: {
+          id: '$_id',
+          _id: 0,
+          user: {
+            name: { $concat: ['$user.firstName', ' ', '$user.lastName'] },
+            email: '$user.email'
+          },
+          type: 1,
+          amount: 1,
+          method: 1,
+          status: 1,
+          createdAt: 1,
+          reference: 1,
+          btcAddress: 1,
+          bankDetails: 1
+        }
+      }
+    ]);
+    
+    // Get total count
+    const totalRecords = await Transaction.countDocuments();
+    
+    // Get filtered count
+    const filteredRecords = await Transaction.aggregate([
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+      { $match: query },
+      { $count: 'count' }
+    ]);
+    
+    res.status(200).json({
+      status: 'success',
+      draw: parseInt(draw),
+      recordsTotal: totalRecords,
+      recordsFiltered: filteredRecords[0]?.count || 0,
+      data: transactions
+    });
+    
+  } catch (err) {
+    console.error('Get transactions error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching transactions',
+      error: err.message
+    });
+  }
+});
+
+// Transaction Details Endpoint
+app.get('/api/admin/transactions/:id', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+  try {
+    const transaction = await Transaction.findById(req.params.id)
+      .populate('user', 'firstName lastName email')
+      .populate('processedBy', 'name');
+    
+    if (!transaction) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Transaction not found'
+      });
+    }
+    
+    res.status(200).json({
+      status: 'success',
+      data: transaction
+    });
+    
+  } catch (err) {
+    console.error('Get transaction details error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching transaction details'
+    });
+  }
+});
+
+// Process Transaction Endpoint
+app.post('/api/admin/transactions/:id/process', adminProtect, restrictTo('super', 'finance'), [
+  body('action').isIn(['approve', 'decline']).withMessage('Invalid action'),
+  body('decline_reason').if(body('action').equals('decline')).notEmpty().withMessage('Decline reason is required'),
+  body('reference').if(body('action').equals('approve')).notEmpty().withMessage('Reference is required for approval')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+  
+  try {
+    const { id } = req.params;
+    const { action, decline_reason, reference } = req.body;
+    
+    const transaction = await Transaction.findOne({
+      _id: id,
+      status: 'pending'
+    }).populate('user');
+    
+    if (!transaction) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Pending transaction not found'
+      });
+    }
+    
+    // Update transaction based on action
+    if (action === 'approve') {
+      transaction.status = 'completed';
+      transaction.reference = reference;
+      transaction.processedBy = req.admin._id;
+      transaction.processedAt = new Date();
+      
+      // If this is a deposit, credit the user's account
+      if (transaction.type === 'deposit' && transaction.user) {
+        const user = await User.findById(transaction.user._id);
+        user.balances.main += transaction.amount;
+        await user.save();
+        
+        // Send notification to user
+        user.notifications.push({
+          title: 'Deposit Approved',
+          message: `Your deposit of $${transaction.amount} has been approved.`,
+          type: 'success'
+        });
+        await user.save();
+      }
+      
+      // If this is a withdrawal, it's already been deducted when created
+      
+    } else if (action === 'decline') {
+      transaction.status = 'cancelled';
+      transaction.adminNotes = decline_reason;
+      transaction.processedBy = req.admin._id;
+      transaction.processedAt = new Date();
+      
+      // If this is a withdrawal, refund the amount
+      if (transaction.type === 'withdrawal' && transaction.user) {
+        const user = await User.findById(transaction.user._id);
+        user.balances.main += transaction.amount;
+        await user.save();
+        
+        // Send notification to user
+        user.notifications.push({
+          title: 'Withdrawal Declined',
+          message: `Your withdrawal of $${transaction.amount} has been declined. Reason: ${decline_reason}`,
+          type: 'error'
+        });
+        await user.save();
+      }
+    }
+    
+    await transaction.save();
+    
+    res.status(200).json({
+      status: 'success',
+      data: transaction
+    });
+    
+    await logActivity(`transaction-${action}`, 'transaction', transaction._id, req.admin._id, 'Admin', req, { action });
+    
+  } catch (err) {
+    console.error('Process transaction error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while processing transaction'
+    });
+  }
+});
+
+
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -7736,10 +7678,3 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
