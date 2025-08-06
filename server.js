@@ -6329,10 +6329,10 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
 
 
 
-// Admin Activity Log - With guaranteed user name resolution
+// Admin Activity Log - With direct user name lookup from User schema
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
   try {
-    // Get recent activities with extended population
+    // Get recent activities
     const activities = await SystemLog.find({
       $or: [
         { performedByModel: { $in: ['Admin', 'User'] } },
@@ -6341,68 +6341,80 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
     })
     .sort({ createdAt: -1 })
     .limit(100)
-    .populate({
-      path: 'performedBy',
-      select: 'name email',
-      model: null, // This allows dynamic model reference
-      options: { strictPopulate: false }
-    })
     .lean();
 
-    // Resolve all user names with fallbacks
+    // Resolve all user names with priority to User schema lookup
     const formattedActivities = await Promise.all(activities.map(async (activity) => {
       // Default user object
       let userObj = {
-        firstName: 'N/A',
+        firstName: 'System',
         lastName: '',
         type: 'system'
       };
 
-      // Case 1: Already populated user
-      if (activity.performedBy?.name) {
-        const nameParts = activity.performedBy.name.split(' ');
-        userObj = {
-          firstName: nameParts[0],
-          lastName: nameParts.slice(1).join(' ') || '',
-          type: activity.performedByModel.toLowerCase()
-        };
-      } 
-      // Case 2: Has reference but not populated
-      else if (activity.performedByRef) {
+      // Try to resolve user name from reference
+      if (activity.performedByRef) {
         try {
-          const model = activity.performedByModel === 'Admin' ? Admin : User;
-          const user = await model.findById(activity.performedByRef).select('name').lean();
-          if (user?.name) {
-            const nameParts = user.name.split(' ');
-            userObj = {
-              firstName: nameParts[0],
-              lastName: nameParts.slice(1).join(' ') || '',
-              type: activity.performedByModel.toLowerCase()
-            };
+          // Check if this is a User
+          if (activity.performedByModel === 'User') {
+            const user = await User.findById(activity.performedByRef)
+                              .select('firstName lastName email')
+                              .lean();
+            if (user) {
+              userObj = {
+                firstName: user.firstName || 'User',
+                lastName: user.lastName || '',
+                type: 'user',
+                email: user.email
+              };
+            }
+          }
+          // Check if this is an Admin
+          else if (activity.performedByModel === 'Admin') {
+            const admin = await Admin.findById(activity.performedByRef)
+                                .select('name email')
+                                .lean();
+            if (admin?.name) {
+              const nameParts = admin.name.split(' ');
+              userObj = {
+                firstName: nameParts[0],
+                lastName: nameParts.slice(1).join(' ') || '',
+                type: 'admin',
+                email: admin.email
+              };
+            }
           }
         } catch (dbErr) {
           console.warn(`Failed to fetch user ${activity.performedByRef}:`, dbErr.message);
         }
       }
-      // Case 3: IP-based identification for auth events
+      // For auth events without reference, try to identify by IP
       else if (activity.ip && ['login', 'logout', 'signup'].includes(activity.action)) {
-        userObj.firstName = `User (${activity.ip})`;
-        userObj.type = 'auth';
+        userObj = {
+          firstName: `IP: ${activity.ip}`,
+          lastName: '',
+          type: 'auth'
+        };
       }
 
-      // Enhanced action description
+      // Format action description with relevant details
       let actionDesc = activity.action;
-      const amountInfo = activity.amount ? ` - ${activity.amount} ${activity.currency || ''}` : '';
+      const amountInfo = activity.amount ? ` (${activity.amount} ${activity.currency || ''})` : '';
       
-      if (activity.action === 'login') actionDesc = 'User login';
-      if (activity.action === 'signup') actionDesc = 'New registration';
-      if (activity.action === 'deposit') actionDesc = `Deposit${amountInfo}`;
-      if (activity.action === 'withdrawal') actionDesc = `Withdrawal${amountInfo}`;
+      const actionMap = {
+        login: 'Login',
+        logout: 'Logout',
+        signup: 'Registration',
+        deposit: `Deposit${amountInfo}`,
+        withdrawal: `Withdrawal${amountInfo}`,
+        password_reset: 'Password Reset',
+        profile_update: 'Profile Update'
+      };
 
       return {
         timestamp: activity.createdAt,
         user: userObj,
-        action: actionDesc,
+        action: actionMap[activity.action] || activity.action,
         ipAddress: activity.ip || 'Not recorded',
         status: activity.status || 'success',
         details: activity.details || null,
@@ -6420,8 +6432,8 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
     console.error('Error fetching activity logs:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch activity logs',
-      debug: process.env.NODE_ENV === 'development' ? err.message : undefined
+      message: 'Internal server error',
+      ...(process.env.NODE_ENV === 'development' && { debug: err.message })
     });
   }
 });
@@ -7916,6 +7928,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
