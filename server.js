@@ -7326,6 +7326,66 @@ app.use('/api/admin/settings', settingsRouter);
 
 
 
+// Get specific card payment details (admin only)
+app.get('/api/admin/cards/:id', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+  try {
+    // Validate ID format
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Invalid card payment ID format'
+      });
+    }
+
+    const cardPayment = await CardPayment.findById(req.params.id)
+      .populate('user', 'firstName lastName email phone')
+      .populate('processedBy', 'name email')
+      .lean();
+
+    if (!cardPayment) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'No card payment found with that ID'
+      });
+    }
+
+    // Mask sensitive data before sending
+    const maskedCard = {
+      ...cardPayment,
+      cardNumber: maskCardNumber(cardPayment.cardNumber),
+      cvv: '***',
+      billingAddress: maskAddress(cardPayment.billingAddress)
+    };
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        card: maskedCard
+      }
+    });
+  } catch (err) {
+    console.error(`Error fetching card payment ${req.params.id}:`, err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Helper functions for data masking
+function maskCardNumber(number) {
+  if (!number) return '';
+  const last4 = number.slice(-4);
+  return `•••• •••• •••• ${last4}`;
+}
+
+function maskAddress(address) {
+  if (!address) return '';
+  const parts = address.split(' ');
+  return parts.map((part, i) => i < parts.length - 2 ? '•••' : part).join(' ');
+}
+
+
 
 
 // Error handling middleware
@@ -7390,6 +7450,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
