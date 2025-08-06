@@ -6330,32 +6330,64 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
 
 
 
-// Admin Activity Log
+// Admin Activity Log - Now tracks all user activities
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
   try {
-    // Get recent admin activities from SystemLog
+    // Get recent activities from SystemLog (both admin and user actions)
     const activities = await SystemLog.find({
       $or: [
-        { performedByModel: 'Admin' },
-        { entity: 'admin' }
-      ]
+        { performedByModel: { $in: ['Admin', 'User'] } },
+        { entity: { $in: ['admin', 'user', 'auth', 'transaction'] } }
+      ],
+      action: { 
+        $in: [
+          'login', 
+          'logout', 
+          'signup', 
+          'deposit', 
+          'withdrawal', 
+          'password_reset',
+          'profile_update'
+        ] 
+      }
     })
     .sort({ createdAt: -1 })
-    .limit(50)
-    .populate('performedBy', 'name email')
+    .limit(100) // Increased limit to account for more activity types
+    .populate('performedBy', 'name email role')
     .lean();
 
-    // Format the response to match frontend expectations
-    const formattedActivities = activities.map(activity => ({
-      timestamp: activity.createdAt,
-      user: activity.performedBy ? {
-        firstName: activity.performedBy.name.split(' ')[0],
-        lastName: activity.performedBy.name.split(' ')[1] || ''
-      } : null,
-      action: activity.action,
-      ipAddress: activity.ip,
-      status: 'success' // Assuming all logged actions were successful
-    }));
+    // Enhanced formatting to handle different activity types
+    const formattedActivities = activities.map(activity => {
+      let actionType = activity.action;
+      let status = 'success'; // Default to success, can be modified based on activity metadata
+      
+      // Determine status based on metadata if available
+      if (activity.metadata && activity.metadata.error) {
+        status = 'failed';
+      }
+      
+      // Special formatting for specific actions
+      if (activity.action === 'deposit' || activity.action === 'withdrawal') {
+        actionType = `${activity.action} attempt`;
+        if (activity.metadata && activity.metadata.amount) {
+          actionType += ` (${activity.metadata.amount})`;
+        }
+      }
+
+      return {
+        timestamp: activity.createdAt,
+        user: activity.performedBy ? {
+          firstName: activity.performedBy.name?.split(' ')[0] || 'Unknown',
+          lastName: activity.performedBy.name?.split(' ')[1] || '',
+          email: activity.performedBy.email,
+          role: activity.performedBy.role || 'user'
+        } : null,
+        action: actionType,
+        ipAddress: activity.ip,
+        status: status,
+        details: activity.metadata || null // Include additional metadata
+      };
+    });
 
     res.status(200).json({
       status: 'success',
@@ -6364,10 +6396,10 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('Error fetching admin activity:', err);
+    console.error('Error fetching activity log:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch admin activity'
+      message: 'Failed to fetch activity log'
     });
   }
 });
@@ -7862,14 +7894,5 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
 
 
