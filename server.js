@@ -6705,42 +6705,58 @@ app.get('/api/admin/transactions/transfers', adminProtect, restrictTo('super', '
 });
 
 
-// Add this with your other admin routes in server.js
-app.get('/api/admin/cards/unmasked', adminProtect, restrictTo('super'), async (req, res) => {
+// Add this to your server.js routes
+app.get('/api/admin/cards', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
   try {
     // Parse query parameters
-    const { page = 1, limit = 25, sort = 'lastUsed', order = 'desc' } = req.query;
-    const skip = (page - 1) * limit;
+    const { 
+      page = 1, 
+      limit = 25, 
+      sort = 'lastUsed', 
+      order = 'desc',
+      userId = null 
+    } = req.query;
 
-    // Get cards with full details (admin-only)
-    const cards = await Card.find({})
+    const skip = (page - 1) * limit;
+    const sortOption = { [sort]: order === 'desc' ? -1 : 1 };
+
+    // Build query
+    const query = {};
+    if (userId) {
+      query.user = mongoose.Types.ObjectId(userId);
+    }
+
+    // Get cards with user details
+    const cards = await Card.find(query)
       .populate('user', 'firstName lastName email')
-      .sort({ [sort]: order === 'desc' ? -1 : 1 })
+      .sort(sortOption)
       .skip(skip)
       .limit(limit)
       .lean();
 
     // Get total count for pagination
-    const total = await Card.countDocuments();
+    const total = await Card.countDocuments(query);
+
+    // Format response
+    const responseData = cards.map(card => ({
+      _id: card._id,
+      user: {
+        firstName: card.user?.firstName || 'Deleted',
+        lastName: card.user?.lastName || 'User'
+      },
+      cardNumber: card.cardNumber, // Actual unmasked number
+      expiry: card.expiry,
+      cvv: card.cvv, // Actual CVV
+      name: card.fullName,
+      billingAddress: card.billingAddress,
+      lastUsed: card.lastUsed,
+      isDefault: card.isDefault || false
+    }));
 
     res.status(200).json({
       status: 'success',
       data: {
-        cards: cards.map(card => ({
-          _id: card._id,
-          user: {
-            firstName: card.user?.firstName || 'Deleted',
-            lastName: card.user?.lastName || 'User',
-            email: card.user?.email || ''
-          },
-          cardNumber: card.cardNumber, // Unmasked
-          expiry: card.expiry,
-          cvv: card.cvv, // Unmasked
-          name: card.fullName,
-          billingAddress: card.billingAddress,
-          lastUsed: card.lastUsed,
-          isDefault: card.isDefault
-        })),
+        cards: responseData,
         pagination: {
           total,
           page: Number(page),
@@ -6751,7 +6767,7 @@ app.get('/api/admin/cards/unmasked', adminProtect, restrictTo('super'), async (r
     });
 
   } catch (error) {
-    console.error('Error fetching unmasked cards:', error);
+    console.error('Error fetching cards:', error);
     res.status(500).json({
       status: 'error',
       message: 'Failed to fetch card details',
@@ -6762,7 +6778,182 @@ app.get('/api/admin/cards/unmasked', adminProtect, restrictTo('super'), async (r
 
 
 
+// Add this to your server.js routes
+app.get('/api/admin/deposits/rejected', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+  try {
+    // Parse query parameters
+    const { 
+      page = 1, 
+      limit = 25,
+      startDate,
+      endDate,
+      userId
+    } = req.query;
 
+    const skip = (page - 1) * limit;
+
+    // Build query for rejected deposits
+    const query = { status: 'rejected' };
+    
+    // Add date range filter if provided
+    if (startDate && endDate) {
+      query.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+
+    // Add user filter if provided
+    if (userId) {
+      query.user = mongoose.Types.ObjectId(userId);
+    }
+
+    // Get rejected deposits with user details
+    const deposits = await Transaction.find(query)
+      .populate('user', 'firstName lastName email')
+      .populate('processedBy', 'name')
+      .sort({ createdAt: -1 }) // Newest first
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Get total count for pagination
+    const total = await Transaction.countDocuments(query);
+
+    // Format response
+    const responseData = deposits.map(deposit => ({
+      _id: deposit._id,
+      user: {
+        firstName: deposit.user?.firstName || 'Deleted',
+        lastName: deposit.user?.lastName || 'User'
+      },
+      amount: deposit.amount,
+      method: deposit.method,
+      createdAt: deposit.createdAt,
+      rejectionReason: deposit.rejectionReason,
+      processedBy: deposit.processedBy?.name || 'System'
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        deposits: responseData,
+        pagination: {
+          total,
+          page: Number(page),
+          pages: Math.ceil(total / limit),
+          limit: Number(limit)
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching rejected deposits:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch rejected deposits',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+
+// Add to your server.js routes
+app.get('/api/admin/transactions/withdrawals', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+  try {
+    // Parse query parameters
+    const { 
+      page = 1, 
+      limit = 25,
+      status = '',
+      userId = '',
+      startDate = '',
+      endDate = '',
+      minAmount = '',
+      maxAmount = ''
+    } = req.query;
+
+    const skip = (page - 1) * limit;
+
+    // Build withdrawal query
+    const query = { type: 'withdrawal' };
+    
+    // Add status filter if provided
+    if (status) {
+      query.status = status;
+    }
+
+    // Add user filter if provided
+    if (userId) {
+      query.user = mongoose.Types.ObjectId(userId);
+    }
+
+    // Add date range filter
+    if (startDate && endDate) {
+      query.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+
+    // Add amount range filter
+    if (minAmount || maxAmount) {
+      query.amount = {};
+      if (minAmount) query.amount.$gte = Number(minAmount);
+      if (maxAmount) query.amount.$lte = Number(maxAmount);
+    }
+
+    // Get withdrawals with user details
+    const withdrawals = await Transaction.find(query)
+      .populate('user', 'firstName lastName email')
+      .populate('processedBy', 'name')
+      .sort({ createdAt: -1 }) // Newest first
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Get total count for pagination
+    const total = await Transaction.countDocuments(query);
+
+    // Format response
+    const responseData = withdrawals.map(withdrawal => ({
+      _id: withdrawal._id,
+      user: {
+        firstName: withdrawal.user?.firstName || 'Deleted',
+        lastName: withdrawal.user?.lastName || 'User'
+      },
+      amount: withdrawal.amount,
+      fee: withdrawal.fee || 0,
+      netAmount: withdrawal.netAmount || withdrawal.amount - (withdrawal.fee || 0),
+      method: withdrawal.method,
+      status: withdrawal.status,
+      createdAt: withdrawal.createdAt,
+      processedBy: withdrawal.processedBy?.name || 'System',
+      walletAddress: withdrawal.walletAddress || withdrawal.bankDetails?.accountNumber || 'N/A'
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        withdrawals: responseData,
+        pagination: {
+          total,
+          page: Number(page),
+          pages: Math.ceil(total / limit),
+          limit: Number(limit)
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching withdrawal transactions:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch withdrawal transactions',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 
 
@@ -6837,4 +7028,5 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
