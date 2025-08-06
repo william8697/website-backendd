@@ -6438,7 +6438,86 @@ app.get('/api/admin/transactions/deposits', adminProtect, restrictTo('finance', 
 
 
 
+// Admin Deposits Endpoints
+app.get('/api/admin/deposits/pending', adminProtect, restrictTo('finance', 'super'), async (req, res) => {
+  try {
+    const pendingDeposits = await Transaction.find({
+      type: 'deposit',
+      status: 'pending'
+    })
+    .populate('user', 'firstName lastName email')
+    .sort({ createdAt: -1 })
+    .lean();
 
+    // Format the data to match frontend expectations
+    const formattedDeposits = pendingDeposits.map(deposit => ({
+      _id: deposit._id,
+      user: {
+        firstName: deposit.user.firstName,
+        lastName: deposit.user.lastName,
+        email: deposit.user.email
+      },
+      amount: deposit.amount,
+      method: deposit.method,
+      createdAt: deposit.createdAt,
+      proof: deposit.details?.proof || null
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        deposits: formattedDeposits
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching pending deposits:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch pending deposits'
+    });
+  }
+});
+
+// Admin Investment Plans Endpoint
+app.get('/api/admin/investment/plans', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+  try {
+    const plans = await Plan.find({})
+      .sort({ minAmount: 1 })
+      .lean();
+
+    // Calculate daily and total profit for each plan
+    const formattedPlans = plans.map(plan => {
+      const dailyProfit = (plan.percentage / plan.duration).toFixed(2);
+      const totalProfit = plan.percentage;
+      
+      return {
+        _id: plan._id,
+        name: plan.name,
+        description: plan.description,
+        minAmount: plan.minAmount,
+        maxAmount: plan.maxAmount,
+        duration: plan.duration,
+        dailyProfit: parseFloat(dailyProfit),
+        totalProfit: totalProfit,
+        status: plan.isActive ? 'active' : 'inactive',
+        referralBonus: plan.referralBonus
+      };
+    });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        plans: formattedPlans
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching investment plans:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch investment plans'
+    });
+  }
+});
 
 
 
@@ -6507,4 +6586,5 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
