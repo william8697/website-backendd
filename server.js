@@ -6478,48 +6478,45 @@ app.get('/api/admin/deposits/pending', adminProtect, restrictTo('finance', 'supe
   }
 });
 
-// Admin Investment Plans Endpoint
+
+
+
+// Add this with your other admin routes in server.js
 app.get('/api/admin/investment/plans', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
   try {
+    // Get all plans from database
     const plans = await Plan.find({})
-      .sort({ minAmount: 1 })
-      .lean();
+      .sort({ minAmount: 1 }) // Sort by minimum amount ascending
+      .lean(); // Convert to plain JS objects
 
-    // Calculate daily and total profit for each plan
-    const formattedPlans = plans.map(plan => {
-      const dailyProfit = (plan.percentage / plan.duration).toFixed(2);
-      const totalProfit = plan.percentage;
-      
-      return {
-        _id: plan._id,
-        name: plan.name,
-        description: plan.description,
-        minAmount: plan.minAmount,
-        maxAmount: plan.maxAmount,
-        duration: plan.duration,
-        dailyProfit: parseFloat(dailyProfit),
-        totalProfit: totalProfit,
-        status: plan.isActive ? 'active' : 'inactive',
-        referralBonus: plan.referralBonus
-      };
-    });
+    // Transform data to match frontend expectations
+    const responseData = plans.map(plan => ({
+      _id: plan._id,
+      name: plan.name,
+      minAmount: plan.minAmount,
+      maxAmount: plan.maxAmount,
+      duration: plan.duration,
+      dailyProfit: parseFloat((plan.percentage / plan.duration).toFixed(2)),
+      totalProfit: plan.percentage,
+      status: plan.isActive ? 'active' : 'inactive'
+    }));
 
     res.status(200).json({
       status: 'success',
       data: {
-        plans: formattedPlans
+        plans: responseData
       }
     });
-  } catch (err) {
-    console.error('Error fetching investment plans:', err);
+
+  } catch (error) {
+    console.error('Error fetching investment plans:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch investment plans'
+      message: 'Failed to fetch investment plans',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
-
-
 
 
 
@@ -6586,5 +6583,6 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
