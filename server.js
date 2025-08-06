@@ -7648,11 +7648,12 @@ app.get('/api/users/me/balance', protect, async (req, res) => {
 
 
 
+
 app.get('/api/users/balance', protect, async (req, res) => {
   try {
-    // Find the user with only balance-related fields
+    // Fetch ONLY the main balance from the database in real-time
     const user = await User.findById(req.user._id)
-      .select('balances.firstName lastName email balances.main balances.active balances.matured balances.savings balances.loan')
+      .select('balances.main')
       .lean();
 
     if (!user) {
@@ -7662,41 +7663,22 @@ app.get('/api/users/balance', protect, async (req, res) => {
       });
     }
 
-    // Format the response to match frontend expectations
-    const response = {
+    // Return ONLY the main balance with minimal wrapper
+    res.status(200).json({
       status: 'success',
       data: {
-        user: {
-          id: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email,
-          balances: {
-            main: user.balances?.main || 0,
-            active: user.balances?.active || 0,
-            matured: user.balances?.matured || 0,
-            savings: user.balances?.savings || 0,
-            loan: user.balances?.loan || 0,
-            total: (user.balances?.main || 0) + 
-                   (user.balances?.active || 0) + 
-                   (user.balances?.matured || 0) + 
-                   (user.balances?.savings || 0) - 
-                   (user.balances?.loan || 0)
-          }
-        }
+        balance: user.balances?.main || 0
       }
-    };
+    });
 
-    res.status(200).json(response);
   } catch (err) {
-    console.error('Error fetching user balance:', err);
+    console.error('Error fetching main balance:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch balance information'
+      message: 'Failed to fetch main balance'
     });
   }
 });
-
 
 
 
@@ -7762,6 +7744,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
