@@ -6521,6 +6521,66 @@ app.get('/api/admin/investment/plans', adminProtect, restrictTo('super', 'financ
 
 
 
+
+
+
+// Add this with your other admin routes in server.js
+app.get('/api/admin/investments/active', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+  try {
+    // Get active investments with user and plan details
+    const investments = await Investment.find({ status: 'active' })
+      .populate('user', 'firstName lastName')
+      .populate('plan', 'name percentage duration')
+      .sort({ startDate: -1 }) // Newest first
+      .lean();
+
+    // Transform data to match frontend expectations
+    const responseData = investments.map(investment => {
+      const dailyProfit = (investment.amount * investment.plan.percentage / 100) / investment.plan.duration;
+      const totalProfit = investment.amount * investment.plan.percentage / 100;
+
+      return {
+        _id: investment._id,
+        user: {
+          firstName: investment.user.firstName,
+          lastName: investment.user.lastName
+        },
+        plan: {
+          name: investment.plan.name
+        },
+        amount: investment.amount,
+        startDate: investment.startDate,
+        endDate: investment.endDate,
+        dailyProfit: parseFloat(dailyProfit.toFixed(2)),
+        totalProfit: parseFloat(totalProfit.toFixed(2)),
+        status: investment.status
+      };
+    });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        investments: responseData
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching active investments:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch active investments',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+
+
+
+
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -6583,6 +6643,3 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
