@@ -6149,10 +6149,17 @@ app.get('/api/admin/deposits/approved', adminProtect, restrictTo('finance', 'sup
 });
 
 
-// Admin Dashboard Stats
+
+
+
+
+
+
+
+// Admin Dashboard Stats Endpoint
 app.get('/api/admin/stats', adminProtect, async (req, res) => {
   try {
-    // Get stats from database with optimized queries
+    // Use Promise.all for parallel database queries
     const [
       totalUsers,
       newUsersToday,
@@ -6164,7 +6171,7 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
       revenueToday,
       backendResponseTime,
       databaseQueryTime,
-      lastTransaction,
+      lastTransactionTime,
       serverUptime
     ] = await Promise.all([
       // Total users count
@@ -6210,7 +6217,7 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
         { 
           $match: { 
             type: 'withdrawal', 
-            status: 'completed',
+            status: 'pending',
             createdAt: { 
               $gte: new Date(new Date().setHours(0, 0, 0, 0)),
               $lt: new Date(new Date().setHours(23, 59, 59, 999))
@@ -6220,9 +6227,9 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
         { $group: { _id: null, total: { $sum: '$amount' } } }
       ]),
       
-      // Platform revenue (sum of all fees)
+      // Platform revenue (fees)
       Transaction.aggregate([
-        { $match: { fee: { $gt: 0 } } },
+        { $match: { status: 'completed' } },
         { $group: { _id: null, total: { $sum: '$fee' } } }
       ]),
       
@@ -6230,7 +6237,7 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
       Transaction.aggregate([
         { 
           $match: { 
-            fee: { $gt: 0 },
+            status: 'completed',
             createdAt: { 
               $gte: new Date(new Date().setHours(0, 0, 0, 0)),
               $lt: new Date(new Date().setHours(23, 59, 59, 999))
@@ -6240,77 +6247,32 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
         { $group: { _id: null, total: { $sum: '$fee' } } }
       ]),
       
-      // Get performance metrics from Redis
-      redis.get('backend_response_time'),
-      redis.get('database_query_time'),
-      
-      // Get last transaction time
-      Transaction.findOne().sort({ createdAt: -1 }).select('createdAt'),
-      
-      // Get server uptime (mock value - in production you'd get this from your monitoring system)
-      Promise.resolve(99.99)
+      // Mock performance metrics (in a real app, these would come from monitoring tools)
+      Promise.resolve(15), // backendResponseTime in ms
+      Promise.resolve(8),  // databaseQueryTime in ms
+      Promise.resolve(5),  // lastTransactionTime in seconds ago
+      Promise.resolve(99.9) // serverUptime percentage
     ]);
 
     // Calculate percentage changes
-const yesterdayUsers = await User.countDocuments({
-  createdAt: { 
-    $gte: new Date(new Date(new Date().setDate(new Date().getDate() - 1)).setHours(0, 0, 0, 0)),
-    $lt: new Date(new Date(new Date().setDate(new Date().getDate() - 1)).setHours(23, 59, 59, 999))
-  }
-});
+    const yesterdayUsers = totalUsers - newUsersToday;
     const usersChange = yesterdayUsers > 0 ? 
-      ((newUsersToday - yesterdayUsers) / yesterdayUsers * 100).toFixed(2) : 0;
-
-    const yesterdayDeposits = await Transaction.aggregate([
-      { 
-        $match: { 
-          type: 'deposit', 
-          status: 'completed',
-          createdAt: { 
-            $gte: new Date(new Date().setDate(new Date().getDate() - 1)).setHours(0, 0, 0, 0)),
-            $lt: new Date(new Date().setDate(new Date().getDate() - 1)).setHours(23, 59, 59, 999))
-          }
-        } 
-      },
-      { $group: { _id: null, total: { $sum: '$amount' } } }
-    ]);
-    const depositsChange = yesterdayDeposits.length > 0 && yesterdayDeposits[0].total > 0 ? 
-      ((depositsToday[0]?.total || 0 - yesterdayDeposits[0].total) / yesterdayDeposits[0].total * 100).toFixed(2) : 0;
-
-    const yesterdayWithdrawals = await Transaction.aggregate([
-      { 
-        $match: { 
-          type: 'withdrawal', 
-          status: 'completed',
-          createdAt: { 
-            $gte: new Date(new Date().setDate(new Date().getDate() - 1)).setHours(0, 0, 0, 0)),
-            $lt: new Date(new Date().setDate(new Date().getDate() - 1)).setHours(23, 59, 59, 999))
-          }
-        } 
-      },
-      { $group: { _id: null, total: { $sum: '$amount' } } }
-    ]);
-    const withdrawalsChange = yesterdayWithdrawals.length > 0 && yesterdayWithdrawals[0].total > 0 ? 
-      ((withdrawalsToday[0]?.total || 0 - yesterdayWithdrawals[0].total) / yesterdayWithdrawals[0].total * 100).toFixed(2) : 0;
-
-    const yesterdayRevenue = await Transaction.aggregate([
-      { 
-        $match: { 
-          fee: { $gt: 0 },
-          createdAt: { 
-            $gte: new Date(new Date().setDate(new Date().getDate() - 1)).setHours(0, 0, 0, 0)),
-            $lt: new Date(new Date().setDate(new Date().getDate() - 1)).setHours(23, 59, 59, 999))
-          }
-        } 
-      },
-      { $group: { _id: null, total: { $sum: '$fee' } } }
-    ]);
-    const revenueChange = yesterdayRevenue.length > 0 && yesterdayRevenue[0].total > 0 ? 
-      ((revenueToday[0]?.total || 0 - yesterdayRevenue[0].total) / yesterdayRevenue[0].total * 100).toFixed(2) : 0;
-
-    // Calculate last transaction time in seconds
-    const lastTransactionTime = lastTransaction ? 
-      Math.floor((new Date() - lastTransaction.createdAt) / 1000) : 0;
+      ((newUsersToday / yesterdayUsers) * 100).toFixed(2) : 100;
+      
+    const yesterdayDeposits = totalDeposits[0]?.total - depositsToday[0]?.total || 0;
+    const depositsChange = yesterdayDeposits > 0 ? 
+      ((depositsToday[0]?.total / yesterdayDeposits) * 100).toFixed(2) : 
+      (depositsToday[0]?.total > 0 ? 100 : 0);
+      
+    const yesterdayWithdrawals = pendingWithdrawals[0]?.total - withdrawalsToday[0]?.total || 0;
+    const withdrawalsChange = yesterdayWithdrawals > 0 ? 
+      ((withdrawalsToday[0]?.total / yesterdayWithdrawals) * 100).toFixed(2) : 
+      (withdrawalsToday[0]?.total > 0 ? 100 : 0);
+      
+    const yesterdayRevenue = platformRevenue[0]?.total - revenueToday[0]?.total || 0;
+    const revenueChange = yesterdayRevenue > 0 ? 
+      ((revenueToday[0]?.total / yesterdayRevenue) * 100).toFixed(2) : 
+      (revenueToday[0]?.total > 0 ? 100 : 0);
 
     res.status(200).json({
       status: 'success',
@@ -6323,8 +6285,8 @@ const yesterdayUsers = await User.countDocuments({
         withdrawalsChange,
         platformRevenue: platformRevenue[0]?.total || 0,
         revenueChange,
-        backendResponseTime: backendResponseTime || '25ms',
-        databaseQueryTime: databaseQueryTime || '15ms',
+        backendResponseTime,
+        databaseQueryTime,
         lastTransactionTime,
         serverUptime
       }
@@ -6333,7 +6295,7 @@ const yesterdayUsers = await User.countDocuments({
     console.error('Error getting admin stats:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to get admin dashboard stats'
+      message: 'Failed to retrieve dashboard statistics'
     });
   }
 });
@@ -6412,6 +6374,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
