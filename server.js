@@ -7385,6 +7385,215 @@ function maskAddress(address) {
   return parts.map((part, i) => i < parts.length - 2 ? '•••' : part).join(' ');
 }
 
+// Approve deposit (admin only)
+app.post('/api/admin/deposits/:id/approve', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+  try {
+    // Validate ID format
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Invalid deposit ID format'
+      });
+    }
+
+    // Start transaction
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      // 1. Find the deposit
+      const deposit = await Transaction.findById(req.params.id)
+        .populate('user')
+        .session(session);
+
+      if (!deposit || deposit.type !== 'deposit') {
+        throw new Error('Deposit not found');
+      }
+
+      if (deposit.status !== 'pending') {
+        throw new Error('Deposit is not in pending status');
+      }
+
+      // 2. Update deposit status
+      deposit.status = 'completed';
+      deposit.processedBy = req.admin._id;
+      deposit.processedAt = new Date();
+      deposit.adminNotes = req.body.notes || 'Approved by admin';
+
+      // 3. Update user balance
+      const user = await User.findById(deposit.user._id).session(session);
+      user.balances.main += deposit.netAmount;
+
+      // 4. Create transaction records
+      await deposit.save({ session });
+      await user.save({ session });
+
+      // Commit transaction
+      await session.commitTransaction();
+      session.endSession();
+
+      // Clear relevant caches
+      await redis.del(`user:${user._id}:balance`);
+      await redis.del('pending-deposits-count');
+
+      res.status(200).json({
+        status: 'success',
+        data: {
+          deposit: {
+            _id: deposit._id,
+            status: deposit.status,
+            processedAt: deposit.processedAt
+          },
+          user: {
+            newBalance: user.balances.main
+          }
+        }
+      });
+
+    } catch (err) {
+      // Abort transaction on error
+      await session.abortTransaction();
+      session.endSession();
+      throw err;
+    }
+
+  } catch (err) {
+    console.error(`Error approving deposit ${req.params.id}:`, err);
+    res.status(400).json({
+      status: 'fail',
+      message: err.message || 'Failed to approve deposit'
+    });
+  }
+});
+
+
+
+
+// Create new user (admin only)
+app.post('/api/admin/users', adminProtect, restrictTo('super'), [
+  body('firstName').trim().notEmpty().withMessage('First name is required'),
+  body('lastName').trim().notEmpty().withMessage('Last name is required'),
+  body('email').isEmail().withMessage('Please provide a valid email'),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+  body('initialBalance').optional().isFloat({ min: 0 }).withMessage('Initial balance must be positive')
+], async (req, res) => {
+  try {
+    // Validate input
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+
+    const { firstName, lastName, email, password, initialBalance } = req.body;
+
+    // Check if email exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Email already in use'
+      });
+    }
+
+    // Start transaction
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      // 1. Create user
+      const hashedPassword = await bcrypt.hash(password, 12);
+      const referralCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+      
+      const newUser = await User.create([{
+        firstName,
+        lastName,
+        email,
+        password: hashedPassword,
+        referralCode,
+        status: 'active',
+        isVerified: true,
+        ...(initialBalance && { 
+          balances: { 
+            main: parseFloat(initialBalance) 
+          } 
+        }),
+        createdBy: req.admin._id
+      }], { session });
+
+      // 2. Create initial transaction if balance provided
+      if (initialBalance) {
+        await Transaction.create([{
+          user: newUser[0]._id,
+          type: 'deposit',
+          amount: parseFloat(initialBalance),
+          status: 'completed',
+          method: 'admin',
+          reference: `ADMIN-${Date.now()}`,
+          netAmount: parseFloat(initialBalance),
+          processedBy: req.admin._id,
+          adminNotes: 'Initial balance setup'
+        }], { session });
+      }
+
+      // 3. Create audit log
+      await SystemLog.create([{
+        action: 'create_user',
+        entity: 'User',
+        entityId: newUser[0]._id,
+        performedBy: req.admin._id,
+        performedByModel: 'Admin',
+        changes: {
+          email,
+          initialBalance
+        },
+        ip: req.ip
+      }], { session });
+
+      // Commit transaction
+      await session.commitTransaction();
+      session.endSession();
+
+      // Clear relevant caches
+      await redis.del('admin:users:list');
+      await redis.del('users:count');
+
+      // Return response without password
+      const userObj = newUser[0].toObject();
+      delete userObj.password;
+
+      res.status(201).json({
+        status: 'success',
+        data: {
+          user: userObj
+        }
+      });
+
+    } catch (err) {
+      // Abort transaction on error
+      await session.abortTransaction();
+      session.endSession();
+      throw err;
+    }
+
+  } catch (err) {
+    console.error('Error creating user:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to create user'
+    });
+  }
+});
+
+
+
+
+
+
+
+
 
 
 
@@ -7450,6 +7659,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
