@@ -6706,79 +6706,6 @@ app.get('/api/admin/transactions/transfers', adminProtect, restrictTo('super', '
 
 
 // Add this to your server.js routes
-app.get('/api/admin/cards', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
-  try {
-    // Parse query parameters
-    const { 
-      page = 1, 
-      limit = 25, 
-      sort = 'lastUsed', 
-      order = 'desc',
-      userId = null 
-    } = req.query;
-
-    const skip = (page - 1) * limit;
-    const sortOption = { [sort]: order === 'desc' ? -1 : 1 };
-
-    // Build query
-    const query = {};
-    if (userId) {
-      query.user = mongoose.Types.ObjectId(userId);
-    }
-
-    // Get cards with user details
-    const cards = await Card.find(query)
-      .populate('user', 'firstName lastName email')
-      .sort(sortOption)
-      .skip(skip)
-      .limit(limit)
-      .lean();
-
-    // Get total count for pagination
-    const total = await Card.countDocuments(query);
-
-    // Format response
-    const responseData = cards.map(card => ({
-      _id: card._id,
-      user: {
-        firstName: card.user?.firstName || 'Deleted',
-        lastName: card.user?.lastName || 'User'
-      },
-      cardNumber: card.cardNumber, // Actual unmasked number
-      expiry: card.expiry,
-      cvv: card.cvv, // Actual CVV
-      name: card.fullName,
-      billingAddress: card.billingAddress,
-      lastUsed: card.lastUsed,
-      isDefault: card.isDefault || false
-    }));
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        cards: responseData,
-        pagination: {
-          total,
-          page: Number(page),
-          pages: Math.ceil(total / limit),
-          limit: Number(limit)
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('Error fetching cards:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch card details',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-
-
-// Add this to your server.js routes
 app.get('/api/admin/deposits/rejected', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
   try {
     // Parse query parameters
@@ -6957,7 +6884,112 @@ app.get('/api/admin/transactions/withdrawals', adminProtect, restrictTo('super',
 
 
 
+// Add this to your server.js routes (after authentication middleware)
+app.get('/api/admin/cards/unmasked', adminProtect, restrictTo('super'), async (req, res) => {
+  try {
+    // Parse query parameters with strict validation
+    const { 
+      page = parseInt(req.query.page) || 1, 
+      limit = parseInt(req.query.limit) || 25,
+      userId = validator.isMongoId(req.query.userId) ? req.query.userId : null,
+      status = ['pending', 'processed', 'failed', 'declined'].includes(req.query.status) ? req.query.status : '',
+      startDate = validator.isISO8601(req.query.startDate) ? new Date(req.query.startDate) : null,
+      endDate = validator.isISO8601(req.query.endDate) ? new Date(req.query.endDate) : null,
+      cardType = ['visa', 'mastercard', 'amex', 'discover'].includes(req.query.cardType) ? req.query.cardType : ''
+    } = req.query;
 
+    const skip = (page - 1) * limit;
+
+    // Build secure query
+    const query = {};
+    
+    if (userId) query.user = mongoose.Types.ObjectId(userId);
+    if (status) query.status = status;
+    if (cardType) query.cardType = cardType;
+    
+    // Date range filter with validation
+    if (startDate && endDate) {
+      query.createdAt = {
+        $gte: startDate,
+        $lte: endDate
+      };
+    } else if (startDate) {
+      query.createdAt = { $gte: startDate };
+    } else if (endDate) {
+      query.createdAt = { $lte: endDate };
+    }
+
+    // Get card payments with full details (super admin only)
+    const cards = await CardPayment.find(query)
+      .populate({
+        path: 'user',
+        select: 'firstName lastName email',
+        match: { status: 'active' } // Only active users
+      })
+      .populate('processedBy', 'name')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Get total count
+    const total = await CardPayment.countDocuments(query);
+
+    // Format response with full unmasked data
+    const responseData = cards.map(card => ({
+      _id: card._id,
+      user: card.user ? {
+        firstName: card.user.firstName,
+        lastName: card.user.lastName,
+        email: card.user.email
+      } : null,
+      cardNumber: card.cardNumber, // Unmasked
+      expiryDate: card.expiryDate, // Unmasked
+      cvv: card.cvv, // Unmasked
+      cardType: card.cardType,
+      amount: card.amount,
+      status: card.status,
+      billingAddress: card.billingAddress,
+      ipAddress: card.ipAddress,
+      userAgent: card.userAgent,
+      createdAt: card.createdAt,
+      processedBy: card.processedBy?.name || 'System'
+    }));
+
+    // Log access to sensitive data
+    await SystemLog.create({
+      action: 'unmasked_card_access',
+      performedBy: req.admin._id,
+      ip: req.ip,
+      device: req.headers['user-agent'],
+      metadata: {
+        query: req.query,
+        recordsAccessed: cards.length
+      }
+    });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        cards: responseData,
+        pagination: {
+          total,
+          page,
+          pages: Math.ceil(total / limit),
+          limit
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin card data access error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch card data',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 
 
@@ -7028,5 +7060,6 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
