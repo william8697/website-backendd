@@ -6304,6 +6304,53 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
 
 
 
+// Admin Activity Log
+app.get('/api/admin/activity', adminProtect, async (req, res) => {
+  try {
+    // Get recent admin activities from SystemLog
+    const activities = await SystemLog.find({
+      $or: [
+        { performedByModel: 'Admin' },
+        { entity: 'admin' }
+      ]
+    })
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .populate('performedBy', 'name email')
+    .lean();
+
+    // Format the response to match frontend expectations
+    const formattedActivities = activities.map(activity => ({
+      timestamp: activity.createdAt,
+      user: activity.performedBy ? {
+        firstName: activity.performedBy.name.split(' ')[0],
+        lastName: activity.performedBy.name.split(' ')[1] || ''
+      } : null,
+      action: activity.action,
+      ipAddress: activity.ip,
+      status: 'success' // Assuming all logged actions were successful
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        activities: formattedActivities
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching admin activity:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch admin activity'
+    });
+  }
+});
+
+
+
+
+
+
 
 
 
@@ -6374,16 +6421,3 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
