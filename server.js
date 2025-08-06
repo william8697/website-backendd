@@ -7682,6 +7682,124 @@ app.get('/api/users/balance', protect, async (req, res) => {
 
 
 
+
+
+
+// Admin balance management endpoints
+app.post('/api/admin/users/:userId/balance', adminProtect, restrictTo('super', 'finance'), [
+  body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be a positive number'),
+  body('type').isIn(['add', 'subtract']).withMessage('Type must be either add or subtract'),
+  body('note').optional().trim().escape()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { amount, type, note } = req.body;
+    const userId = req.params.userId;
+
+    // Find user with pessimistic locking to prevent race conditions
+    const user = await User.findById(userId).select('+balances').session(req.dbSession);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Create transaction record
+    const transaction = new Transaction({
+      user: userId,
+      type: type === 'add' ? 'deposit' : 'withdrawal',
+      amount: amount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference: `ADMIN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      details: {
+        adminId: req.admin._id,
+        adminName: req.admin.name,
+        note: note || 'Balance adjustment by admin'
+      },
+      netAmount: amount,
+      processedBy: req.admin._id,
+      processedAt: new Date()
+    });
+
+    // Update user balance atomically
+    if (type === 'add') {
+      user.balances.main += amount;
+    } else {
+      if (user.balances.main < amount) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Insufficient balance to subtract'
+        });
+      }
+      user.balances.main -= amount;
+    }
+
+    // Save both in a transaction
+    await mongoose.startSession();
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      await user.save({ session });
+      await transaction.save({ session });
+      await session.commitTransaction();
+
+      // Log the activity
+      await logActivity(
+        type === 'add' ? 'balance_add' : 'balance_subtract',
+        'user',
+        userId,
+        req.admin._id,
+        'Admin',
+        req,
+        { amount, previousBalance: type === 'add' ? user.balances.main - amount : user.balances.main + amount }
+      );
+
+      // Invalidate user balance cache
+      await redis.del(`user:${userId}:balance`);
+
+      res.status(200).json({
+        status: 'success',
+        data: {
+          user: {
+            id: user._id,
+            balance: user.balances.main
+          },
+          transaction: transaction
+        }
+      });
+    } catch (err) {
+      await session.abortTransaction();
+      throw err;
+    } finally {
+      session.endSession();
+    }
+  } catch (err) {
+    console.error('Balance adjustment error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while adjusting balance'
+    });
+  }
+});
+
+
+
+
+
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -7744,6 +7862,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
