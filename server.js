@@ -6381,60 +6381,117 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
 
 
 
-// Admin Activity Log - With direct user name lookup from User schema
-app.get('/api/admin/activity', adminProtect, async (req, res) => {
+/**
+ * @api {get} /api/admin/activity Get Admin Activity Log
+ * @apiName GetAdminActivity
+ * @apiGroup Admin
+ * @apiPermission super
+ * @apiDescription Retrieves a comprehensive activity log with user details from User schema and location data from UserTracking schema
+ * 
+ * @apiSuccess {String} status success
+ * @apiSuccess {Object} data Activity log data
+ * @apiSuccess {Object[]} data.activities Array of activity records
+ * @apiSuccess {String} data.activities.timestamp Activity timestamp
+ * @apiSuccess {Object} data.activities.user User information
+ * @apiSuccess {String} data.activities.user.firstName User first name
+ * @apiSuccess {String} data.activities.user.lastName User last name
+ * @apiSuccess {String} data.activities.user.type User type (user/admin/system)
+ * @apiSuccess {String} data.activities.user.email User email (if available)
+ * @apiSuccess {String} data.activities.action Activity description
+ * @apiSuccess {String} data.activities.ipAddress IP address
+ * @apiSuccess {String} data.activities.status Activity status
+ * @apiSuccess {String} data.activities.details Additional details
+ * @apiSuccess {String} data.activities.entityType Entity type
+ */
+app.get('/api/admin/activity', adminProtect, restrictTo('super'), async (req, res) => {
   try {
-    // Get recent activities
-    const activities = await SystemLog.find({
+    // Set default pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 100;
+    const skip = (page - 1) * limit;
+
+    // Build base query for relevant activities
+    const baseQuery = {
       $or: [
         { performedByModel: { $in: ['Admin', 'User'] } },
         { entity: { $in: ['admin', 'user', 'auth', 'transaction'] } }
       ]
-    })
-    .sort({ createdAt: -1 })
-    .limit(100)
-    .lean();
+    };
 
-    // Resolve all user names with priority to User schema lookup
+    // Add date filtering if provided
+    if (req.query.startDate && req.query.endDate) {
+      baseQuery.createdAt = {
+        $gte: new Date(req.query.startDate),
+        $lte: new Date(req.query.endDate)
+      };
+    }
+
+    // Add action type filtering if provided
+    if (req.query.actionType) {
+      baseQuery.action = req.query.actionType;
+    }
+
+    // Get total count for pagination
+    const total = await SystemLog.countDocuments(baseQuery);
+
+    // Get activities with pagination and sorting
+    const activities = await SystemLog.find(baseQuery)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Enhanced user resolution with caching
     const formattedActivities = await Promise.all(activities.map(async (activity) => {
-      // Default user object
+      // Initialize default user object for system activities
       let userObj = {
         firstName: 'System',
         lastName: '',
         type: 'system'
       };
 
-      // Try to resolve user name from reference
+      // Try to resolve user details from reference if available
       if (activity.performedByRef) {
         try {
-          // Check if this is a User
-          if (activity.performedByModel === 'User') {
-            const user = await User.findById(activity.performedByRef)
-                              .select('firstName lastName email')
-                              .lean();
-            if (user) {
-              userObj = {
-                firstName: user.firstName || 'User',
-                lastName: user.lastName || '',
-                type: 'user',
-                email: user.email
-              };
+          // Check cache first
+          const cacheKey = `user:${activity.performedByRef}:${activity.performedByModel}`;
+          const cachedUser = await redis.get(cacheKey);
+          
+          if (cachedUser) {
+            userObj = JSON.parse(cachedUser);
+          } else {
+            // Resolve from appropriate collection based on performedByModel
+            if (activity.performedByModel === 'User') {
+              const user = await User.findById(activity.performedByRef)
+                .select('firstName lastName email')
+                .lean();
+              
+              if (user) {
+                userObj = {
+                  firstName: user.firstName || 'User',
+                  lastName: user.lastName || '',
+                  type: 'user',
+                  email: user.email
+                };
+              }
+            } else if (activity.performedByModel === 'Admin') {
+              const admin = await Admin.findById(activity.performedByRef)
+                .select('name email')
+                .lean();
+              
+              if (admin?.name) {
+                const nameParts = admin.name.split(' ');
+                userObj = {
+                  firstName: nameParts[0],
+                  lastName: nameParts.slice(1).join(' ') || '',
+                  type: 'admin',
+                  email: admin.email
+                };
+              }
             }
-          }
-          // Check if this is an Admin
-          else if (activity.performedByModel === 'Admin') {
-            const admin = await Admin.findById(activity.performedByRef)
-                                .select('name email')
-                                .lean();
-            if (admin?.name) {
-              const nameParts = admin.name.split(' ');
-              userObj = {
-                firstName: nameParts[0],
-                lastName: nameParts.slice(1).join(' ') || '',
-                type: 'admin',
-                email: admin.email
-              };
-            }
+            
+            // Cache resolved user for 1 hour
+            await redis.set(cacheKey, JSON.stringify(userObj), 'EX', 3600);
           }
         } catch (dbErr) {
           console.warn(`Failed to fetch user ${activity.performedByRef}:`, dbErr.message);
@@ -6449,6 +6506,27 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
         };
       }
 
+      // Get location data from UserTracking if available
+      let locationData = {};
+      if (activity.ip && activity.ip !== '127.0.0.1') {
+        try {
+          const trackingRecord = await UserTracking.findOne({ ipAddress: activity.ip })
+            .select('ipCountry ipRegion ipCity')
+            .sort({ timestamp: -1 })
+            .lean();
+          
+          if (trackingRecord) {
+            locationData = {
+              country: trackingRecord.ipCountry,
+              region: trackingRecord.ipRegion,
+              city: trackingRecord.ipCity
+            };
+          }
+        } catch (trackingErr) {
+          console.warn('Failed to fetch location data:', trackingErr.message);
+        }
+      }
+
       // Format action description with relevant details
       let actionDesc = activity.action;
       const amountInfo = activity.amount ? ` (${activity.amount} ${activity.currency || ''})` : '';
@@ -6460,7 +6538,9 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
         deposit: `Deposit${amountInfo}`,
         withdrawal: `Withdrawal${amountInfo}`,
         password_reset: 'Password Reset',
-        profile_update: 'Profile Update'
+        profile_update: 'Profile Update',
+        investment_create: 'Investment Created',
+        transaction_create: 'Transaction Created'
       };
 
       return {
@@ -6470,16 +6550,37 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
         ipAddress: activity.ip || 'Not recorded',
         status: activity.status || 'success',
         details: activity.details || null,
-        entityType: activity.entity || activity.performedByModel || 'system'
+        entityType: activity.entity || activity.performedByModel || 'system',
+        location: locationData,
+        metadata: activity.metadata || {}
       };
     }));
+
+    // Cache the response for 5 minutes
+    const cacheKey = `admin:activity:${JSON.stringify(req.query)}`;
+    await redis.set(cacheKey, JSON.stringify({
+      activities: formattedActivities,
+      pagination: {
+        total,
+        page,
+        pages: Math.ceil(total / limit),
+        limit
+      }
+    }), 'EX', 300);
 
     res.status(200).json({
       status: 'success',
       data: {
-        activities: formattedActivities
+        activities: formattedActivities,
+        pagination: {
+          total,
+          page,
+          pages: Math.ceil(total / limit),
+          limit
+        }
       }
     });
+
   } catch (err) {
     console.error('Error fetching activity logs:', err);
     res.status(500).json({
@@ -8115,6 +8216,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
