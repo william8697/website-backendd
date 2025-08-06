@@ -4666,130 +4666,6 @@ app.get('/api/btc-news', async (req, res) => {
   }
 });
 
-
-
-
-
-
-// Add these endpoints after other routes
-// Get conversation history
-app.get('/api/support/conversations', protect, async (req, res) => {
-  try {
-    const conversations = await SupportConversation.find({
-      userId: req.user.id
-    }).sort({ updatedAt: -1 });
-    
-    res.status(200).json({
-      status: 'success',
-      data: conversations
-    });
-  } catch (err) {
-    console.error('Get conversations error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch conversations'
-    });
-  }
-});
-
-// Get messages for a conversation
-app.get('/api/support/conversations/:conversationId/messages', protect, async (req, res) => {
-  try {
-    const { conversationId } = req.params;
-    
-    // Verify user has access to this conversation
-    const conversation = await SupportConversation.findOne({
-      conversationId,
-      userId: req.user.id
-    });
-    
-    if (!conversation) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Conversation not found'
-      });
-    }
-    
-    const messages = await SupportMessage.find({ conversationId })
-      .sort({ createdAt: 1 })
-      .populate('senderId', 'firstName lastName email')
-      .populate('recipientId', 'firstName lastName email');
-    
-    res.status(200).json({
-      status: 'success',
-      data: messages
-    });
-  } catch (err) {
-    console.error('Get messages error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch messages'
-    });
-  }
-});
-
-// Start new conversation
-app.post('/api/support/conversations', protect, [
-  body('message').trim().notEmpty().withMessage('Message is required'),
-  body('topic').optional().isIn(['general', 'account', 'payments', 'investments', 'loans', 'kyc', 'technical', 'other']),
-  body('priority').optional().isIn(['low', 'medium', 'high', 'urgent'])
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { message, topic = 'general', priority = 'medium' } = req.body;
-    
-    // Create new conversation
-    const conversation = new SupportConversation({
-      conversationId: uuidv4(),
-      userId: req.user.id,
-      status: 'open',
-      topic,
-      priority,
-      lastMessageAt: new Date()
-    });
-    
-    await conversation.save();
-    
-    // Create first message
-    const supportMessage = new SupportMessage({
-      conversationId: conversation.conversationId,
-      sender: 'user',
-      senderId: req.user.id,
-      senderModel: 'User',
-      message,
-      metadata: {
-        ip: req.ip,
-        userAgent: req.headers['user-agent'],
-        location: await getUserDeviceInfo(req).location
-      }
-    });
-    
-    await supportMessage.save();
-    
-    res.status(201).json({
-      status: 'success',
-      data: {
-        conversation,
-        message: supportMessage
-      }
-    });
-  } catch (err) {
-    console.error('Create conversation error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to create conversation'
-    });
-  }
-});
-
-
 app.get('/api/loans/limit', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -7852,6 +7728,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
