@@ -7588,7 +7588,62 @@ app.post('/api/admin/users', adminProtect, restrictTo('super'), [
 });
 
 
+// Get current user balance
+app.get('/api/users/me/balance', protect, async (req, res) => {
+  try {
+    // Try to get cached balance first
+    const cacheKey = `user:${req.user.id}:balance`;
+    const cachedBalance = await redis.get(cacheKey);
+    
+    if (cachedBalance) {
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          balance: JSON.parse(cachedBalance)
+        }
+      });
+    }
 
+    // Get fresh balance from database
+    const user = await User.findById(req.user.id)
+      .select('balances')
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    const balanceData = {
+      main: user.balances?.main || 0,
+      savings: user.balances?.savings || 0,
+      investment: user.balances?.investment || 0,
+      total: (user.balances?.main || 0) + 
+             (user.balances?.savings || 0) + 
+             (user.balances?.investment || 0),
+      updatedAt: new Date()
+    };
+
+    // Cache balance for 5 minutes
+    await redis.set(cacheKey, JSON.stringify(balanceData), 'EX', 300);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        balance: balanceData
+      }
+    });
+
+  } catch (err) {
+    console.error('Error fetching user balance:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch balance'
+    });
+  }
+});
 
 
 
@@ -7659,6 +7714,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
