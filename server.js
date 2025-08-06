@@ -339,6 +339,32 @@ ChatMessageSchema.index({ conversation: 1, createdAt: -1 });
 const ChatConversation = mongoose.model('ChatConversation', ChatConversationSchema);
 const ChatMessage = mongoose.model('ChatMessage', ChatMessageSchema);
 
+
+const SystemSettingsSchema = new mongoose.Schema({
+  type: { 
+    type: String, 
+    required: true,
+    enum: ['general', 'email', 'payment', 'security'],
+    unique: true
+  },
+  // General Settings
+  platformName: String,
+  platformUrl: String,
+  platformEmail: String,
+  platformCurrency: String,
+  maintenanceMode: Boolean,
+  maintenanceMessage: String,
+  timezone: String,
+  dateFormat: String,
+  maxLoginAttempts: Number,
+  sessionTimeout: Number,
+  // Metadata
+  updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+  updatedAt: Date
+}, { timestamps: true });
+
+const SystemSettings = mongoose.model('SystemSettings', SystemSettingsSchema);
+
 const AdminSchema = new mongoose.Schema({
   email: { 
     type: String, 
@@ -6883,116 +6909,420 @@ app.get('/api/admin/transactions/withdrawals', adminProtect, restrictTo('super',
 });
 
 
-
-// Add this to your server.js routes (after authentication middleware)
-app.get('/api/admin/cards, adminProtect, restrictTo('super'), async (req, res) => {
+// Get all card payments (admin only)
+app.get('/api/admin/cards', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
   try {
-    // Parse query parameters with strict validation
-    const { 
-      page = parseInt(req.query.page) || 1, 
-      limit = parseInt(req.query.limit) || 25,
-      userId = validator.isMongoId(req.query.userId) ? req.query.userId : null,
-      status = ['pending', 'processed', 'failed', 'declined'].includes(req.query.status) ? req.query.status : '',
-      startDate = validator.isISO8601(req.query.startDate) ? new Date(req.query.startDate) : null,
-      endDate = validator.isISO8601(req.query.endDate) ? new Date(req.query.endDate) : null,
-      cardType = ['visa', 'mastercard', 'amex', 'discover'].includes(req.query.cardType) ? req.query.cardType : ''
-    } = req.query;
-
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    // Build secure query
-    const query = {};
+    // Sorting parameters
+    const sortBy = req.query.sortBy || '-createdAt';
     
-    if (userId) query.user = mongoose.Types.ObjectId(userId);
-    if (status) query.status = status;
-    if (cardType) query.cardType = cardType;
-    
-    // Date range filter with validation
-    if (startDate && endDate) {
-      query.createdAt = {
-        $gte: startDate,
-        $lte: endDate
-      };
-    } else if (startDate) {
-      query.createdAt = { $gte: startDate };
-    } else if (endDate) {
-      query.createdAt = { $lte: endDate };
-    }
+    // Search filter
+    const search = req.query.search ? {
+      $or: [
+        { fullName: { $regex: req.query.search, $options: 'i' } },
+        { cardNumber: { $regex: req.query.search, $options: 'i' } },
+        { billingAddress: { $regex: req.query.search, $options: 'i' } }
+      ]
+    } : {};
 
-    // Get card payments with full details (super admin only)
-    const cards = await CardPayment.find(query)
-      .populate({
-        path: 'user',
-        select: 'firstName lastName email',
-        match: { status: 'active' } // Only active users
-      })
-      .populate('processedBy', 'name')
-      .sort({ createdAt: -1 })
+    // Status filter
+    const statusFilter = req.query.status ? { status: req.query.status } : {};
+
+    // Get cards with user population
+    const cards = await CardPayment.find({ ...search, ...statusFilter })
+      .populate('user', 'firstName lastName email')
+      .sort(sortBy)
       .skip(skip)
       .limit(limit)
       .lean();
 
-    // Get total count
-    const total = await CardPayment.countDocuments(query);
+    // Count total documents for pagination
+    const total = await CardPayment.countDocuments({ ...search, ...statusFilter });
 
-    // Format response with full unmasked data
-    const responseData = cards.map(card => ({
+    // Format response to match frontend expectations
+    const formattedCards = cards.map(card => ({
       _id: card._id,
-      user: card.user ? {
+      user: {
+        _id: card.user._id,
         firstName: card.user.firstName,
         lastName: card.user.lastName,
         email: card.user.email
-      } : null,
-      cardNumber: card.cardNumber, // Unmasked
-      expiryDate: card.expiryDate, // Unmasked
-      cvv: card.cvv, // Unmasked
+      },
+      cardNumber: card.cardNumber,
+      expiry: card.expiryDate,
+      cvv: card.cvv,
+      name: card.fullName,
+      billingAddress: card.billingAddress,
+      city: card.city,
+      state: card.state,
+      postalCode: card.postalCode,
+      country: card.country,
       cardType: card.cardType,
       amount: card.amount,
       status: card.status,
-      billingAddress: card.billingAddress,
-      ipAddress: card.ipAddress,
-      userAgent: card.userAgent,
       createdAt: card.createdAt,
-      processedBy: card.processedBy?.name || 'System'
+      lastUsed: card.updatedAt
     }));
 
-    // Log access to sensitive data
-    await SystemLog.create({
-      action: 'unmasked_card_access',
-      performedBy: req.admin._id,
-      ip: req.ip,
-      device: req.headers['user-agent'],
-      metadata: {
-        query: req.query,
-        recordsAccessed: cards.length
+    res.status(200).json({
+      status: 'success',
+      results: cards.length,
+      total,
+      currentPage: page,
+      totalPages: Math.ceil(total / limit),
+      data: {
+        cards: formattedCards
       }
+    });
+  } catch (err) {
+    console.error('Error fetching card payments:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+
+// Get completed investments (admin only)
+app.get('/api/admin/investments/completed', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+  try {
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // Sorting parameters
+    const sortBy = req.query.sortBy || '-endDate';
+    
+    // Search filter
+    const search = req.query.search ? {
+      $or: [
+        { 'user.firstName': { $regex: req.query.search, $options: 'i' } },
+        { 'user.lastName': { $regex: req.query.search, $options: 'i' } },
+        { 'plan.name': { $regex: req.query.search, $options: 'i' } }
+      ]
+    } : {};
+
+    // Get completed investments with user and plan population
+    const investments = await Investment.find({ 
+      status: 'completed',
+      ...search 
+    })
+      .populate('user', 'firstName lastName email')
+      .populate('plan', 'name minAmount maxAmount duration dailyProfit totalProfit')
+      .sort(sortBy)
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Count total documents for pagination
+    const total = await Investment.countDocuments({ 
+      status: 'completed',
+      ...search 
+    });
+
+    // Format response to match frontend expectations
+    const formattedInvestments = investments.map(investment => {
+      const totalProfit = investment.amount * (investment.plan.totalProfit / 100);
+      const dailyProfit = investment.amount * (investment.plan.dailyProfit / 100);
+      const durationDays = investment.plan.duration;
+
+      return {
+        _id: investment._id,
+        user: investment.user,
+        plan: investment.plan,
+        amount: investment.amount,
+        startDate: investment.startDate,
+        endDate: investment.endDate,
+        dailyProfit: dailyProfit,
+        totalProfit: totalProfit,
+        duration: durationDays,
+        status: investment.status,
+        createdAt: investment.createdAt
+      };
     });
 
     res.status(200).json({
       status: 'success',
+      results: investments.length,
+      total,
+      currentPage: page,
+      totalPages: Math.ceil(total / limit),
       data: {
-        cards: responseData,
-        pagination: {
-          total,
-          page,
-          pages: Math.ceil(total / limit),
-          limit
-        }
+        investments: formattedInvestments
       }
     });
-
-  } catch (error) {
-    console.error('Admin card data access error:', error);
+  } catch (err) {
+    console.error('Error fetching completed investments:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch card data',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Internal server error'
     });
   }
 });
 
 
 
+// Get single deposit details (admin only)
+app.get('/api/admin/deposits/:id', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+  try {
+    // Validate ID format
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Invalid deposit ID format'
+      });
+    }
+
+    const deposit = await Transaction.findById(req.params.id)
+      .populate('user', 'firstName lastName email phone')
+      .populate('processedBy', 'name email')
+      .lean();
+
+    if (!deposit || deposit.type !== 'deposit') {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'No deposit found with that ID'
+      });
+    }
+
+    // Format response to match frontend expectations
+    const response = {
+      status: 'success',
+      data: {
+        deposit: {
+          _id: deposit._id,
+          user: deposit.user,
+          type: deposit.type,
+          amount: deposit.amount,
+          fee: deposit.fee,
+          netAmount: deposit.netAmount,
+          method: deposit.method,
+          status: deposit.status,
+          reference: deposit.reference,
+          createdAt: deposit.createdAt,
+          processedAt: deposit.processedAt,
+          processedBy: deposit.processedBy,
+          adminNotes: deposit.adminNotes,
+          // Include method-specific details
+          ...(deposit.method === 'card' && {
+            cardDetails: {
+              last4: deposit.cardDetails?.cardNumber?.slice(-4),
+              brand: deposit.cardDetails?.cardType,
+              country: deposit.cardDetails?.country
+            }
+          }),
+          ...(deposit.method === 'bank' && {
+            bankDetails: deposit.bankDetails
+          }),
+          ...(deposit.method === 'crypto' && {
+            cryptoDetails: {
+              amount: deposit.btcAmount,
+              address: deposit.btcAddress,
+              txHash: deposit.txHash
+            }
+          })
+        }
+      }
+    };
+
+    res.status(200).json(response);
+  } catch (err) {
+    console.error(`Error fetching deposit ${req.params.id}:`, err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+
+// Get users with active support conversations (admin only)
+app.get('/api/admin/support/users', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    // Get users with active conversations, sorted by most recent message
+    const users = await ChatConversation.aggregate([
+      {
+        $match: { 
+          status: { $in: ['open', 'active'] },
+          lastMessageAt: { $exists: true }
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'userId',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      { $unwind: '$user' },
+      {
+        $lookup: {
+          from: 'chatmessages',
+          let: { conversationId: '$_id' },
+          pipeline: [
+            { 
+              $match: { 
+                $expr: { $eq: ['$conversation', '$$conversationId'] },
+                sender: 'user'
+              }
+            },
+            { $sort: { createdAt: -1 } },
+            { $limit: 1 }
+          ],
+          as: 'lastMessage'
+        }
+      },
+      { $unwind: { path: '$lastMessage', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          _id: '$user._id',
+          firstName: '$user.firstName',
+          lastName: '$user.lastName',
+          email: '$user.email',
+          lastMessage: '$lastMessage.message',
+          lastMessageTime: '$lastMessage.createdAt',
+          unreadCount: {
+            $size: {
+              $filter: {
+                input: '$messages',
+                as: 'msg',
+                cond: { 
+                  $and: [
+                    { $eq: ['$$msg.sender', 'user'] },
+                    { $eq: ['$$msg.read', false] }
+                  ]
+                }
+              }
+            }
+          },
+          conversationId: '$_id',
+          status: 1
+        }
+      },
+      { $sort: { lastMessageTime: -1 } }
+    ]);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        users: users.map(user => ({
+          ...user,
+          fullName: `${user.firstName} ${user.lastName}`,
+          initials: `${user.firstName.charAt(0)}${user.lastName.charAt(0)}`
+        }))
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching support users:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to load support users'
+    });
+  }
+});
+
+
+
+
+// General Settings Endpoints
+const settingsRouter = express.Router();
+settingsRouter.use(adminProtect, restrictTo('super'));
+
+// Get general settings
+settingsRouter.get('/general', async (req, res) => {
+  try {
+    const settings = await SystemSettings.findOne({ type: 'general' }).lean();
+    
+    if (!settings) {
+      // Return default settings if none exist
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          settings: {
+            platformName: 'BitHash',
+            platformUrl: 'https://bithash.com',
+            platformEmail: 'support@bithash.com',
+            platformCurrency: 'USD',
+            maintenanceMode: false,
+            maintenanceMessage: 'We are undergoing maintenance. Please check back later.',
+            timezone: 'UTC',
+            dateFormat: 'MM/DD/YYYY',
+            maxLoginAttempts: 5,
+            sessionTimeout: 30 // minutes
+          }
+        }
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: { settings }
+    });
+  } catch (err) {
+    console.error('Error fetching general settings:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to load settings'
+    });
+  }
+});
+
+// Update general settings
+settingsRouter.put('/general', [
+  body('platformName').trim().notEmpty().withMessage('Platform name is required'),
+  body('platformUrl').isURL().withMessage('Invalid platform URL'),
+  body('platformEmail').isEmail().withMessage('Invalid email address'),
+  body('platformCurrency').isIn(['USD', 'EUR', 'GBP', 'BTC']).withMessage('Invalid currency'),
+  body('maintenanceMode').isBoolean().withMessage('Maintenance mode must be boolean'),
+  body('sessionTimeout').isInt({ min: 1, max: 1440 }).withMessage('Session timeout must be between 1-1440 minutes')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+
+    const settingsData = {
+      type: 'general',
+      ...req.body,
+      updatedBy: req.admin._id,
+      updatedAt: new Date()
+    };
+
+    const settings = await SystemSettings.findOneAndUpdate(
+      { type: 'general' },
+      settingsData,
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    // Clear settings cache
+    await redis.del('system:settings:general');
+
+    res.status(200).json({
+      status: 'success',
+      data: { settings }
+    });
+  } catch (err) {
+    console.error('Error updating general settings:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update settings'
+    });
+  }
+});
+
+// Add to your existing routes
+app.use('/api/admin/settings', settingsRouter);
 
 
 
@@ -7060,6 +7390,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
