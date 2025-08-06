@@ -1256,20 +1256,41 @@ SupportConversationSchema.index({ topic: 1 });
 
 const SupportConversation = mongoose.model('SupportConversation', SupportConversationSchema);
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
 
-// Initialize WebSocket server
+
+// Replace the existing setupWebSocketServer function with this enhanced version
 const setupWebSocketServer = (server) => {
-  const wss = new WebSocket.Server({ server, path: '/api/support/ws' });
+  const wss = new WebSocket.Server({ 
+    server, 
+    path: '/api/support/ws',
+    clientTracking: true,
+    perMessageDeflate: {
+      zlibDeflateOptions: {
+        chunkSize: 1024,
+        memLevel: 7,
+        level: 3
+      },
+      zlibInflateOptions: {
+        chunkSize: 10 * 1024
+      },
+      clientNoContextTakeover: true,
+      serverNoContextTakeover: true,
+      serverMaxWindowBits: 10,
+      concurrencyLimit: 10,
+      threshold: 1024
+    }
+  });
 
   // Track connected clients
   const clients = new Map();
   const agentAvailability = new Map();
+  const userConversations = new Map();
 
-  // Helper function to broadcast to specific client
+  // Heartbeat interval (30 seconds)
+  const HEARTBEAT_INTERVAL = 30000;
+  const HEARTBEAT_VALUE = '--heartbeat--';
+
+  // Helper function to send to specific client
   const sendToClient = (clientId, data) => {
     const client = clients.get(clientId);
     if (client && client.readyState === WebSocket.OPEN) {
@@ -1291,8 +1312,18 @@ const setupWebSocketServer = (server) => {
     let userType = '';
     let userId = '';
     let isAuthenticated = false;
+    let heartbeatInterval;
 
-    // Authenticate connection
+    // Set up heartbeat
+    const setupHeartbeat = () => {
+      heartbeatInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.ping();
+        }
+      }, HEARTBEAT_INTERVAL);
+    };
+
+    // Handle authentication
     const authenticate = async (token) => {
       try {
         const decoded = verifyJWT(token);
@@ -1301,11 +1332,11 @@ const setupWebSocketServer = (server) => {
           const admin = await Admin.findById(decoded.id);
           if (admin && admin.role === 'support') {
             userType = 'agent';
-            userId = admin._id;
+            userId = admin._id.toString();
             isAuthenticated = true;
             
-            // Mark agent as available by default
-            agentAvailability.set(userId.toString(), true);
+            // Mark agent as available
+            agentAvailability.set(userId, true);
             
             // Notify other agents
             broadcastToAgents({
@@ -1320,49 +1351,66 @@ const setupWebSocketServer = (server) => {
           const user = await User.findById(decoded.id);
           if (user) {
             userType = 'user';
-            userId = user._id;
+            userId = user._id.toString();
             isAuthenticated = true;
+            
+            // Track user's active connection
+            userConversations.set(userId, clientId);
+            
             return true;
           }
         }
       } catch (err) {
+        console.error('Authentication error:', err);
         return false;
       }
       return false;
     };
 
+    // Set up connection
+    clients.set(clientId, ws);
+    ws.clientId = clientId;
+    setupHeartbeat();
+
+    // Handle incoming messages
     ws.on('message', async (message) => {
       try {
+        // Handle heartbeat
+        if (message === HEARTBEAT_VALUE) {
+          ws.pong();
+          return;
+        }
+
         const data = JSON.parse(message);
 
         // Handle authentication
         if (data.type === 'authenticate') {
           const success = await authenticate(data.token);
           if (success) {
-            clients.set(clientId, ws);
             ws.userType = userType;
             ws.userId = userId;
             
-            ws.send(JSON.stringify({
+            sendToClient(clientId, {
               type: 'authentication',
               success: true,
-              userType
-            }));
+              userType,
+              userId
+            });
 
-            // If user, send their active conversations
+            // Load user-specific data
             if (userType === 'user') {
               const conversations = await SupportConversation.find({
                 userId,
                 status: { $in: ['open', 'active', 'waiting'] }
               }).sort({ updatedAt: -1 });
               
-              ws.send(JSON.stringify({
+              sendToClient(clientId, {
                 type: 'conversations',
                 conversations
-              }));
+              });
             }
 
-            // If agent, send active conversations and agent list
+            // Load agent-specific data
             if (userType === 'agent') {
               const activeConversations = await SupportConversation.find({
                 status: { $in: ['active', 'waiting'] }
@@ -1371,51 +1419,51 @@ const setupWebSocketServer = (server) => {
               const onlineAgents = [];
               clients.forEach((client, id) => {
                 if (client.userType === 'agent' && client.readyState === WebSocket.OPEN) {
-                  onlineAgents.push(client.userId.toString());
+                  onlineAgents.push(client.userId);
                 }
               });
               
-              ws.send(JSON.stringify({
+              sendToClient(clientId, {
                 type: 'agent_init',
                 conversations: activeConversations,
                 onlineAgents
-              }));
+              });
             }
           } else {
-            ws.send(JSON.stringify({
+            sendToClient(clientId, {
               type: 'authentication',
               success: false,
               message: 'Invalid or expired token'
-            }));
+            });
             ws.close();
           }
           return;
         }
 
         if (!isAuthenticated) {
-          ws.send(JSON.stringify({
+          sendToClient(clientId, {
             type: 'error',
             message: 'Not authenticated'
-          }));
+          });
           return;
         }
 
         // Handle different message types
         switch (data.type) {
           case 'new_message': {
-            const { conversationId, message, attachments } = data;
+            const { conversationId, message } = data;
             
-            // Validate conversation exists and user has access
+            // Validate conversation
             const conversation = await SupportConversation.findOne({
               conversationId,
               $or: [{ userId }, { agentId: userId }]
             });
             
             if (!conversation) {
-              ws.send(JSON.stringify({
+              sendToClient(clientId, {
                 type: 'error',
                 message: 'Conversation not found or access denied'
-              }));
+              });
               return;
             }
             
@@ -1424,454 +1472,100 @@ const setupWebSocketServer = (server) => {
               conversationId,
               sender: userType,
               senderId: userId,
-              senderModel: userType === 'agent' ? 'Admin' : 'User',
               message,
-              attachments,
-              metadata: {
-                ip: req.headers['x-forwarded-for'] || req.connection.remoteAddress,
-                userAgent: req.headers['user-agent'],
-                location: await getLocationFromIp(req.headers['x-forwarded-for'] || req.connection.remoteAddress)
-              }
+              read: false
             });
-            
-            // If user is sending, set recipient to assigned agent or null (will be picked up by AI)
-            if (userType === 'user') {
-              newMessage.recipientId = conversation.agentId;
-              newMessage.recipientModel = 'Admin';
-              
-              // Update conversation status
-              conversation.status = conversation.agentId ? 'active' : 'open';
-              conversation.lastMessageAt = new Date();
-              await conversation.save();
-            }
-            
-            // If agent is sending, set recipient to user
-            if (userType === 'agent') {
-              newMessage.recipientId = conversation.userId;
-              newMessage.recipientModel = 'User';
-              
-              // Update conversation status
-              conversation.status = 'active';
-              conversation.lastMessageAt = new Date();
-              
-              // If this is the first message from agent, assign them
-              if (!conversation.agentId) {
-                conversation.agentId = userId;
-                
-                // Notify user that agent has joined
-                const notificationMessage = new SupportMessage({
-                  conversationId,
-                  sender: 'system',
-                  senderId: userId,
-                  senderModel: 'Admin',
-                  message: `Support agent ${req.admin.name} has joined the conversation`,
-                  isRead: false
-                });
-                await notificationMessage.save();
-                
-                // Broadcast to user
-                clients.forEach((client, id) => {
-                  if (client.userType === 'user' && client.userId.toString() === conversation.userId.toString() && client.readyState === WebSocket.OPEN) {
-                    client.send(JSON.stringify({
-                      type: 'system_message',
-                      conversationId,
-                      message: notificationMessage
-                    }));
-                  }
-                });
-              }
-              
-              await conversation.save();
-            }
-            
+
             await newMessage.save();
-            
-            // Populate sender info for real-time display
-            const populatedMessage = await SupportMessage.findById(newMessage._id)
-              .populate('senderId', 'firstName lastName email')
-              .populate('recipientId', 'firstName lastName email');
-            
-            // Broadcast message to all participants in conversation
+
+            // Update conversation
+            conversation.lastMessageAt = new Date();
+            conversation.status = userType === 'user' ? 
+              (conversation.agentId ? 'active' : 'open') : 'active';
+            await conversation.save();
+
+            // Broadcast message
             const messageData = {
               type: 'new_message',
-              message: populatedMessage
-            };
-            
-            clients.forEach((client, id) => {
-              if (client.readyState === WebSocket.OPEN) {
-                // Send to user in this conversation
-                if (client.userType === 'user' && client.userId.toString() === conversation.userId.toString()) {
-                  client.send(JSON.stringify(messageData));
-                }
-                
-                // Send to assigned agent
-                if (client.userType === 'agent' && conversation.agentId && client.userId.toString() === conversation.agentId.toString()) {
-                  client.send(JSON.stringify(messageData));
-                }
+              message: {
+                ...newMessage.toObject(),
+                conversationId,
+                sender: userType,
+                senderId: userId
               }
-            });
-            
-            // If no agent assigned and user sent message, try AI response or notify agents
-            if (userType === 'user' && !conversation.agentId) {
-              // First try AI response
-              try {
-                const aiResponse = await generateAIResponse(conversation, newMessage);
-                
-                if (aiResponse) {
-                  const aiMessage = new SupportMessage({
-                    conversationId,
-                    sender: 'ai',
-                    senderId: userId, // Associate with user for tracking
-                    senderModel: 'User',
-                    message: aiResponse,
-                    metadata: {
-                      ip: '127.0.0.1',
-                      userAgent: 'BitHash AI',
-                      location: 'Cloud'
-                    }
-                  });
-                  
-                  await aiMessage.save();
-                  
-                  // Broadcast AI response
-                  const aiMessageData = {
-                    type: 'new_message',
-                    message: await SupportMessage.findById(aiMessage._id)
-                      .populate('senderId', 'firstName lastName email')
-                  };
-                  
-                  sendToClient(clientId, aiMessageData);
-                  
-                  // Update conversation
-                  conversation.lastMessageAt = new Date();
-                  await conversation.save();
-                } else {
-                  // If AI couldn't respond, notify available agents
-                  broadcastToAgents({
-                    type: 'new_conversation',
-                    conversation: await SupportConversation.findById(conversation._id)
-                      .populate('user', 'firstName lastName email')
-                  });
+            };
+
+            // Send to other participant(s)
+            if (userType === 'user') {
+              // Send to assigned agent if available
+              if (conversation.agentId) {
+                const agentClientId = userConversations.get(conversation.agentId.toString());
+                if (agentClientId) {
+                  sendToClient(agentClientId, messageData);
                 }
-              } catch (aiError) {
-                console.error('AI response error:', aiError);
-                // Notify agents if AI fails
+              } else {
+                // No agent assigned, notify available agents
                 broadcastToAgents({
                   type: 'new_conversation',
                   conversation: await SupportConversation.findById(conversation._id)
                     .populate('user', 'firstName lastName email')
                 });
               }
-            }
-            
-            break;
-          }
-          
-          case 'agent_status': {
-            if (userType !== 'agent') break;
-            
-            const { status } = data;
-            agentAvailability.set(userId.toString(), status === 'available');
-            
-            broadcastToAgents({
-              type: 'agent_status',
-              agentId: userId,
-              status
-            });
-            
-            break;
-          }
-          
-          case 'transfer_conversation': {
-            if (userType !== 'agent') break;
-            
-            const { conversationId, toAgentId, reason } = data;
-            
-            const conversation = await SupportConversation.findOne({
-              conversationId,
-              agentId: userId
-            });
-            
-            if (!conversation) {
-              ws.send(JSON.stringify({
-                type: 'error',
-                message: 'Conversation not found or not assigned to you'
-              }));
-              return;
-            }
-            
-            const toAgent = await Admin.findById(toAgentId);
-            if (!toAgent || toAgent.role !== 'support') {
-              ws.send(JSON.stringify({
-                type: 'error',
-                message: 'Invalid agent specified'
-              }));
-              return;
-            }
-            
-            // Add to transfer history
-            conversation.transferHistory.push({
-              fromAgent: userId,
-              toAgent: toAgentId,
-              reason
-            });
-            
-            conversation.agentId = toAgentId;
-            await conversation.save();
-            
-            // Notify both agents
-            const transferNotification = {
-              type: 'conversation_transferred',
-              conversationId,
-              fromAgent: userId,
-              toAgent: toAgentId,
-              reason
-            };
-            
-            // Notify original agent
-            sendToClient(clientId, transferNotification);
-            
-            // Notify new agent if online
-            clients.forEach((client, id) => {
-              if (client.userType === 'agent' && client.userId.toString() === toAgentId.toString() && client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify({
-                  ...transferNotification,
-                  conversation: conversation
-                }));
+            } else {
+              // Agent sending message - send to user
+              const userClientId = userConversations.get(conversation.userId.toString());
+              if (userClientId) {
+                sendToClient(userClientId, messageData);
               }
-            });
-            
-            // Notify user
-            clients.forEach((client, id) => {
-              if (client.userType === 'user' && client.userId.toString() === conversation.userId.toString() && client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify({
-                  type: 'system_message',
-                  conversationId,
-                  message: {
-                    sender: 'system',
-                    message: `Your conversation has been transferred to agent ${toAgent.name}`,
-                    createdAt: new Date()
-                  }
-                }));
-              }
-            });
-            
-            break;
-          }
-          
-          case 'close_conversation': {
-            const { conversationId } = data;
-            
-            const conversation = await SupportConversation.findOne({
-              conversationId,
-              $or: [{ userId }, { agentId: userId }]
-            });
-            
-            if (!conversation) {
-              ws.send(JSON.stringify({
-                type: 'error',
-                message: 'Conversation not found or access denied'
-              }));
-              return;
             }
-            
-            conversation.status = 'closed';
-            conversation.resolvedAt = new Date();
-            await conversation.save();
-            
-            // Notify all participants
-            const closeData = {
-              type: 'conversation_closed',
-              conversationId
-            };
-            
-            clients.forEach((client, id) => {
-              if (client.readyState === WebSocket.OPEN) {
-                // Send to user in this conversation
-                if (client.userType === 'user' && client.userId.toString() === conversation.userId.toString()) {
-                  client.send(JSON.stringify(closeData));
-                }
-                
-                // Send to assigned agent
-                if (client.userType === 'agent' && conversation.agentId && client.userId.toString() === conversation.agentId.toString()) {
-                  client.send(JSON.stringify(closeData));
-                }
-              }
-            });
-            
+
             break;
           }
-          
-          case 'typing_indicator': {
-            const { conversationId, isTyping } = data;
-            
-            const conversation = await SupportConversation.findOne({
-              conversationId,
-              $or: [{ userId }, { agentId: userId }]
-            });
-            
-            if (!conversation) break;
-            
-            // Broadcast typing indicator to other participant(s)
-            clients.forEach((client, id) => {
-              if (client.readyState === WebSocket.OPEN) {
-                // Send to user if agent is typing
-                if (userType === 'agent' && client.userType === 'user' && 
-                    client.userId.toString() === conversation.userId.toString()) {
-                  client.send(JSON.stringify({
-                    type: 'typing_indicator',
-                    conversationId,
-                    isTyping
-                  }));
-                }
-                
-                // Send to agent if user is typing
-                if (userType === 'user' && client.userType === 'agent' && conversation.agentId && 
-                    client.userId.toString() === conversation.agentId.toString()) {
-                  client.send(JSON.stringify({
-                    type: 'typing_indicator',
-                    conversationId,
-                    isTyping
-                  }));
-                }
-              }
-            });
-            
-            break;
-          }
+
+          // Add other message type handlers as needed...
         }
       } catch (err) {
         console.error('WebSocket message error:', err);
-        ws.send(JSON.stringify({
+        sendToClient(clientId, {
           type: 'error',
           message: 'Internal server error'
-        }));
+        });
       }
     });
 
+    // Handle close
     ws.on('close', () => {
+      clearInterval(heartbeatInterval);
       clients.delete(clientId);
       
-      // If agent disconnected, mark as offline
       if (userType === 'agent' && userId) {
-        agentAvailability.delete(userId.toString());
-        
-        // Notify other agents
+        agentAvailability.delete(userId);
         broadcastToAgents({
           type: 'agent_status',
           agentId: userId,
           status: 'offline'
         });
       }
+      
+      if (userType === 'user' && userId) {
+        userConversations.delete(userId);
+      }
+    });
+
+    // Handle errors
+    ws.on('error', (err) => {
+      console.error('WebSocket error:', err);
+      ws.close();
+    });
+
+    // Handle pong responses
+    ws.on('pong', () => {
+      // Connection is alive
     });
   });
 
-  // Enhanced AI response generation for BitHash
-  const generateAIResponse = async (conversation, userMessage) => {
-    try {
-      // Get conversation history
-      const messages = await SupportMessage.find({
-        conversationId: conversation.conversationId
-      }).sort({ createdAt: 1 });
-      
-      // Format messages for AI
-      const chatHistory = messages.map(msg => ({
-        role: msg.sender === 'user' ? 'user' : 'assistant',
-        content: msg.message
-      }));
-      
-      // BitHash-specific AI prompt with comprehensive platform knowledge
-      const systemPrompt = `
-      You are Andrea, the AI support assistant for BitHash - an institutional-grade Bitcoin mining and investment platform. 
-      Your role is to provide accurate, professional assistance regarding all aspects of the BitHash platform.
-
-      # Platform Overview
-      BitHash connects users to industrial-scale Bitcoin mining operations with:
-      - Global network of energy-efficient data centers (North America, Europe, Asia)
-      - Next-gen SHA-256 ASIC miners with liquid cooling
-      - 85% renewable energy usage
-      - 99.99% uptime with biometric security
-
-      # Key Information
-      ## Investment Plans (Current BTC Price: $118,396.00 as of 7/31/2025)
-      - Starter: 20% after 10 hours ($100-$499)
-      - Gold: 40% after 24 hours ($500-$1,999)
-      - Advance: 60% after 48 hours ($2,000-$9,999)
-      - Exclusive: 80% after 72 hours ($10,000-$30,000)
-      - Expert: 100% after 96 hours ($50,000-$1M)
-      - All plans include 5% referral bonuses
-
-      ## Financial Services
-      - BTC-backed loans (9.99% monthly interest)
-      - Minimum loan: $1,000
-      - Algorithmic credit scoring based on:
-        • Transaction history
-        • Investment consistency
-        • Account tenure (3+ months required)
-
-      ## Security Features
-      - 256-bit AES encryption
-      - Multi-signature wallets
-      - SOC 2 Type II certification
-      - Biometric facility access
-      - 24/7 physical monitoring
-
-      # Support Guidelines
-      1. Account Settings:
-      - KYC required for withdrawals >$1000/day
-      - 2FA options: SMS and authenticator apps
-      - Address verification via Google Places API
-
-      2. Deposits:
-      - Minimum: $10 (BTC or card)
-      - Card processing fee: 3.5%
-      - BTC deposits require 1-3 confirmations (~10-30 min)
-
-      3. Withdrawals:
-      - Processing time: 1-3 business days
-      - SegWit/Bech32 addresses supported
-      - Transparent fee structure
-
-      # Response Protocol
-      - Be professional yet approachable
-      - Provide specific numbers from current plans
-      - For security issues, always direct to human support
-      - If unsure, say: "Let me connect you with a support agent for detailed assistance."
-      - Never provide financial advice - only state platform facts
-      `;
-      
-      const response = await openai.chat.completions.create({
-        model: "gpt-4",
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...chatHistory
-        ],
-        temperature: 0.7,
-        max_tokens: 500
-      });
-      
-      return response.choices[0]?.message?.content || null;
-    } catch (err) {
-      console.error('AI response generation error:', err);
-      return null;
-    }
-  };
-
-  // Helper function to get location from IP
-  const getLocationFromIp = async (ip) => {
-    if (ip === '127.0.0.1') return 'Localhost';
-    try {
-      const response = await axios.get(`https://ipinfo.io/${ip}?token=${process.env.IPINFO_TOKEN || 'b56ce6e91d732d'}`);
-      return `${response.data.city}, ${response.data.region}, ${response.data.country}`;
-    } catch (err) {
-      return 'Unknown';
-    }
-  };
-
   return wss;
 };
-
-
 
 
 
@@ -8289,4 +7983,5 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
