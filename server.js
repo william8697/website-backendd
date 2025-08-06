@@ -6252,12 +6252,12 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
     ]);
 
     // Calculate percentage changes
-    const yesterdayUsers = await User.countDocuments({
-      createdAt: { 
-        $gte: new Date(new Date().setDate(new Date().getDate() - 1)).setHours(0, 0, 0, 0)),
-        $lt: new Date(new Date().setDate(new Date().getDate() - 1)).setHours(23, 59, 59, 999))
-      }
-    });
+const yesterdayUsers = await User.countDocuments({
+  createdAt: { 
+    $gte: new Date(new Date(new Date().setDate(new Date().getDate() - 1)).setHours(0, 0, 0, 0)),
+    $lt: new Date(new Date(new Date().setDate(new Date().getDate() - 1)).setHours(23, 59, 59, 999))
+  }
+});
     const usersChange = yesterdayUsers > 0 ? 
       ((newUsersToday - yesterdayUsers) / yesterdayUsers * 100).toFixed(2) : 0;
 
@@ -6412,6 +6412,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
