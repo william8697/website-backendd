@@ -2038,7 +2038,7 @@ const initializePlans = async () => {
         description: '12% After 10 hours',
         percentage: 12,
         duration: 10,
-        minAmount: 100,
+        minAmount: 150,
         maxAmount: 499,
         referralBonus: 5
       },
@@ -8216,6 +8216,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
