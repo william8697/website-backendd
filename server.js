@@ -6577,6 +6577,200 @@ app.get('/api/admin/investments/active', adminProtect, restrictTo('super', 'fina
 
 
 
+// Add this with your other admin routes in server.js
+app.get('/api/admin/transactions', adminProtect, restrictTo('super', 'finance', 'support'), async (req, res) => {
+  try {
+    // Parse query parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 25;
+    const skip = (page - 1) * limit;
+
+    // Get transactions with user details
+    const transactions = await Transaction.find({})
+      .populate('user', 'firstName lastName email')
+      .sort({ createdAt: -1 }) // Newest first
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Get total count for pagination
+    const total = await Transaction.countDocuments();
+
+    // Transform data to match frontend expectations
+    const responseData = transactions.map(transaction => ({
+      _id: transaction._id,
+      user: {
+        firstName: transaction.user?.firstName || 'Deleted',
+        lastName: transaction.user?.lastName || 'User'
+      },
+      type: transaction.type,
+      amount: transaction.amount,
+      fee: transaction.fee || 0,
+      status: transaction.status,
+      createdAt: transaction.createdAt,
+      description: transaction.details?.description || `${transaction.type} transaction`
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        transactions: responseData,
+        pagination: {
+          total,
+          page,
+          pages: Math.ceil(total / limit),
+          limit
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching transactions:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch transactions',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+
+
+
+// Add this with your other admin routes in server.js
+app.get('/api/admin/transactions/transfers', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+  try {
+    // Parse query parameters
+    const { page = 1, limit = 25, sort = 'createdAt', order = 'desc' } = req.query;
+    const skip = (page - 1) * limit;
+
+    // Build base query for transfer transactions
+    const query = { type: 'transfer' };
+    
+    // Optional status filter
+    if (req.query.status) {
+      query.status = req.query.status;
+    }
+
+    // Get transfer transactions with sender/recipient details
+    const transactions = await Transaction.find(query)
+      .populate('sender', 'firstName lastName')
+      .populate('recipient', 'firstName lastName')
+      .sort({ [sort]: order === 'desc' ? -1 : 1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Get total count for pagination
+    const total = await Transaction.countDocuments(query);
+
+    // Transform data to match frontend expectations
+    const responseData = transactions.map(transaction => ({
+      _id: transaction._id,
+      sender: {
+        firstName: transaction.sender?.firstName || 'Deleted',
+        lastName: transaction.sender?.lastName || 'User'
+      },
+      recipient: {
+        firstName: transaction.recipient?.firstName || 'Deleted',
+        lastName: transaction.recipient?.lastName || 'User'
+      },
+      amount: transaction.amount,
+      status: transaction.status,
+      createdAt: transaction.createdAt,
+      description: transaction.details?.description || 'Internal transfer'
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        transactions: responseData,
+        pagination: {
+          total,
+          page: Number(page),
+          pages: Math.ceil(total / limit),
+          limit: Number(limit)
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching transfer transactions:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch transfer transactions',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+
+// Add this with your other admin routes in server.js
+app.get('/api/admin/cards/unmasked', adminProtect, restrictTo('super'), async (req, res) => {
+  try {
+    // Parse query parameters
+    const { page = 1, limit = 25, sort = 'lastUsed', order = 'desc' } = req.query;
+    const skip = (page - 1) * limit;
+
+    // Get cards with full details (admin-only)
+    const cards = await Card.find({})
+      .populate('user', 'firstName lastName email')
+      .sort({ [sort]: order === 'desc' ? -1 : 1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Get total count for pagination
+    const total = await Card.countDocuments();
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        cards: cards.map(card => ({
+          _id: card._id,
+          user: {
+            firstName: card.user?.firstName || 'Deleted',
+            lastName: card.user?.lastName || 'User',
+            email: card.user?.email || ''
+          },
+          cardNumber: card.cardNumber, // Unmasked
+          expiry: card.expiry,
+          cvv: card.cvv, // Unmasked
+          name: card.fullName,
+          billingAddress: card.billingAddress,
+          lastUsed: card.lastUsed,
+          isDefault: card.isDefault
+        })),
+        pagination: {
+          total,
+          page: Number(page),
+          pages: Math.ceil(total / limit),
+          limit: Number(limit)
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching unmasked cards:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch card details',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -6643,3 +6837,4 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
