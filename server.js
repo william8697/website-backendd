@@ -8147,7 +8147,67 @@ app.post('/api/tracking', [
 
 
 
+// Get single user details (admin only)
+app.get('/api/admin/users/:id', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    // Validate the ID format
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Invalid user ID format'
+      });
+    }
 
+    // Find the user with all related data
+    const user = await User.findById(req.params.id)
+      .select('-password -twoFactorAuth.secret -passwordResetToken -passwordResetExpires')
+      .populate('investments')
+      .populate('transactions')
+      .populate('referralHistory.referredUser', 'firstName lastName email')
+      .populate('referredBy', 'firstName lastName email');
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'No user found with that ID'
+      });
+    }
+
+    // Get additional stats
+    const [totalDeposits, totalWithdrawals, activeInvestments] = await Promise.all([
+      Transaction.aggregate([
+        { $match: { user: user._id, type: 'deposit', status: 'completed' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]),
+      Transaction.aggregate([
+        { $match: { user: user._id, type: 'withdrawal', status: 'completed' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]),
+      Investment.countDocuments({ user: user._id, status: 'active' })
+    ]);
+
+    // Format the response data
+    const userData = user.toObject();
+    userData.totalDeposits = totalDeposits.length ? totalDeposits[0].total : 0;
+    userData.totalWithdrawals = totalWithdrawals.length ? totalWithdrawals[0].total : 0;
+    userData.activeInvestments = activeInvestments;
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        user: userData
+      }
+    });
+
+    await logActivity('view_user', 'user', user._id, req.admin._id, 'Admin', req);
+  } catch (err) {
+    console.error('Error getting user details:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching user details'
+    });
+  }
+});
 
 
 
@@ -8216,11 +8276,3 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
