@@ -6348,7 +6348,93 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
 
 
 
+// Add this route in your server.js file after all the model definitions but before the error handlers
+app.get('/api/admin/transactions/deposits', adminProtect, restrictTo('finance', 'super'), async (req, res) => {
+  try {
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
 
+    // Sorting parameters
+    const sortBy = req.query.sortBy || 'createdAt';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+
+    // Filter parameters
+    const status = req.query.status;
+    const minAmount = parseFloat(req.query.minAmount);
+    const maxAmount = parseFloat(req.query.maxAmount);
+    const dateFrom = req.query.dateFrom;
+    const dateTo = req.query.dateTo;
+
+    // Build query
+    const query = { type: 'deposit' };
+    
+    if (status) query.status = status;
+    if (!isNaN(minAmount)) query.amount = { $gte: minAmount };
+    if (!isNaN(maxAmount)) {
+      query.amount = query.amount || {};
+      query.amount.$lte = maxAmount;
+    }
+    if (dateFrom && dateTo) {
+      query.createdAt = {
+        $gte: new Date(dateFrom),
+        $lte: new Date(dateTo)
+      };
+    }
+
+    // Get transactions with user population
+    const transactions = await Transaction.find(query)
+      .populate('user', 'firstName lastName email')
+      .populate('processedBy', 'name')
+      .sort({ [sortBy]: sortOrder })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Get total count for pagination
+    const total = await Transaction.countDocuments(query);
+
+    // Format response to match frontend expectations
+    const formattedTransactions = transactions.map(tx => ({
+      _id: tx._id,
+      user: {
+        firstName: tx.user.firstName,
+        lastName: tx.user.lastName,
+        email: tx.user.email
+      },
+      amount: tx.amount,
+      method: tx.method,
+      status: tx.status,
+      createdAt: tx.createdAt,
+      processedBy: tx.processedBy ? { name: tx.processedBy.name } : null,
+      reference: tx.reference,
+      fee: tx.fee,
+      netAmount: tx.netAmount,
+      currency: tx.currency
+    }));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        transactions: formattedTransactions,
+        pagination: {
+          total,
+          page,
+          pages: Math.ceil(total / limit),
+          limit
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error('Error fetching deposit transactions:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching deposit transactions'
+    });
+  }
+});
 
 
 
@@ -6421,3 +6507,4 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
