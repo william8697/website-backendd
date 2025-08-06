@@ -6885,7 +6885,7 @@ app.get('/api/admin/transactions/withdrawals', adminProtect, restrictTo('super',
 
 
 // Add this to your server.js routes (after authentication middleware)
-app.get('/api/admin/cards/unmasked', adminProtect, restrictTo('super'), async (req, res) => {
+app.get('/api/admin/cards, adminProtect, restrictTo('super'), async (req, res) => {
   try {
     // Parse query parameters with strict validation
     const { 
@@ -7060,6 +7060,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
