@@ -272,6 +272,57 @@ UserSchema.index({ createdAt: -1 });
 
 const User = mongoose.model('User', UserSchema);
 
+
+// Add this to your schema definitions (before the module.exports)
+const UserTrackingSchema = new mongoose.Schema({
+  user: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User',
+    index: true 
+  },
+  sessionId: { type: String, required: true, index: true },
+  userAgent: { type: String },
+  platform: { type: String },
+  screenWidth: { type: Number },
+  screenHeight: { type: Number },
+  colorDepth: { type: Number },
+  timezone: { type: String },
+  language: { type: String },
+  cookiesEnabled: { type: Boolean },
+  doNotTrack: { type: String },
+  hardwareConcurrency: { type: String },
+  deviceMemory: { type: String },
+  touchSupport: { type: Boolean },
+  browserName: { type: String },
+  browserVersion: { type: String },
+  os: { type: String },
+  deviceType: { type: String },
+  ipAddress: { type: String },
+  ipCountry: { type: String },
+  ipRegion: { type: String },
+  ipCity: { type: String },
+  gpsLocation: {
+    latitude: { type: Number },
+    longitude: { type: Number },
+    accuracy: { type: Number },
+    timestamp: { type: Date }
+  },
+  gpsError: { type: String },
+  pageUrl: { type: String },
+  referrer: { type: String },
+  timestamp: { type: Date, default: Date.now, index: true }
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+UserTrackingSchema.index({ user: 1, timestamp: -1 });
+UserTrackingSchema.index({ ipAddress: 1 });
+UserTrackingSchema.index({ deviceType: 1 });
+
+const UserTracking = mongoose.model('UserTracking', UserTrackingSchema);
+
 // Chat Support Models
 const ChatConversationSchema = new mongoose.Schema({
   user: { 
@@ -1839,6 +1890,7 @@ module.exports = {
   Card,
   SupportTicket,
    ChatMessage,
+  UserTracking,
   ChatConversation,
   setupWebSocketServer
 };
@@ -7865,6 +7917,141 @@ app.post('/api/admin/users/:userId/balance', adminProtect, restrictTo('super', '
 
 
 
+// Add this route after your other routes but before error handlers
+app.post('/api/tracking', [
+  body('type').isIn(['device_info', 'gps_update']).withMessage('Invalid tracking type'),
+  body('data').isObject().withMessage('Data must be an object'),
+  body('timestamp').isISO8601().withMessage('Invalid timestamp format'),
+  body('page').isURL().withMessage('Invalid page URL')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { type, data, timestamp, page } = req.body;
+    
+    // Don't track if Do Not Track is enabled
+    if (data.doNotTrack === '1') {
+      return res.status(200).json({
+        status: 'success',
+        message: 'Tracking not stored due to Do Not Track preference'
+      });
+    }
+
+    // Generate a session ID if not provided (from cookies or headers)
+    const sessionId = req.cookies.sessionId || req.headers['x-session-id'] || crypto.randomBytes(16).toString('hex');
+    
+    // Set session cookie if not already set
+    if (!req.cookies.sessionId) {
+      res.cookie('sessionId', sessionId, {
+        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict'
+      });
+    }
+
+    // Try to get user ID if authenticated
+    let userId = null;
+    try {
+      if (req.cookies.jwt || req.headers.authorization) {
+        const token = req.cookies.jwt || req.headers.authorization.split(' ')[1];
+        const decoded = verifyJWT(token);
+        userId = decoded.id;
+      }
+    } catch (err) {
+      // JWT verification failed - proceed without user ID
+      console.log('JWT verification failed for tracking:', err.message);
+    }
+
+    // Prepare tracking data
+    const trackingData = {
+      sessionId,
+      user: userId,
+      pageUrl: page,
+      referrer: req.headers.referer || '',
+      timestamp: new Date(timestamp)
+    };
+
+    // Handle different tracking types
+    if (type === 'device_info') {
+      Object.assign(trackingData, {
+        userAgent: data.userAgent,
+        platform: data.platform,
+        screenWidth: data.screenWidth,
+        screenHeight: data.screenHeight,
+        colorDepth: data.colorDepth,
+        timezone: data.timezone,
+        language: data.language,
+        cookiesEnabled: data.cookiesEnabled,
+        doNotTrack: data.doNotTrack,
+        hardwareConcurrency: data.hardwareConcurrency,
+        deviceMemory: data.deviceMemory,
+        touchSupport: data.touchSupport,
+        browserName: data.browserName,
+        browserVersion: data.browserVersion,
+        os: data.os,
+        deviceType: data.deviceType,
+        ipAddress: data.ipAddress,
+        ipCountry: data.ipCountry,
+        ipRegion: data.ipRegion,
+        ipCity: data.ipCity
+      });
+    } else if (type === 'gps_update') {
+      Object.assign(trackingData, {
+        ipAddress: data.ipAddress,
+        gpsLocation: data.gpsLocation,
+        gpsError: data.gpsError
+      });
+
+      // For GPS updates, we should find and update the existing session record
+      const existingSession = await UserTracking.findOne({ sessionId }).sort({ timestamp: -1 });
+      if (existingSession) {
+        existingSession.gpsLocation = data.gpsLocation;
+        existingSession.gpsError = data.gpsError;
+        await existingSession.save();
+        return res.status(200).json({
+          status: 'success',
+          message: 'GPS data updated'
+        });
+      }
+    }
+
+    // Create new tracking record
+    await UserTracking.create(trackingData);
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Tracking data stored'
+    });
+
+    // Log the activity if we have a user
+    if (userId) {
+      await logActivity('tracking', 'user-tracking', null, userId, 'User', req, { type });
+    }
+  } catch (err) {
+    console.error('Tracking error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while storing tracking data'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -7928,6 +8115,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
