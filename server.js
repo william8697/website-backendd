@@ -6329,65 +6329,69 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
 
 
 
-
-// Admin Activity Log - Now tracks all user activities
+// Admin Activity Log - Enhanced to track all user activities
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
   try {
-    // Get recent activities from SystemLog (both admin and user actions)
+    // Get recent activities from SystemLog (both admin and user activities)
     const activities = await SystemLog.find({
       $or: [
         { performedByModel: { $in: ['Admin', 'User'] } },
-        { entity: { $in: ['admin', 'user', 'auth', 'transaction'] } }
-      ],
-      action: { 
-        $in: [
-          'login', 
-          'logout', 
-          'signup', 
-          'deposit', 
-          'withdrawal', 
-          'password_reset',
-          'profile_update'
-        ] 
-      }
+        { entity: { $in: ['admin', 'user', 'auth', 'transaction'] } },
+        { action: { 
+          $in: [
+            'login', 'logout', 'signup', 
+            'deposit', 'withdrawal', 
+            'password_reset', 'profile_update'
+          ] 
+        }}
+      ]
     })
     .sort({ createdAt: -1 })
-    .limit(100) // Increased limit to account for more activity types
-    .populate('performedBy', 'name email role')
+    .limit(100) // Increased limit to show more activities
+    .populate('performedBy', 'name email')
     .lean();
 
-    // Enhanced formatting to handle different activity types
-    const formattedActivities = activities.map(activity => {
-      let actionType = activity.action;
-      let status = 'success'; // Default to success, can be modified based on activity metadata
-      
-      // Determine status based on metadata if available
-      if (activity.metadata && activity.metadata.error) {
-        status = 'failed';
-      }
-      
-      // Special formatting for specific actions
-      if (activity.action === 'deposit' || activity.action === 'withdrawal') {
-        actionType = `${activity.action} attempt`;
-        if (activity.metadata && activity.metadata.amount) {
-          actionType += ` (${activity.metadata.amount})`;
+    // Format the response to match frontend expectations with enhanced activity tracking
+    const formattedActivities = await Promise.all(activities.map(async (activity) => {
+      // Fetch user details if performedBy exists but wasn't populated (for edge cases)
+      let userDetails = null;
+      if (activity.performedBy) {
+        userDetails = {
+          firstName: activity.performedBy.name?.split(' ')[0] || 'Unknown',
+          lastName: activity.performedBy.name?.split(' ')[1] || ''
+        };
+      } else if (activity.performedByRef) {
+        // Handle cases where we have a reference but not populated
+        const userModel = activity.performedByModel === 'Admin' ? Admin : User;
+        const user = await userModel.findById(activity.performedByRef).select('name').lean();
+        if (user) {
+          userDetails = {
+            firstName: user.name.split(' ')[0],
+            lastName: user.name.split(' ')[1] || ''
+          };
         }
       }
 
+      // Enhanced action descriptions
+      let actionDescription = activity.action;
+      if (activity.action === 'login') actionDescription = 'User login';
+      if (activity.action === 'signup') actionDescription = 'New user registration';
+      if (activity.action === 'deposit') actionDescription = `Deposit attempt (${activity.amount || 'unknown'} ${activity.currency || ''})`;
+      if (activity.action === 'withdrawal') actionDescription = `Withdrawal attempt (${activity.amount || 'unknown'} ${activity.currency || ''})`;
+
       return {
         timestamp: activity.createdAt,
-        user: activity.performedBy ? {
-          firstName: activity.performedBy.name?.split(' ')[0] || 'Unknown',
-          lastName: activity.performedBy.name?.split(' ')[1] || '',
-          email: activity.performedBy.email,
-          role: activity.performedBy.role || 'user'
-        } : null,
-        action: actionType,
-        ipAddress: activity.ip,
-        status: status,
-        details: activity.metadata || null // Include additional metadata
+        user: userDetails || {
+          firstName: 'System',
+          lastName: ''
+        },
+        action: actionDescription,
+        ipAddress: activity.ip || 'Unknown',
+        status: activity.status || 'success',
+        details: activity.details || null,
+        entityType: activity.entity || activity.performedByModel || 'system'
       };
-    });
+    }));
 
     res.status(200).json({
       status: 'success',
@@ -6396,10 +6400,10 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('Error fetching activity log:', err);
+    console.error('Error fetching activity logs:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch activity log'
+      message: 'Failed to fetch activity logs'
     });
   }
 });
@@ -7894,5 +7898,6 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
