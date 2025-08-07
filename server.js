@@ -7673,139 +7673,144 @@ app.get('/api/admin/users/:id', adminProtect, restrictTo('super', 'support'), as
 
 
 
+// In server.js - Add this with your other routes
 
-
-
-
-
-// Add to your routes section in server.js
-const Setting = mongoose.model('Setting', new mongoose.Schema({
-  key: { type: String, required: true, unique: true },
-  value: { type: mongoose.Schema.Types.Mixed, required: true },
-  lastUpdated: { type: Date, default: Date.now },
-  updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' }
-}));
-
-// GET General Settings - Strictly matches frontend expectations
+// GET General Settings - Exact match for frontend expectations
 app.get('/api/admin/settings/general', adminProtect, restrictTo('super'), async (req, res) => {
   try {
-    const settings = await Setting.find({
-      $or: [
-        { key: 'platformName' },
-        { key: 'platformUrl' },
-        { key: 'platformEmail' },
-        { key: 'platformCurrency' },
-        { key: 'maintenanceMode' },
-        { key: 'maintenanceMessage' }
-      ]
-    }).lean();
-
-    // Transform to exact structure frontend expects
-    const responseData = {
-      status: 'success',
-      data: {
-        settings: {
-          platformName: settings.find(s => s.key === 'platformName')?.value || 'BitHash',
-          platformUrl: settings.find(s => s.key === 'platformUrl')?.value || 'https://bithash.com',
-          platformEmail: settings.find(s => s.key === 'platformEmail')?.value || 'support@bithash.com',
-          platformCurrency: settings.find(s => s.key === 'platformCurrency')?.value || 'USD',
-          maintenanceMode: settings.find(s => s.key === 'maintenanceMode')?.value || false,
-          maintenanceMessage: settings.find(s => s.key === 'maintenanceMessage')?.value || 'Platform under maintenance'
-        }
-      }
+    // Initialize default settings
+    const defaultSettings = {
+      platformName: 'BitHash',
+      platformUrl: 'https://bithhash.vercel.app',
+      platformEmail: 'support@bithash.com',
+      platformCurrency: 'USD',
+      maintenanceMode: false,
+      maintenanceMessage: 'Platform under maintenance'
     };
 
-    res.status(200).json(responseData);
-  } catch (err) {
-    console.error('Error fetching general settings:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to retrieve general settings'
-    });
-  }
-});
+    // Try to load from database
+    const settings = await Setting.find({}).lean();
+    const dbSettings = settings.reduce((acc, curr) => {
+      acc[curr.key] = curr.value;
+      return acc;
+    }, {});
 
-// POST General Settings - Strictly matches frontend form submission
-app.post('/api/admin/settings/general', adminProtect, restrictTo('super'), async (req, res) => {
-  try {
-    const { 
-      platformName,
-      platformUrl,
-      platformEmail,
-      platformCurrency,
-      maintenanceMode,
-      maintenanceMessage
-    } = req.body;
-
-    // Input validation
-    if (!platformName || !platformUrl || !platformEmail || !platformCurrency) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'All required fields must be provided'
-      });
-    }
-
-    // Update or create each setting atomically
-    const updatePromises = [
-      updateSetting('platformName', platformName, req.admin._id),
-      updateSetting('platformUrl', platformUrl, req.admin._id),
-      updateSetting('platformEmail', platformEmail, req.admin._id),
-      updateSetting('platformCurrency', platformCurrency, req.admin._id),
-      updateSetting('maintenanceMode', maintenanceMode === '1', req.admin._id),
-      updateSetting('maintenanceMessage', maintenanceMessage, req.admin._id)
-    ];
-
-    await Promise.all(updatePromises);
-
-    // Log the settings change
-    await SystemLog.create({
-      action: 'update_general_settings',
-      entity: 'Setting',
-      performedBy: req.admin._id,
-      performedByModel: 'Admin',
-      ip: req.ip,
-      device: req.headers['user-agent'],
-      changes: {
-        platformName,
-        platformUrl,
-        platformEmail,
-        platformCurrency,
-        maintenanceMode: maintenanceMode === '1'
-      }
-    });
+    // Merge with defaults
+    const mergedSettings = { ...defaultSettings, ...dbSettings };
 
     res.status(200).json({
       status: 'success',
-      message: 'General settings updated successfully'
+      data: {
+        settings: mergedSettings
+      }
     });
 
   } catch (err) {
-    console.error('Error updating general settings:', err);
+    console.error('GET General Settings Error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to update general settings'
+      message: 'Failed to load general settings'
     });
   }
 });
 
-// Helper function to update settings
-async function updateSetting(key, value, adminId) {
-  return Setting.findOneAndUpdate(
-    { key },
-    { 
-      $set: { 
-        value,
-        lastUpdated: Date.now(),
-        updatedBy: adminId 
-      } 
-    },
-    { 
-      upsert: true,
-      new: true,
-      setDefaultsOnInsert: true 
+// POST General Settings - Fixed to handle form data exactly
+app.post('/api/admin/settings/general', 
+  adminProtect, 
+  restrictTo('super'),
+  express.urlencoded({ extended: true }), // Add this middleware
+  async (req, res) => {
+    try {
+      // Debug logging to see incoming data
+      console.log('Incoming settings data:', req.body);
+
+      // Extract and validate data
+      const {
+        'platform-name': platformName,
+        'platform-url': platformUrl,
+        'platform-email': platformEmail,
+        'platform-currency': platformCurrency,
+        'maintenance-mode': maintenanceMode,
+        'maintenance-message': maintenanceMessage
+      } = req.body;
+
+      if (!platformName || !platformUrl || !platformEmail || !platformCurrency) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Missing required fields',
+          errors: {
+            ...(!platformName && { platformName: 'Platform name is required' }),
+            ...(!platformUrl && { platformUrl: 'Platform URL is required' }),
+            ...(!platformEmail && { platformEmail: 'Platform email is required' }),
+            ...(!platformCurrency && { platformCurrency: 'Platform currency is required' })
+          }
+        });
+      }
+
+      // Prepare settings for update
+      const settingsToUpdate = {
+        'platformName': platformName,
+        'platformUrl': platformUrl,
+        'platformEmail': platformEmail,
+        'platformCurrency': platformCurrency,
+        'maintenanceMode': maintenanceMode === '1',
+        'maintenanceMessage': maintenanceMessage || 'Platform under maintenance'
+      };
+
+      // Update settings in database
+      const updateOperations = Object.entries(settingsToUpdate).map(([key, value]) => 
+        Setting.findOneAndUpdate(
+          { key },
+          { 
+            $set: { 
+              value,
+              lastUpdated: Date.now(),
+              updatedBy: req.admin._id 
+            } 
+          },
+          { upsert: true, new: true }
+        )
+      );
+
+      await Promise.all(updateOperations);
+
+      // Log the activity
+      await SystemLog.create({
+        action: 'update_settings',
+        entity: 'Setting',
+        performedBy: req.admin._id,
+        performedByModel: 'Admin',
+        ip: req.ip,
+        device: req.headers['user-agent'],
+        changes: settingsToUpdate
+      });
+
+      res.status(200).json({
+        status: 'success',
+        message: 'Settings updated successfully'
+      });
+
+    } catch (err) {
+      console.error('POST General Settings Error:', err);
+      res.status(500).json({
+        status: 'error',
+        message: 'An error occurred while saving settings'
+      });
     }
-  );
-}
+  }
+);
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 // Error handling middleware
@@ -7870,6 +7875,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
