@@ -7731,31 +7731,34 @@ app.post('/api/admin/settings/general',
 
 
 
+
+
+
+
 app.get('/api/investments/active', protect, async (req, res) => {
   try {
-    // Get user's active investments with plan details
+    // Get user's active investments with complete plan details
     const investments = await Investment.find({
       user: req.user._id,
       status: 'active'
     })
-    .populate('plan', 'name duration hourlyReturn')
+    .populate('plan', 'name durationHours roiPercentage')
     .lean();
 
-    // Format the response to exactly match frontend expectations
+    // Format the response with exact plan hours and ROI
     const formattedInvestments = investments.map(investment => {
       const maturityDate = investment.endDate || investment.maturityDate;
       const hoursLeft = Math.max(0, Math.ceil((maturityDate - new Date()) / (1000 * 60 * 60)));
       
-      // Calculate hourly ROI - prioritize investment.hourlyROI, fallback to plan.hourlyReturn, then 0
-      const hourlyROI = investment.hourlyROI || 
-                     (investment.plan && investment.plan.hourlyReturn) || 
-                     0;
+      // Get the exact duration and ROI from the plan
+      const durationHours = investment.plan?.durationHours || investment.durationHours || 0;
+      const roiPercentage = investment.plan?.roiPercentage || investment.roiPercentage || 0;
 
       return {
         planName: investment.plan?.name || 'Standard Plan',
         amount: investment.amount || 0,
-        duration: investment.duration || '24', // Default to 24 hours if not specified
-        hourlyROI: parseFloat(hourlyROI.toFixed(2)),
+        durationHours: durationHours,
+        roiPercentage: parseFloat(roiPercentage.toFixed(2)),
         endDate: maturityDate,
         status: investment.status,
         hoursRemaining: hoursLeft
@@ -7778,6 +7781,8 @@ app.get('/api/investments/active', protect, async (req, res) => {
     });
   }
 });
+
+
 
 
 
@@ -7844,13 +7849,3 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
-
