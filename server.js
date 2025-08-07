@@ -5050,52 +5050,6 @@ app.get('/api/transactions', protect, async (req, res) => {
 
 
 
-
-app.get('/api/investments', protect, async (req, res) => {
-  try {
-    // Always return an array, even if empty
-    const investments = await Investment.find({ 
-      user: req.user.id,
-      status: 'active'
-    }).populate('plan', 'name duration percentage');
-
-    // Transform data for frontend
-    const responseData = investments.map(inv => ({
-      id: inv._id,
-      plan: inv.plan?.name || 'No Plan',
-      amount: inv.amount,
-      duration: inv.plan?.duration || 0,
-      dailyROI: inv.plan ? (inv.plan.percentage / (inv.plan.duration / 24)).toFixed(2) : '0.00',
-      maturityDate: inv.endDate,
-      status: inv.status
-    }));
-
-    res.status(200).json({
-      success: true,
-      data: responseData  // Ensure this is always an array
-    });
-
-  } catch (error) {
-    console.error('Investment fetch error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to load investments',
-      data: []  // Return empty array on error
-    });
-  }
-});
-
-
-
-
-
-
-
-
-
-
-
-
 // Get BTC deposit address (matches frontend structure exactly)
 app.get('/api/deposits/btc-address', protect, async (req, res) => {
     try {
@@ -7904,6 +7858,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
