@@ -4911,7 +4911,6 @@ app.get('/api/users/balances', protect, async (req, res) => {
 
 
 
-// Add this to your server.js
 app.get('/api/mining', protect, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -4938,7 +4937,7 @@ app.get('/api/mining', protect, async (req, res) => {
         hashRate: "0 TH/s",
         btcMined: "0 BTC",
         miningPower: "0%",
-        estimatedDaily: "$0.00",
+        totalReturn: "$0.00",
         progress: 0
       };
       
@@ -4949,22 +4948,29 @@ app.get('/api/mining', protect, async (req, res) => {
       });
     }
 
-    // Calculate stats based on highest investment
-    const highestInvestment = activeInvestments.reduce((prev, current) => 
-      (prev.amount > current.amount) ? prev : current
-    );
-    
-    const plan = highestInvestment.plan;
-    const amountInvested = highestInvestment.amount;
-    const expectedReturn = highestInvestment.expectedReturn;
-    const startDate = highestInvestment.createdAt;
-    const endDate = highestInvestment.endDate;
-    
-    // Calculate progress (0-100)
-    const totalDuration = endDate - startDate;
-    const elapsed = Date.now() - startDate;
-    const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
-    
+    // Calculate total return from all active investments
+    let totalReturn = 0;
+    let totalInvestmentAmount = 0;
+    let highestInvestment = null;
+    let maxProgress = 0;
+
+    for (const investment of activeInvestments) {
+      const investmentReturn = investment.expectedReturn - investment.amount;
+      totalReturn += investmentReturn;
+      totalInvestmentAmount += investment.amount;
+
+      // Calculate progress for this investment
+      const totalDuration = investment.endDate - investment.createdAt;
+      const elapsed = Date.now() - investment.createdAt;
+      const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100);
+      
+      // Track the investment with highest progress
+      if (progress > maxProgress) {
+        maxProgress = progress;
+        highestInvestment = investment;
+      }
+    }
+
     // Get BTC price from CoinGecko
     let btcPrice = 60000; // Default if API fails
     try {
@@ -4974,26 +4980,17 @@ app.get('/api/mining', protect, async (req, res) => {
       console.error('CoinGecko API error:', error);
     }
 
-    // Calculate mining stats
-    const planMultiplier = {
-      'Starter Plan': 1,
-      'Gold Plan': 2,
-      'Advance Plan': 3,
-      'Exclusive Plan': 4,
-      'Expert Plan': 5
-    }[plan.name] || 1;
-    
-    const hashRate = (amountInvested * 0.1 * planMultiplier).toFixed(2);
-    const miningPower = Math.min(100, planMultiplier * 20).toFixed(2);
-    const dailyReturn = ((expectedReturn - amountInvested) / (plan.duration / 24)).toFixed(2);
-    const btcMined = (dailyReturn / btcPrice).toFixed(8);
+    // Calculate mining stats based on total investments
+    const hashRate = (totalInvestmentAmount * 0.1).toFixed(2);
+    const miningPower = Math.min(100, (totalInvestmentAmount / 10000) * 100).toFixed(2);
+    const btcMined = (totalReturn / btcPrice).toFixed(8);
     
     const miningData = {
       hashRate: `${hashRate} TH/s`,
       btcMined: `${btcMined} BTC`,
       miningPower: `${miningPower}%`,
-      estimatedDaily: `$${dailyReturn}`,
-      progress: parseFloat(progress.toFixed(2))
+      totalReturn: `$${totalReturn.toFixed(2)}`,
+      progress: parseFloat(maxProgress.toFixed(2))
     };
     
     // Cache for 5 minutes
@@ -7858,6 +7855,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
