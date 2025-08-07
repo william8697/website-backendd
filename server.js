@@ -7735,21 +7735,23 @@ app.post('/api/admin/settings/general',
 
 
 
-/**
- * GET /api/investments/active
- * Returns all active investments for the authenticated user
- */
-router.get('/investments/active', protect, async (req, res) => {
+
+
+app.get('/api/investments/active', protect, async (req, res) => {
   try {
-    // Check cache first
-    const cacheKey = `user:${req.user.id}:active_investments`;
-    const cachedData = await redis.get(cacheKey);
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
     
-    if (cachedData) {
-      return res.status(200).json({
-        status: 'success',
-        data: JSON.parse(cachedData)
-      });
+    // Cache key
+    const cacheKey = `user:${req.user.id}:investments:${page}:${limit}`;
+    
+    // Check cache first unless refresh is requested
+    if (!req.query.refresh) {
+      const cachedData = await redis.get(cacheKey);
+      if (cachedData) {
+        return res.json(JSON.parse(cachedData));
+      }
     }
     
     // Get active investments from database
@@ -7757,42 +7759,61 @@ router.get('/investments/active', protect, async (req, res) => {
       user: req.user.id,
       status: 'active'
     })
-    .populate('plan', 'name percentage durationHours')
-    .lean();
+    .sort({ endDate: 1 })
+    .skip(skip)
+    .limit(limit)
+    .populate('plan', 'name percentage duration');
     
-    // Format the response data
-    const formattedInvestments = investments.map(investment => ({
-      _id: investment._id,
-      planName: investment.plan?.name,
-      amount: investment.amount,
-      profitPercentage: investment.plan?.percentage || investment.expectedReturn / investment.amount * 100,
-      durationHours: investment.plan?.durationHours || 
-                   Math.ceil((investment.endDate - investment.startDate) / (1000 * 60 * 60)),
-      startDate: investment.startDate,
-      endDate: investment.endDate,
-      status: investment.status,
-      expectedReturn: investment.expectedReturn
-    }));
-    
-    // Cache the response for 5 minutes
-    await redis.set(cacheKey, JSON.stringify({ investments: formattedInvestments }), 'EX', 300);
-    
-    res.status(200).json({
-      status: 'success',
-      data: { investments: formattedInvestments }
+    const total = await Investment.countDocuments({
+      user: req.user.id,
+      status: 'active'
     });
     
-  } catch (error) {
-    console.error('Error fetching active investments:', error);
+    // Format response
+    const response = {
+      data: {
+        investments: investments.map(investment => ({
+          planName: investment.plan?.name || 'Unknown Plan',
+          amount: investment.amount,
+          profitPercentage: investment.plan?.percentage || 0,
+          durationHours: investment.plan?.duration || 0,
+          endDate: investment.endDate,
+          status: investment.status,
+          progressPercentage: calculateProgressPercentage(investment)
+        })),
+        totalPages: Math.ceil(total / limit)
+      }
+    };
+    
+    // Cache for 1 minute
+    await redis.set(cacheKey, JSON.stringify(response), 'EX', 60);
+    
+    res.json(response);
+  } catch (err) {
+    console.error('Error fetching active investments:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching active investments'
+      message: 'Failed to fetch active investments'
     });
   }
 });
 
-
-
+// Helper function to calculate investment progress
+function calculateProgressPercentage(investment) {
+  if (!investment.startDate || !investment.endDate) return 0;
+  
+  const now = new Date();
+  const start = new Date(investment.startDate);
+  const end = new Date(investment.endDate);
+  
+  if (now >= end) return 100;
+  if (now <= start) return 0;
+  
+  const totalDuration = end - start;
+  const elapsed = now - start;
+  
+  return Math.min(100, (elapsed / totalDuration) * 100);
+}
 
 
 
@@ -7860,4 +7881,5 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
