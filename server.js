@@ -4967,7 +4967,7 @@ app.get('/api/mining', protect, async (req, res) => {
       // Calculate progress for this investment
       const totalDuration = investment.endDate - investment.createdAt;
       const elapsed = Date.now() - investment.createdAt;
-      const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100);
+      const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
       maxProgress = Math.max(maxProgress, progress);
     }
 
@@ -7897,6 +7897,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
