@@ -7731,8 +7731,6 @@ app.post('/api/admin/settings/general',
 
 
 
-
-
 app.get('/api/investments/active', protect, async (req, res) => {
   try {
     // Get user's active investments with plan details
@@ -7740,7 +7738,7 @@ app.get('/api/investments/active', protect, async (req, res) => {
       user: req.user._id,
       status: 'active'
     })
-    .populate('plan', 'name duration percentage')
+    .populate('plan', 'name duration hourlyReturn')
     .lean();
 
     // Format the response to exactly match frontend expectations
@@ -7748,16 +7746,16 @@ app.get('/api/investments/active', protect, async (req, res) => {
       const maturityDate = investment.endDate || investment.maturityDate;
       const hoursLeft = Math.max(0, Math.ceil((maturityDate - new Date()) / (1000 * 60 * 60)));
       
-      // Get the return percentage from the investment or plan
-      const returnPercentage = investment.returnPercentage || 
-                             (investment.plan && investment.plan.percentage) || 
-                             0;
+      // Calculate hourly ROI - prioritize investment.hourlyROI, fallback to plan.hourlyReturn, then 0
+      const hourlyROI = investment.hourlyROI || 
+                     (investment.plan && investment.plan.hourlyReturn) || 
+                     0;
 
       return {
         planName: investment.plan?.name || 'Standard Plan',
         amount: investment.amount || 0,
-        duration: investment.duration || (investment.plan?.duration || 24), // Duration in hours
-        returnPercentage: parseFloat(returnPercentage.toFixed(2)),
+        duration: investment.duration || '24', // Default to 24 hours if not specified
+        hourlyROI: parseFloat(hourlyROI.toFixed(2)),
         endDate: maturityDate,
         status: investment.status,
         hoursRemaining: hoursLeft
@@ -7780,7 +7778,6 @@ app.get('/api/investments/active', protect, async (req, res) => {
     });
   }
 });
-
 
 
 
@@ -7847,6 +7844,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
