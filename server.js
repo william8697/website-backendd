@@ -7733,8 +7733,53 @@ app.post('/api/admin/settings/general',
 
 
 
+app.get('/api/investments/active', protect, async (req, res) => {
+  try {
+    // Get user's active investments with plan details
+    const investments = await Investment.find({
+      user: req.user._id,
+      status: 'active'
+    })
+    .populate('plan', 'name duration dailyReturn')
+    .lean();
 
+    // Format the response to exactly match frontend expectations
+    const formattedInvestments = investments.map(investment => {
+      const maturityDate = investment.endDate || investment.maturityDate;
+      const daysLeft = Math.max(0, Math.ceil((maturityDate - new Date()) / (1000 * 60 * 60 * 24)));
+      
+      // Calculate daily ROI - prioritize investment.dailyROI, fallback to plan.dailyReturn, then 0
+      const dailyROI = investment.dailyROI || 
+                     (investment.plan && investment.plan.dailyReturn) || 
+                     0;
 
+      return {
+        planName: investment.plan?.name || 'Standard Plan',
+        amount: investment.amount || 0,
+        duration: investment.duration || '30',
+        dailyROI: parseFloat(dailyROI.toFixed(2)),
+        endDate: maturityDate,
+        status: investment.status,
+        daysRemaining: daysLeft
+      };
+    });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        investments: formattedInvestments
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching active investments:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch active investments',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 
 
@@ -7804,6 +7849,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
