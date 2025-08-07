@@ -7666,6 +7666,148 @@ app.get('/api/admin/users/:id', adminProtect, restrictTo('super', 'support'), as
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+// Add to your routes section in server.js
+const Setting = mongoose.model('Setting', new mongoose.Schema({
+  key: { type: String, required: true, unique: true },
+  value: { type: mongoose.Schema.Types.Mixed, required: true },
+  lastUpdated: { type: Date, default: Date.now },
+  updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' }
+}));
+
+// GET General Settings - Strictly matches frontend expectations
+app.get('/api/admin/settings/general', adminProtect, restrictTo('super'), async (req, res) => {
+  try {
+    const settings = await Setting.find({
+      $or: [
+        { key: 'platformName' },
+        { key: 'platformUrl' },
+        { key: 'platformEmail' },
+        { key: 'platformCurrency' },
+        { key: 'maintenanceMode' },
+        { key: 'maintenanceMessage' }
+      ]
+    }).lean();
+
+    // Transform to exact structure frontend expects
+    const responseData = {
+      status: 'success',
+      data: {
+        settings: {
+          platformName: settings.find(s => s.key === 'platformName')?.value || 'BitHash',
+          platformUrl: settings.find(s => s.key === 'platformUrl')?.value || 'https://bithash.com',
+          platformEmail: settings.find(s => s.key === 'platformEmail')?.value || 'support@bithash.com',
+          platformCurrency: settings.find(s => s.key === 'platformCurrency')?.value || 'USD',
+          maintenanceMode: settings.find(s => s.key === 'maintenanceMode')?.value || false,
+          maintenanceMessage: settings.find(s => s.key === 'maintenanceMessage')?.value || 'Platform under maintenance'
+        }
+      }
+    };
+
+    res.status(200).json(responseData);
+  } catch (err) {
+    console.error('Error fetching general settings:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to retrieve general settings'
+    });
+  }
+});
+
+// POST General Settings - Strictly matches frontend form submission
+app.post('/api/admin/settings/general', adminProtect, restrictTo('super'), async (req, res) => {
+  try {
+    const { 
+      platformName,
+      platformUrl,
+      platformEmail,
+      platformCurrency,
+      maintenanceMode,
+      maintenanceMessage
+    } = req.body;
+
+    // Input validation
+    if (!platformName || !platformUrl || !platformEmail || !platformCurrency) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'All required fields must be provided'
+      });
+    }
+
+    // Update or create each setting atomically
+    const updatePromises = [
+      updateSetting('platformName', platformName, req.admin._id),
+      updateSetting('platformUrl', platformUrl, req.admin._id),
+      updateSetting('platformEmail', platformEmail, req.admin._id),
+      updateSetting('platformCurrency', platformCurrency, req.admin._id),
+      updateSetting('maintenanceMode', maintenanceMode === '1', req.admin._id),
+      updateSetting('maintenanceMessage', maintenanceMessage, req.admin._id)
+    ];
+
+    await Promise.all(updatePromises);
+
+    // Log the settings change
+    await SystemLog.create({
+      action: 'update_general_settings',
+      entity: 'Setting',
+      performedBy: req.admin._id,
+      performedByModel: 'Admin',
+      ip: req.ip,
+      device: req.headers['user-agent'],
+      changes: {
+        platformName,
+        platformUrl,
+        platformEmail,
+        platformCurrency,
+        maintenanceMode: maintenanceMode === '1'
+      }
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'General settings updated successfully'
+    });
+
+  } catch (err) {
+    console.error('Error updating general settings:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update general settings'
+    });
+  }
+});
+
+// Helper function to update settings
+async function updateSetting(key, value, adminId) {
+  return Setting.findOneAndUpdate(
+    { key },
+    { 
+      $set: { 
+        value,
+        lastUpdated: Date.now(),
+        updatedBy: adminId 
+      } 
+    },
+    { 
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: true 
+    }
+  );
+}
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -7728,6 +7870,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
