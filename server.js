@@ -7740,27 +7740,27 @@ app.get('/api/investments/active', protect, async (req, res) => {
       user: req.user._id,
       status: 'active'
     })
-    .populate('plan', 'name duration dailyReturn')
+    .populate('plan', 'name duration percentage')
     .lean();
 
     // Format the response to exactly match frontend expectations
     const formattedInvestments = investments.map(investment => {
       const maturityDate = investment.endDate || investment.maturityDate;
-      const daysLeft = Math.max(0, Math.ceil((maturityDate - new Date()) / (1000 * 60 * 60 * 24)));
+      const hoursLeft = Math.max(0, Math.ceil((maturityDate - new Date()) / (1000 * 60 * 60)));
       
-      // Calculate daily ROI - prioritize investment.dailyROI, fallback to plan.dailyReturn, then 0
-      const dailyROI = investment.dailyROI || 
-                     (investment.plan && investment.plan.dailyReturn) || 
-                     0;
+      // Get the return percentage from the investment or plan
+      const returnPercentage = investment.returnPercentage || 
+                             (investment.plan && investment.plan.percentage) || 
+                             0;
 
       return {
         planName: investment.plan?.name || 'Standard Plan',
         amount: investment.amount || 0,
-        duration: investment.duration || '30',
-        dailyROI: parseFloat(dailyROI.toFixed(2)),
+        duration: investment.duration || (investment.plan?.duration || 24), // Duration in hours
+        returnPercentage: parseFloat(returnPercentage.toFixed(2)),
         endDate: maturityDate,
         status: investment.status,
-        daysRemaining: daysLeft
+        hoursRemaining: hoursLeft
       };
     });
 
@@ -7780,8 +7780,6 @@ app.get('/api/investments/active', protect, async (req, res) => {
     });
   }
 });
-
-
 
 
 
@@ -7849,6 +7847,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
