@@ -4916,12 +4916,17 @@ app.get('/api/mining', protect, async (req, res) => {
     const userId = req.user.id;
     const cacheKey = `mining-stats:${userId}`;
     
-    // Try to get cached data first
+    // Try to get cached data first (shorter cache time for real-time feel)
     const cachedData = await redis.get(cacheKey);
     if (cachedData) {
+      const parsedData = JSON.parse(cachedData);
+      // Add small random fluctuations to cached values for realism
+      parsedData.hashRate = fluctuateValue(parsedData.hashRate, 5); // ±5% fluctuation
+      parsedData.miningPower = fluctuateValue(parsedData.miningPower, 3); // ±3% fluctuation
+      parsedData.btcMined = fluctuateValue(parsedData.btcMined, 1); // ±1% fluctuation
       return res.status(200).json({
         status: 'success',
-        data: JSON.parse(cachedData)
+        data: parsedData
       });
     }
 
@@ -4938,20 +4943,20 @@ app.get('/api/mining', protect, async (req, res) => {
         btcMined: "0 BTC",
         miningPower: "0%",
         totalReturn: "$0.00",
-        progress: 0
+        progress: 0,
+        lastUpdated: new Date().toISOString()
       };
       
-      await redis.set(cacheKey, JSON.stringify(defaultData), 'EX', 300);
+      await redis.set(cacheKey, JSON.stringify(defaultData), 'EX', 60); // Cache for 1 minute
       return res.status(200).json({
         status: 'success',
         data: defaultData
       });
     }
 
-    // Calculate total return from all active investments
+    // Calculate base values
     let totalReturn = 0;
     let totalInvestmentAmount = 0;
-    let highestInvestment = null;
     let maxProgress = 0;
 
     for (const investment of activeInvestments) {
@@ -4962,17 +4967,12 @@ app.get('/api/mining', protect, async (req, res) => {
       // Calculate progress for this investment
       const totalDuration = investment.endDate - investment.createdAt;
       const elapsed = Date.now() - investment.createdAt;
-      const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
-      
-      // Track the investment with highest progress
-      if (progress > maxProgress) {
-        maxProgress = progress;
-        highestInvestment = investment;
-      }
+      const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100);
+      maxProgress = Math.max(maxProgress, progress);
     }
 
     // Get BTC price from CoinGecko
-    let btcPrice = 60000; // Default if API fails
+    let btcPrice = 60000;
     try {
       const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
       btcPrice = response.data.bitcoin.usd;
@@ -4980,21 +4980,44 @@ app.get('/api/mining', protect, async (req, res) => {
       console.error('CoinGecko API error:', error);
     }
 
-    // Calculate mining stats based on total investments
-    const hashRate = (totalInvestmentAmount * 0.1).toFixed(2);
-    const miningPower = Math.min(100, (totalInvestmentAmount / 10000) * 100).toFixed(2);
-    const btcMined = (totalReturn / btcPrice).toFixed(8);
+    // Base calculations
+    const baseHashRate = totalInvestmentAmount * 0.1;
+    const baseMiningPower = Math.min(100, (totalInvestmentAmount / 10000) * 100);
+    const baseBtcMined = totalReturn / btcPrice;
+
+    // Apply realistic fluctuations
+    const currentTime = Date.now();
+    const timeFactor = Math.sin(currentTime / 60000); // Fluctuates every minute
     
+    // Hash rate fluctuates more dramatically
+    const hashRateFluctuation = 0.05 * timeFactor + (Math.random() * 0.1 - 0.05);
+    const hashRate = baseHashRate * (1 + hashRateFluctuation);
+    
+    // Mining power has smaller fluctuations
+    const miningPowerFluctuation = 0.02 * timeFactor + (Math.random() * 0.04 - 0.02);
+    const miningPower = baseMiningPower * (1 + miningPowerFluctuation);
+    
+    // BTC mined has very small incremental changes
+    const btcMined = baseBtcMined * (1 + (Math.random() * 0.01 - 0.005));
+
+    // Simulate network difficulty changes
+    const networkFactor = 1 + (Math.sin(currentTime / 300000) * 0.1); // Changes every 5 minutes
+    const adjustedHashRate = hashRate / networkFactor;
+    const adjustedMiningPower = miningPower / networkFactor;
+
     const miningData = {
-      hashRate: `${hashRate} TH/s`,
-      btcMined: `${btcMined} BTC`,
-      miningPower: `${miningPower}%`,
+      hashRate: `${adjustedHashRate.toFixed(2)} TH/s`,
+      btcMined: `${btcMined.toFixed(8)} BTC`,
+      miningPower: `${Math.min(100, adjustedMiningPower).toFixed(2)}%`,
       totalReturn: `$${totalReturn.toFixed(2)}`,
-      progress: parseFloat(maxProgress.toFixed(2))
+      progress: parseFloat(maxProgress.toFixed(2)),
+      lastUpdated: new Date().toISOString(),
+      networkDifficulty: networkFactor.toFixed(2),
+      workersOnline: Math.floor(3 + Math.random() * 3) // Random workers between 3-5
     };
     
-    // Cache for 5 minutes
-    await redis.set(cacheKey, JSON.stringify(miningData), 'EX', 300);
+    // Cache for 1 minute (shorter cache for more real-time feel)
+    await redis.set(cacheKey, JSON.stringify(miningData), 'EX', 60);
     
     res.status(200).json({
       status: 'success',
@@ -5009,6 +5032,25 @@ app.get('/api/mining', protect, async (req, res) => {
     });
   }
 });
+
+// Helper function to add fluctuations to cached values
+function fluctuateValue(valueStr, percent) {
+  const numericValue = parseFloat(valueStr);
+  const fluctuation = (Math.random() * percent * 2 - percent) / 100; // ±percent%
+  const newValue = numericValue * (1 + fluctuation);
+  
+  // Preserve units if they exist
+  if (valueStr.endsWith(' TH/s')) {
+    return `${newValue.toFixed(2)} TH/s`;
+  }
+  if (valueStr.endsWith(' BTC')) {
+    return `${newValue.toFixed(8)} BTC`;
+  }
+  if (valueStr.endsWith('%')) {
+    return `${Math.min(100, newValue).toFixed(2)}%`;
+  }
+  return valueStr; // Return original if no known unit
+}
 
 
 
@@ -7855,6 +7897,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
