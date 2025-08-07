@@ -7736,7 +7736,6 @@ app.post('/api/admin/settings/general',
 
 
 
-
 app.get('/api/investments/active', protect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -7754,7 +7753,7 @@ app.get('/api/investments/active', protect, async (req, res) => {
       }
     }
     
-    // Get active investments from database
+    // Get active investments with plan details
     const investments = await Investment.find({
       user: req.user.id,
       status: 'active'
@@ -7762,30 +7761,71 @@ app.get('/api/investments/active', protect, async (req, res) => {
     .sort({ endDate: 1 })
     .skip(skip)
     .limit(limit)
-    .populate('plan', 'name percentage duration');
+    .populate({
+      path: 'plan',
+      select: 'name percentage duration minAmount maxAmount referralBonus'
+    })
+    .lean(); // Convert to plain JS objects
     
     const total = await Investment.countDocuments({
       user: req.user.id,
       status: 'active'
     });
     
+    // Calculate additional fields for each investment
+    const now = new Date();
+    const enhancedInvestments = investments.map(investment => {
+      const startDate = new Date(investment.startDate);
+      const endDate = new Date(investment.endDate);
+      
+      // Calculate time remaining
+      const timeLeftMs = Math.max(0, endDate - now);
+      const timeLeftHours = Math.ceil(timeLeftMs / (1000 * 60 * 60));
+      
+      // Calculate progress percentage
+      const totalDurationMs = endDate - startDate;
+      const elapsedMs = now - startDate;
+      const progressPercentage = totalDurationMs > 0 
+        ? Math.min(100, (elapsedMs / totalDurationMs) * 100)
+        : 0;
+      
+      // Get ROI percentage from plan
+      const roiPercentage = investment.plan?.percentage || 0;
+      
+      // Calculate expected profit
+      const expectedProfit = investment.amount * (roiPercentage / 100);
+      
+      return {
+        id: investment._id,
+        planName: investment.plan?.name || 'Unknown Plan',
+        amount: investment.amount,
+        profitPercentage: roiPercentage,
+        durationHours: investment.plan?.duration || 0,
+        startDate: investment.startDate,
+        endDate: investment.endDate,
+        status: investment.status,
+        timeLeftHours,
+        progressPercentage,
+        expectedProfit,
+        planDetails: {
+          minAmount: investment.plan?.minAmount,
+          maxAmount: investment.plan?.maxAmount,
+          referralBonus: investment.plan?.referralBonus
+        }
+      };
+    });
+    
     // Format response
     const response = {
       data: {
-        investments: investments.map(investment => ({
-          planName: investment.plan?.name || 'Unknown Plan',
-          amount: investment.amount,
-          profitPercentage: investment.plan?.percentage || 0,
-          durationHours: investment.plan?.duration || 0,
-          endDate: investment.endDate,
-          status: investment.status,
-          progressPercentage: calculateProgressPercentage(investment)
-        })),
-        totalPages: Math.ceil(total / limit)
+        investments: enhancedInvestments,
+        totalPages: Math.ceil(total / limit),
+        currentPage: page,
+        totalInvestments: total
       }
     };
     
-    // Cache for 1 minute
+    // Cache for 1 minute (adjust based on your requirements)
     await redis.set(cacheKey, JSON.stringify(response), 'EX', 60);
     
     res.json(response);
@@ -7793,28 +7833,11 @@ app.get('/api/investments/active', protect, async (req, res) => {
     console.error('Error fetching active investments:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch active investments'
+      message: 'Failed to fetch active investments',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 });
-
-// Helper function to calculate investment progress
-function calculateProgressPercentage(investment) {
-  if (!investment.startDate || !investment.endDate) return 0;
-  
-  const now = new Date();
-  const start = new Date(investment.startDate);
-  const end = new Date(investment.endDate);
-  
-  if (now >= end) return 100;
-  if (now <= start) return 0;
-  
-  const totalDuration = end - start;
-  const elapsed = now - start;
-  
-  return Math.min(100, (elapsed / totalDuration) * 100);
-}
-
 
 
 
@@ -7881,5 +7904,6 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
