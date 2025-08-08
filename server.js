@@ -5871,219 +5871,6 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
 
 
 
-
-/**
- * @api {get} /api/admin/activity Get Admin Activity Log
- * @apiName GetAdminActivity
- * @apiGroup Admin
- * @apiPermission super
- * @apiDescription Retrieves a comprehensive activity log with user details from User schema and location data from UserTracking schema
- * 
- * @apiSuccess {String} status success
- * @apiSuccess {Object} data Activity log data
- * @apiSuccess {Object[]} data.activities Array of activity records
- * @apiSuccess {String} data.activities.timestamp Activity timestamp
- * @apiSuccess {Object} data.activities.user User information
- * @apiSuccess {String} data.activities.user.firstName User first name
- * @apiSuccess {String} data.activities.user.lastName User last name
- * @apiSuccess {String} data.activities.user.type User type (user/admin/system)
- * @apiSuccess {String} data.activities.user.email User email (if available)
- * @apiSuccess {String} data.activities.action Activity description
- * @apiSuccess {String} data.activities.ipAddress IP address
- * @apiSuccess {String} data.activities.status Activity status
- * @apiSuccess {String} data.activities.details Additional details
- * @apiSuccess {String} data.activities.entityType Entity type
- */
-app.get('/api/admin/activity', adminProtect, restrictTo('super'), async (req, res) => {
-  try {
-    // Set default pagination parameters
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 100;
-    const skip = (page - 1) * limit;
-
-    // Build base query for relevant activities
-    const baseQuery = {
-      $or: [
-        { performedByModel: { $in: ['Admin', 'User'] } },
-        { entity: { $in: ['admin', 'user', 'auth', 'transaction'] } }
-      ]
-    };
-
-    // Add date filtering if provided
-    if (req.query.startDate && req.query.endDate) {
-      baseQuery.createdAt = {
-        $gte: new Date(req.query.startDate),
-        $lte: new Date(req.query.endDate)
-      };
-    }
-
-    // Add action type filtering if provided
-    if (req.query.actionType) {
-      baseQuery.action = req.query.actionType;
-    }
-
-    // Get total count for pagination
-    const total = await SystemLog.countDocuments(baseQuery);
-
-    // Get activities with pagination and sorting
-    const activities = await SystemLog.find(baseQuery)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
-
-    // Enhanced user resolution with caching
-    const formattedActivities = await Promise.all(activities.map(async (activity) => {
-      // Initialize default user object for system activities
-      let userObj = {
-        firstName: 'System',
-        lastName: '',
-        type: 'system'
-      };
-
-      // Try to resolve user details from reference if available
-      if (activity.performedByRef) {
-        try {
-          // Check cache first
-          const cacheKey = `user:${activity.performedByRef}:${activity.performedByModel}`;
-          const cachedUser = await redis.get(cacheKey);
-          
-          if (cachedUser) {
-            userObj = JSON.parse(cachedUser);
-          } else {
-            // Resolve from appropriate collection based on performedByModel
-            if (activity.performedByModel === 'User') {
-              const user = await User.findById(activity.performedByRef)
-                .select('firstName lastName email')
-                .lean();
-              
-              if (user) {
-                userObj = {
-                  firstName: user.firstName || 'User',
-                  lastName: user.lastName || '',
-                  type: 'user',
-                  email: user.email
-                };
-              }
-            } else if (activity.performedByModel === 'Admin') {
-              const admin = await Admin.findById(activity.performedByRef)
-                .select('name email')
-                .lean();
-              
-              if (admin?.name) {
-                const nameParts = admin.name.split(' ');
-                userObj = {
-                  firstName: nameParts[0],
-                  lastName: nameParts.slice(1).join(' ') || '',
-                  type: 'admin',
-                  email: admin.email
-                };
-              }
-            }
-            
-            // Cache resolved user for 1 hour
-            await redis.set(cacheKey, JSON.stringify(userObj), 'EX', 3600);
-          }
-        } catch (dbErr) {
-          console.warn(`Failed to fetch user ${activity.performedByRef}:`, dbErr.message);
-        }
-      }
-      // For auth events without reference, try to identify by IP
-      else if (activity.ip && ['login', 'logout', 'signup'].includes(activity.action)) {
-        userObj = {
-          firstName: `IP: ${activity.ip}`,
-          lastName: '',
-          type: 'auth'
-        };
-      }
-
-      // Get location data from UserTracking if available
-      let locationData = {};
-      if (activity.ip && activity.ip !== '127.0.0.1') {
-        try {
-          const trackingRecord = await UserTracking.findOne({ ipAddress: activity.ip })
-            .select('ipCountry ipRegion ipCity')
-            .sort({ timestamp: -1 })
-            .lean();
-          
-          if (trackingRecord) {
-            locationData = {
-              country: trackingRecord.ipCountry,
-              region: trackingRecord.ipRegion,
-              city: trackingRecord.ipCity
-            };
-          }
-        } catch (trackingErr) {
-          console.warn('Failed to fetch location data:', trackingErr.message);
-        }
-      }
-
-      // Format action description with relevant details
-      let actionDesc = activity.action;
-      const amountInfo = activity.amount ? ` (${activity.amount} ${activity.currency || ''})` : '';
-      
-      const actionMap = {
-        login: 'Login',
-        logout: 'Logout',
-        signup: 'Registration',
-        deposit: `Deposit${amountInfo}`,
-        withdrawal: `Withdrawal${amountInfo}`,
-        password_reset: 'Password Reset',
-        profile_update: 'Profile Update',
-        investment_create: 'Investment Created',
-        transaction_create: 'Transaction Created'
-      };
-
-      return {
-        timestamp: activity.createdAt,
-        user: userObj,
-        action: actionMap[activity.action] || activity.action,
-        ipAddress: activity.ip || 'Not recorded',
-        status: activity.status || 'success',
-        details: activity.details || null,
-        entityType: activity.entity || activity.performedByModel || 'system',
-        location: locationData,
-        metadata: activity.metadata || {}
-      };
-    }));
-
-    // Cache the response for 5 minutes
-    const cacheKey = `admin:activity:${JSON.stringify(req.query)}`;
-    await redis.set(cacheKey, JSON.stringify({
-      activities: formattedActivities,
-      pagination: {
-        total,
-        page,
-        pages: Math.ceil(total / limit),
-        limit
-      }
-    }), 'EX', 300);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        activities: formattedActivities,
-        pagination: {
-          total,
-          page,
-          pages: Math.ceil(total / limit),
-          limit
-        }
-      }
-    });
-
-  } catch (err) {
-    console.error('Error fetching activity logs:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Internal server error',
-      ...(process.env.NODE_ENV === 'development' && { debug: err.message })
-    });
-  }
-});
-
-
-
 // Add this route in your server.js file after all the model definitions but before the error handlers
 app.get('/api/admin/transactions/deposits', adminProtect, restrictTo('finance', 'super'), async (req, res) => {
   try {
@@ -7522,132 +7309,6 @@ app.post('/api/admin/users/:userId/balance',
 
 
 
-// Add this route after your other routes but before error handlers
-app.post('/api/tracking', [
-  body('type').isIn(['device_info', 'gps_update']).withMessage('Invalid tracking type'),
-  body('data').isObject().withMessage('Data must be an object'),
-  body('timestamp').isISO8601().withMessage('Invalid timestamp format'),
-  body('page').isURL().withMessage('Invalid page URL')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { type, data, timestamp, page } = req.body;
-    
-    // Don't track if Do Not Track is enabled
-    if (data.doNotTrack === '1') {
-      return res.status(200).json({
-        status: 'success',
-        message: 'Tracking not stored due to Do Not Track preference'
-      });
-    }
-
-    // Generate a session ID if not provided (from cookies or headers)
-    const sessionId = req.cookies.sessionId || req.headers['x-session-id'] || crypto.randomBytes(16).toString('hex');
-    
-    // Set session cookie if not already set
-    if (!req.cookies.sessionId) {
-      res.cookie('sessionId', sessionId, {
-        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict'
-      });
-    }
-
-    // Try to get user ID if authenticated
-    let userId = null;
-    try {
-      if (req.cookies.jwt || req.headers.authorization) {
-        const token = req.cookies.jwt || req.headers.authorization.split(' ')[1];
-        const decoded = verifyJWT(token);
-        userId = decoded.id;
-      }
-    } catch (err) {
-      // JWT verification failed - proceed without user ID
-      console.log('JWT verification failed for tracking:', err.message);
-    }
-
-    // Prepare tracking data
-    const trackingData = {
-      sessionId,
-      user: userId,
-      pageUrl: page,
-      referrer: req.headers.referer || '',
-      timestamp: new Date(timestamp)
-    };
-
-    // Handle different tracking types
-    if (type === 'device_info') {
-      Object.assign(trackingData, {
-        userAgent: data.userAgent,
-        platform: data.platform,
-        screenWidth: data.screenWidth,
-        screenHeight: data.screenHeight,
-        colorDepth: data.colorDepth,
-        timezone: data.timezone,
-        language: data.language,
-        cookiesEnabled: data.cookiesEnabled,
-        doNotTrack: data.doNotTrack,
-        hardwareConcurrency: data.hardwareConcurrency,
-        deviceMemory: data.deviceMemory,
-        touchSupport: data.touchSupport,
-        browserName: data.browserName,
-        browserVersion: data.browserVersion,
-        os: data.os,
-        deviceType: data.deviceType,
-        ipAddress: data.ipAddress,
-        ipCountry: data.ipCountry,
-        ipRegion: data.ipRegion,
-        ipCity: data.ipCity
-      });
-    } else if (type === 'gps_update') {
-      Object.assign(trackingData, {
-        ipAddress: data.ipAddress,
-        gpsLocation: data.gpsLocation,
-        gpsError: data.gpsError
-      });
-
-      // For GPS updates, we should find and update the existing session record
-      const existingSession = await UserTracking.findOne({ sessionId }).sort({ timestamp: -1 });
-      if (existingSession) {
-        existingSession.gpsLocation = data.gpsLocation;
-        existingSession.gpsError = data.gpsError;
-        await existingSession.save();
-        return res.status(200).json({
-          status: 'success',
-          message: 'GPS data updated'
-        });
-      }
-    }
-
-    // Create new tracking record
-    await UserTracking.create(trackingData);
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Tracking data stored'
-    });
-
-    // Log the activity if we have a user
-    if (userId) {
-      await logActivity('tracking', 'user-tracking', null, userId, 'User', req, { type });
-    }
-  } catch (err) {
-    console.error('Tracking error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while storing tracking data'
-    });
-  }
-});
-
 
 
 
@@ -8165,7 +7826,229 @@ const trackFailedLogin = async (req, res, next) => {
 
 
 
+app.get('/api/admin/activity', adminProtect, restrictTo('super'), async (req, res) => {
+  try {
+    // Track admin access to activity logs
+    await logActivity('view_activity_logs', 'admin', null, req.admin._id, 'Admin', req);
 
+    // Set default pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 100;
+    const skip = (page - 1) * limit;
+
+    // Build base query for relevant activities
+    const baseQuery = {
+      $or: [
+        { performedByModel: { $in: ['Admin', 'User'] } },
+        { entity: { $in: ['admin', 'user', 'auth', 'transaction'] } }
+      ]
+    };
+
+    // Add date filtering if provided
+    if (req.query.startDate && req.query.endDate) {
+      baseQuery.createdAt = {
+        $gte: new Date(req.query.startDate),
+        $lte: new Date(req.query.endDate)
+      };
+    }
+
+    // Add action type filtering if provided
+    if (req.query.actionType) {
+      baseQuery.action = req.query.actionType;
+    }
+
+    // Add user filtering if provided
+    if (req.query.userId) {
+      baseQuery.performedBy = mongoose.Types.ObjectId(req.query.userId);
+    }
+
+    // Add IP filtering if provided
+    if (req.query.ipAddress) {
+      baseQuery.ip = req.query.ipAddress;
+    }
+
+    // Get total count for pagination
+    const total = await SystemLog.countDocuments(baseQuery);
+
+    // Get activities with pagination and sorting
+    const activities = await SystemLog.find(baseQuery)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Enhanced user resolution with caching
+    const formattedActivities = await Promise.all(activities.map(async (activity) => {
+      // Initialize default user object for system activities
+      let userObj = {
+        firstName: 'System',
+        lastName: '',
+        type: 'system'
+      };
+
+      // Try to resolve user details from reference if available
+      if (activity.performedBy) {
+        try {
+          // Check cache first
+          const cacheKey = `user:${activity.performedBy}:${activity.performedByModel}`;
+          const cachedUser = await redis.get(cacheKey);
+          
+          if (cachedUser) {
+            userObj = JSON.parse(cachedUser);
+          } else {
+            // Resolve from appropriate collection based on performedByModel
+            if (activity.performedByModel === 'User') {
+              const user = await User.findById(activity.performedBy)
+                .select('firstName lastName email status')
+                .lean();
+              
+              if (user) {
+                userObj = {
+                  id: user._id,
+                  firstName: user.firstName || 'User',
+                  lastName: user.lastName || '',
+                  type: 'user',
+                  email: user.email,
+                  status: user.status
+                };
+              }
+            } else if (activity.performedByModel === 'Admin') {
+              const admin = await Admin.findById(activity.performedBy)
+                .select('name email role')
+                .lean();
+              
+              if (admin?.name) {
+                const nameParts = admin.name.split(' ');
+                userObj = {
+                  id: admin._id,
+                  firstName: nameParts[0],
+                  lastName: nameParts.slice(1).join(' ') || '',
+                  type: 'admin',
+                  email: admin.email,
+                  role: admin.role
+                };
+              }
+            }
+            
+            // Cache resolved user for 1 hour
+            if (userObj.id) {
+              await redis.set(cacheKey, JSON.stringify(userObj), 'EX', 3600);
+            }
+          }
+        } catch (dbErr) {
+          console.warn(`Failed to fetch user ${activity.performedBy}:`, dbErr.message);
+        }
+      }
+
+      // Get location data from UserTracking if available
+      let locationData = {};
+      if (activity.ip && activity.ip !== '127.0.0.1') {
+        try {
+          const trackingRecord = await UserTracking.findOne({ ipAddress: activity.ip })
+            .select('ipCountry ipRegion ipCity')
+            .sort({ timestamp: -1 })
+            .lean();
+          
+          if (trackingRecord) {
+            locationData = {
+              country: trackingRecord.ipCountry,
+              region: trackingRecord.ipRegion,
+              city: trackingRecord.ipCity
+            };
+          } else {
+            // Fallback to IP info API if not in our tracking records
+            try {
+              const response = await axios.get(`https://ipinfo.io/${activity.ip}?token=${process.env.IPINFO_TOKEN}`);
+              locationData = {
+                country: response.data.country,
+                region: response.data.region,
+                city: response.data.city
+              };
+            } catch (ipErr) {
+              console.warn('Failed to fetch IP info:', ipErr.message);
+            }
+          }
+        } catch (trackingErr) {
+          console.warn('Failed to fetch location data:', trackingErr.message);
+        }
+      }
+
+      // Format action description with relevant details
+      let actionDesc = activity.action;
+      const amountInfo = activity.changes?.amount ? ` (${activity.changes.amount} ${activity.changes.currency || ''})` : '';
+      
+      const actionMap = {
+        login: 'Login',
+        logout: 'Logout',
+        signup: 'Registration',
+        deposit: `Deposit${amountInfo}`,
+        withdrawal: `Withdrawal${amountInfo}`,
+        password_reset: 'Password Reset',
+        profile_update: 'Profile Update',
+        investment_create: 'Investment Created',
+        transaction_create: 'Transaction Created',
+        view_activity_logs: 'Viewed Activity Logs',
+        admin_login: 'Admin Login',
+        user_update: 'User Updated'
+      };
+
+      return {
+        id: activity._id,
+        timestamp: activity.createdAt,
+        user: userObj,
+        action: actionMap[activity.action] || activity.action,
+        actionType: activity.action,
+        ipAddress: activity.ip || 'Not recorded',
+        status: activity.status || 'success',
+        details: activity.changes || activity.details || null,
+        entityType: activity.entity || activity.performedByModel || 'system',
+        location: locationData,
+        metadata: activity.metadata || {},
+        device: activity.device || 'Unknown'
+      };
+    }));
+
+    // Cache the response for 5 minutes
+    const cacheKey = `admin:activity:${JSON.stringify(req.query)}`;
+    await redis.set(cacheKey, JSON.stringify({
+      activities: formattedActivities,
+      pagination: {
+        total,
+        page,
+        pages: Math.ceil(total / limit),
+        limit
+      }
+    }), 'EX', 300);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        activities: formattedActivities,
+        pagination: {
+          total,
+          page,
+          pages: Math.ceil(total / limit),
+          limit
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error('Error fetching activity logs:', err);
+    
+    // Track the error
+    await logActivity('activity_log_error', 'system', null, req.admin._id, 'Admin', req, {
+      error: err.message,
+      query: req.query
+    });
+
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error',
+      ...(process.env.NODE_ENV === 'development' && { debug: err.message })
+    });
+  }
+});
 
 
 
@@ -8243,5 +8126,6 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
