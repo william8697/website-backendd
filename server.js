@@ -3811,19 +3811,6 @@ app.post('/api/investments', protect, [
   }
 });
 
-// Helper function to determine device type
-function getDeviceType(req) {
-  const userAgent = req.headers['user-agent'];
-  if (/mobile/i.test(userAgent)) {
-    return 'mobile';
-  } else if (/tablet/i.test(userAgent)) {
-    return 'tablet';
-  } else if (/iPad|Android|Touch/i.test(userAgent)) {
-    return 'tablet';
-  } else {
-    return 'desktop';
-  }
-}
 
 app.get('/api/transactions', protect, async (req, res) => {
   try {
@@ -8256,3 +8243,4 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
