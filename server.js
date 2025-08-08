@@ -273,55 +273,83 @@ UserSchema.index({ createdAt: -1 });
 const User = mongoose.model('User', UserSchema);
 
 
-// Add this to your schema definitions (before the module.exports)
-const UserTrackingSchema = new mongoose.Schema({
-  user: { 
-    type: mongoose.Schema.Types.ObjectId, 
+// User Log Schema
+const UserLogSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    index: true 
+    required: true,
+    index: true
   },
-  sessionId: { type: String, required: true, index: true },
-  userAgent: { type: String },
-  platform: { type: String },
-  screenWidth: { type: Number },
-  screenHeight: { type: Number },
-  colorDepth: { type: Number },
-  timezone: { type: String },
-  language: { type: String },
-  cookiesEnabled: { type: Boolean },
-  doNotTrack: { type: String },
-  hardwareConcurrency: { type: String },
-  deviceMemory: { type: String },
-  touchSupport: { type: Boolean },
-  browserName: { type: String },
-  browserVersion: { type: String },
-  os: { type: String },
-  deviceType: { type: String },
-  ipAddress: { type: String },
-  ipCountry: { type: String },
-  ipRegion: { type: String },
-  ipCity: { type: String },
-  gpsLocation: {
-    latitude: { type: Number },
-    longitude: { type: Number },
-    accuracy: { type: Number },
-    timestamp: { type: Date }
+  username: {
+    type: String,
+    required: true,
+    index: true
   },
-  gpsError: { type: String },
-  pageUrl: { type: String },
-  referrer: { type: String },
-  timestamp: { type: Date, default: Date.now, index: true }
+  email: {
+    type: String,
+    index: true
+  },
+  action: {
+    type: String,
+    required: true,
+    enum: [
+      'signup', 'login', 'logout', 'profile_update', 'password_change',
+      '2fa_enable', '2fa_disable', 'deposit', 'withdrawal', 'investment',
+      'transfer', 'kyc_submission', 'settings_change', 'api_key_create',
+      'api_key_delete', 'device_login', 'password_reset_request',
+      'password_reset_complete', 'email_verification', 'account_deletion',
+      'session_timeout', 'failed_login', 'suspicious_activity'
+    ],
+    index: true
+  },
+  ipAddress: {
+    type: String,
+    required: true
+  },
+  userAgent: String,
+  deviceInfo: {
+    type: {
+      type: String,
+      enum: ['desktop', 'mobile', 'tablet', 'unknown']
+    },
+    os: String,
+    browser: String
+  },
+  location: {
+    country: String,
+    region: String,
+    city: String,
+    timezone: String
+  },
+  status: {
+    type: String,
+    enum: ['success', 'failed', 'pending'],
+    default: 'success'
+  },
+  metadata: {
+    type: mongoose.Schema.Types.Mixed
+  },
+  relatedEntity: {
+    type: mongoose.Schema.Types.ObjectId,
+    refPath: 'relatedEntityModel'
+  },
+  relatedEntityModel: {
+    type: String,
+    enum: ['User', 'Transaction', 'Investment', 'KYC', 'Plan', 'Loan']
+  }
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
 });
 
-UserTrackingSchema.index({ user: 1, timestamp: -1 });
-UserTrackingSchema.index({ ipAddress: 1 });
-UserTrackingSchema.index({ deviceType: 1 });
+// Indexes for faster querying
+UserLogSchema.index({ user: 1, action: 1 });
+UserLogSchema.index({ createdAt: -1 });
+UserLogSchema.index({ action: 1, status: 1 });
 
-const UserTracking = mongoose.model('UserTracking', UserTrackingSchema);
+const UserLog = mongoose.model('UserLog', UserLogSchema);
 
 // Chat Support Models
 const ChatConversationSchema = new mongoose.Schema({
@@ -1929,7 +1957,7 @@ const checkCSRF = (req, res, next) => {
 
 
 
-// User Authentication
+// User Signup with Comprehensive Tracking
 app.post('/api/signup', [
   body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
   body('lastName').trim().notEmpty().withMessage('Last name is required').escape(),
@@ -1944,6 +1972,12 @@ app.post('/api/signup', [
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
+    // Track failed validation attempt
+    await logUserActivity(req, 'signup_attempt', 'failed', {
+      error: 'Validation failed',
+      fields: errors.array().map(err => err.param)
+    });
+    
     return res.status(400).json({
       status: 'fail',
       errors: errors.array()
@@ -1953,9 +1987,21 @@ app.post('/api/signup', [
   try {
     const { firstName, lastName, email, password, city, referredBy } = req.body;
 
+    // Track signup attempt
+    await logUserActivity(req, 'signup_attempt', 'pending', {
+      email,
+      hasReferredBy: !!referredBy
+    });
+
     // Check if email already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
+      // Track duplicate email attempt
+      await logUserActivity(req, 'signup_attempt', 'failed', {
+        error: 'Email already in use',
+        email
+      });
+      
       return res.status(400).json({
         status: 'fail',
         message: 'Email already in use'
@@ -1969,6 +2015,12 @@ app.post('/api/signup', [
     if (referredBy) {
       referredByUser = await User.findOne({ referralCode: referredBy });
       if (!referredByUser) {
+        // Track invalid referral attempt
+        await logUserActivity(req, 'signup_attempt', 'failed', {
+          error: 'Invalid referral code',
+          referralCode: referredBy
+        });
+        
         return res.status(400).json({
           status: 'fail',
           message: 'Invalid referral code'
@@ -1988,6 +2040,13 @@ app.post('/api/signup', [
 
     const token = generateJWT(newUser._id);
 
+    // Track successful signup
+    await logUserActivity(req, 'signup', 'success', {
+      userId: newUser._id,
+      referralUsed: !!referredByUser,
+      referralSource: referredByUser ? referredByUser._id : 'organic'
+    }, newUser);
+
     // Send welcome email
     const welcomeMessage = `Welcome to BitHash, ${firstName}! Your account has been successfully created.`;
     await sendEmail({
@@ -1997,12 +2056,25 @@ app.post('/api/signup', [
       html: `<p>${welcomeMessage}</p>`
     });
 
+    // Track email sent
+    await logUserActivity(req, 'welcome_email_sent', 'success', {
+      email: newUser.email,
+      userId: newUser._id
+    });
+
     // Set cookie
     res.cookie('jwt', token, {
       expires: new Date(Date.now() + JWT_COOKIE_EXPIRES * 24 * 60 * 60 * 1000),
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict'
+    });
+
+    // Track session creation
+    await logUserActivity(req, 'session_created', 'success', {
+      userId: newUser._id,
+      sessionType: 'jwt',
+      rememberMe: false // First login is always session cookie
     });
 
     res.status(201).json({
@@ -2018,9 +2090,18 @@ app.post('/api/signup', [
       }
     });
 
-    await logActivity('signup', 'user', newUser._id, newUser._id, 'User', req);
+    // Track successful response
+    await logActivity('signup_complete', 'user', newUser._id, newUser._id, 'User', req);
+
   } catch (err) {
     console.error('Signup error:', err);
+    
+    // Track signup error
+    await logUserActivity(req, 'signup_error', 'failed', {
+      error: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+
     res.status(500).json({
       status: 'error',
       message: 'An error occurred during signup'
@@ -2028,6 +2109,7 @@ app.post('/api/signup', [
   }
 });
 
+// User Login with Comprehensive Tracking
 app.post('/api/login', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
   body('password').notEmpty().withMessage('Password is required'),
@@ -2035,6 +2117,12 @@ app.post('/api/login', [
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
+    // Track failed validation
+    await logUserActivity(req, 'login_attempt', 'failed', {
+      error: 'Validation failed',
+      fields: errors.array().map(err => err.param)
+    });
+    
     return res.status(400).json({
       status: 'fail',
       errors: errors.array()
@@ -2044,8 +2132,20 @@ app.post('/api/login', [
   try {
     const { email, password, rememberMe } = req.body;
 
+    // Track login attempt
+    await logUserActivity(req, 'login_attempt', 'pending', {
+      email,
+      rememberMe: !!rememberMe
+    });
+
     const user = await User.findOne({ email }).select('+password +twoFactorAuth.secret');
     if (!user || !(await bcrypt.compare(password, user.password))) {
+      // Track failed login
+      await logUserActivity(req, 'login_attempt', 'failed', {
+        error: 'Invalid credentials',
+        email
+      });
+      
       return res.status(401).json({
         status: 'fail',
         message: 'Incorrect email or password'
@@ -2053,6 +2153,13 @@ app.post('/api/login', [
     }
 
     if (user.status !== 'active') {
+      // Track login to suspended account
+      await logUserActivity(req, 'login_attempt', 'failed', {
+        error: 'Account suspended',
+        userId: user._id,
+        status: user.status
+      });
+      
       return res.status(401).json({
         status: 'fail',
         message: 'Your account has been suspended. Please contact support.'
@@ -2067,12 +2174,29 @@ app.post('/api/login', [
     user.loginHistory.push(deviceInfo);
     await user.save();
 
+    // Track device info
+    await logUserActivity(req, 'device_login', 'success', {
+      deviceType: getDeviceType(req),
+      ipAddress: deviceInfo.ip,
+      location: deviceInfo.location,
+      os: getOSFromUserAgent(req.headers['user-agent']),
+      browser: getBrowserFromUserAgent(req.headers['user-agent'])
+    }, user);
+
     // Set cookie
     res.cookie('jwt', token, {
       expires: rememberMe ? new Date(Date.now() + JWT_COOKIE_EXPIRES * 24 * 60 * 60 * 1000) : undefined,
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict'
+    });
+
+    // Track session creation
+    await logUserActivity(req, 'session_created', 'success', {
+      userId: user._id,
+      sessionType: 'jwt',
+      rememberMe: !!rememberMe,
+      duration: rememberMe ? JWT_COOKIE_EXPIRES + ' days' : 'session'
     });
 
     const responseData = {
@@ -2092,20 +2216,39 @@ app.post('/api/login', [
     if (user.twoFactorAuth.enabled) {
       responseData.twoFactorRequired = true;
       responseData.message = 'Two-factor authentication required';
+      
+      // Track 2FA required
+      await logUserActivity(req, '2fa_required', 'pending', {
+        userId: user._id
+      }, user);
+    } else {
+      // Track successful login
+      await logUserActivity(req, 'login', 'success', {
+        userId: user._id,
+        rememberMe: !!rememberMe
+      }, user);
     }
 
     res.status(200).json(responseData);
 
-    await logActivity('login', 'user', user._id, user._id, 'User', req);
+    // Also log to system activity
+    await logActivity('user_login', 'user', user._id, user._id, 'User', req);
+
   } catch (err) {
     console.error('Login error:', err);
+    
+    // Track login error
+    await logUserActivity(req, 'login_error', 'failed', {
+      error: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+
     res.status(500).json({
       status: 'error',
       message: 'An error occurred during login'
     });
   }
 });
-
 app.post('/api/auth/verify-2fa', [
   body('token').notEmpty().withMessage('Token is required'),
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
@@ -7835,6 +7978,222 @@ app.get('/api/investments/active', protect, async (req, res) => {
 
 
 
+
+
+// Enhanced activity logger with device and location info
+const logUserActivity = async (req, action, status = 'success', metadata = {}, relatedEntity = null) => {
+  try {
+    // Skip logging if no user is associated (like during signup)
+    if (!req.user && !(action === 'signup' || action === 'login' || action === 'password_reset_request')) {
+      return;
+    }
+
+    // Get device and location info
+    const deviceInfo = await getUserDeviceInfo(req);
+    
+    // Prepare log data
+    const logData = {
+      user: req.user?._id || null,
+      username: req.user?.email || (action === 'signup' ? req.body.email : 'unknown'),
+      email: req.user?.email || (action === 'signup' ? req.body.email : null),
+      action,
+      ipAddress: deviceInfo.ip,
+      userAgent: deviceInfo.device,
+      deviceInfo: {
+        type: getDeviceType(req),
+        os: getOSFromUserAgent(req.headers['user-agent']),
+        browser: getBrowserFromUserAgent(req.headers['user-agent'])
+      },
+      location: {
+        country: deviceInfo.location?.split(', ')[2] || 'Unknown',
+        region: deviceInfo.location?.split(', ')[1] || 'Unknown',
+        city: deviceInfo.location?.split(', ')[0] || 'Unknown',
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      },
+      status,
+      metadata,
+      ...(relatedEntity && {
+        relatedEntity: relatedEntity._id || relatedEntity,
+        relatedEntityModel: relatedEntity.constructor.modelName
+      })
+    };
+
+    // Create the log
+    await UserLog.create(logData);
+
+    // Also add to system logs for admin viewing
+    await SystemLog.create({
+      action,
+      entity: 'User',
+      entityId: req.user?._id || null,
+      performedBy: req.user?._id || null,
+      performedByModel: req.user ? 'User' : 'System',
+      ip: deviceInfo.ip,
+      device: deviceInfo.device,
+      location: deviceInfo.location,
+      changes: metadata
+    });
+
+  } catch (err) {
+    console.error('Error logging user activity:', err);
+    // Fail silently to not disrupt user experience
+  }
+};
+
+// Helper functions for device detection
+const getDeviceType = (req) => {
+  const userAgent = req.headers['user-agent'];
+  if (/mobile/i.test(userAgent)) return 'mobile';
+  if (/tablet/i.test(userAgent)) return 'tablet';
+  if (/iPad|Android|Touch/i.test(userAgent)) return 'tablet';
+  return 'desktop';
+};
+
+const getOSFromUserAgent = (userAgent) => {
+  if (!userAgent) return 'Unknown';
+  if (/windows/i.test(userAgent)) return 'Windows';
+  if (/macintosh|mac os x/i.test(userAgent)) return 'MacOS';
+  if (/linux/i.test(userAgent)) return 'Linux';
+  if (/android/i.test(userAgent)) return 'Android';
+  if (/iphone|ipad|ipod/i.test(userAgent)) return 'iOS';
+  return 'Unknown';
+};
+
+const getBrowserFromUserAgent = (userAgent) => {
+  if (!userAgent) return 'Unknown';
+  if (/edg/i.test(userAgent)) return 'Edge';
+  if (/chrome/i.test(userAgent)) return 'Chrome';
+  if (/safari/i.test(userAgent)) return 'Safari';
+  if (/firefox/i.test(userAgent)) return 'Firefox';
+  if (/opera|opr/i.test(userAgent)) return 'Opera';
+  return 'Unknown';
+};
+
+
+
+
+
+
+
+// Middleware to track user activity on protected routes
+const trackUserActivity = (action, options = {}) => {
+  return async (req, res, next) => {
+    try {
+      // Call next first to let the route handler process the request
+      await next();
+      
+      // Only log if the request was successful (2xx status)
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        let metadata = {};
+        let relatedEntity = null;
+        
+        // Custom metadata extraction based on action
+        switch (action) {
+          case 'profile_update':
+            metadata = {
+              fields: Object.keys(req.body).filter(key => 
+                !key.toLowerCase().includes('password')
+              )
+            };
+            break;
+            
+          case 'deposit':
+          case 'withdrawal':
+          case 'transfer':
+            relatedEntity = res.locals.transaction || req.body;
+            metadata = {
+              amount: req.body.amount,
+              currency: req.body.currency || 'USD',
+              method: req.body.method
+            };
+            break;
+            
+          case 'investment':
+            relatedEntity = res.locals.investment || req.body;
+            metadata = {
+              plan: req.body.planId,
+              amount: req.body.amount
+            };
+            break;
+            
+          case 'kyc_submission':
+            metadata = {
+              type: req.body.type,
+              status: 'pending'
+            };
+            break;
+        }
+        
+        // Merge with any additional metadata from options
+        if (options.metadata) {
+          metadata = { ...metadata, ...options.metadata };
+        }
+        
+        await logUserActivity(req, action, 'success', metadata, relatedEntity);
+      }
+    } catch (err) {
+      console.error('Activity tracking middleware error:', err);
+      // Don't interrupt the request flow if tracking fails
+    }
+  };
+};
+
+// Middleware to track failed login attempts
+const trackFailedLogin = async (req, res, next) => {
+  try {
+    await next();
+    
+    // If login failed (unauthorized)
+    if (res.statusCode === 401) {
+      await logUserActivity(req, 'failed_login', 'failed', {
+        email: req.body.email,
+        reason: res.locals.failReason || 'Invalid credentials'
+      });
+    }
+  } catch (err) {
+    console.error('Failed login tracking error:', err);
+  }
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -7897,11 +8256,3 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
