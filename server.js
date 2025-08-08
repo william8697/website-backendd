@@ -8132,7 +8132,28 @@ app.post('/api/withdrawals/btc', protect, [
 
 
 
+// Get withdrawal history
+app.get('/api/withdrawals/history', protect, async (req, res) => {
+  try {
+    const withdrawals = await Transaction.find({
+      user: req.user.id,
+      type: 'withdrawal'
+    })
+    .sort({ createdAt: -1 })
+    .limit(10);
 
+    res.status(200).json({
+      status: 'success',
+      data: withdrawals
+    });
+  } catch (err) {
+    console.error('Get withdrawal history error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching withdrawal history'
+    });
+  }
+});
 
 
 
@@ -8205,3 +8226,4 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
