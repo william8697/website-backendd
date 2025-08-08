@@ -8140,11 +8140,12 @@ app.get('/api/withdrawals/history', protect, async (req, res) => {
       type: 'withdrawal'
     })
     .sort({ createdAt: -1 })
-    .limit(10);
+    .limit(10)
+    .lean(); // Convert to plain JavaScript objects
 
     res.status(200).json({
       status: 'success',
-      data: withdrawals
+      data: withdrawals // Directly return the array
     });
   } catch (err) {
     console.error('Get withdrawal history error:', err);
@@ -8154,9 +8155,6 @@ app.get('/api/withdrawals/history', protect, async (req, res) => {
     });
   }
 });
-
-
-
 
 
 
@@ -8226,4 +8224,5 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
