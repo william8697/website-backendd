@@ -1612,7 +1612,7 @@ module.exports = {
   Card,
   SupportTicket,
    ChatMessage,
-  UserTracking,
+ UserLog,
   ChatConversation,
   setupWebSocketServer
 };
@@ -8243,4 +8243,5 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
