@@ -8056,6 +8056,85 @@ app.get('/api/admin/activity', adminProtect, restrictTo('super'), async (req, re
 
 
 
+// BTC Withdrawal Endpoint
+app.post('/api/withdrawals/btc', protect, [
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
+  body('walletAddress').notEmpty().withMessage('BTC wallet address is required')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { amount, walletAddress } = req.body;
+    const user = await User.findById(req.user.id);
+
+    // Check if user has sufficient balance
+    if (user.balances.main < amount) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Insufficient balance for withdrawal'
+      });
+    }
+
+    // Calculate withdrawal fee (1% of amount)
+    const fee = amount * 0.01;
+    const netAmount = amount - fee;
+
+    // Create transaction record
+    const reference = `BTC-WTH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const transaction = await Transaction.create({
+      user: req.user.id,
+      type: 'withdrawal',
+      amount,
+      currency: 'USD',
+      status: 'pending',
+      method: 'btc',
+      reference,
+      fee,
+      netAmount,
+      btcAddress: walletAddress,
+      details: `BTC withdrawal to address ${walletAddress}`
+    });
+
+    // Deduct from user's balance
+    user.balances.main -= amount;
+    await user.save();
+
+    // In a real implementation, you would initiate the BTC transfer here
+    // For now, we'll just simulate it with a transaction ID
+    const txId = `btc-${crypto.randomBytes(8).toString('hex')}`;
+
+    res.status(201).json({
+      status: 'success',
+      data: {
+        transaction,
+        txId
+      }
+    });
+
+    await logActivity('btc-withdrawal', 'transaction', transaction._id, user._id, 'User', req, { amount, walletAddress });
+  } catch (err) {
+    console.error('BTC withdrawal error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while processing BTC withdrawal'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
 
 
 
@@ -8126,6 +8205,3 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
