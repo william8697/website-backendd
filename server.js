@@ -3573,7 +3573,7 @@ app.get('/api/transactions', protect, async (req, res) => {
       message: 'An error occurred while fetching transactions'
     });
   }
-});" 
+});
 
 
 
@@ -7954,6 +7954,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
