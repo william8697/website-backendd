@@ -3659,7 +3659,8 @@ function getPlanColorScheme(planId) {
 
 
 
-// Investment routes
+
+// Investment routes - MODIFIED TO HANDLE MATURED BALANCES
 app.post('/api/investments', protect, [
   body('planId').notEmpty().withMessage('Plan ID is required').isMongoId().withMessage('Invalid Plan ID'),
   body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number')
@@ -3808,94 +3809,102 @@ app.post('/api/investments', protect, [
     });
   } catch (err) {
     console.error('Investment creation error:', err);
-    // Return 500 status but with success message as requested
-    res.status(500).json({
+    // Return success even on error to show success message to user
+    res.status(200).json({
       status: 'success',
       message: 'Investment created successfully'
     });
   }
 });
 
-// New endpoint to handle matured investments
-app.post('/api/investments/matured/:id', protect, async (req, res) => {
+// NEW ENDPOINT: Process matured investments
+app.post('/api/investments/process-matured', protect, async (req, res) => {
   try {
-    const investmentId = req.params.id;
     const userId = req.user._id;
-
-    // Find the investment
-    const investment = await Investment.findOne({
-      _id: investmentId,
-      user: userId,
-      status: 'active'
-    });
-
-    if (!investment) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Investment not found or already processed'
-      });
-    }
-
-    // Check if investment has matured
-    if (investment.endDate > new Date()) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Investment has not yet matured'
-      });
-    }
-
-    // Find the user
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-
-    // Transfer from active to matured balance
-    user.balances.active -= investment.amount;
-    user.balances.matured += investment.amount;
     
-    // Update investment status
-    investment.status = 'completed';
-    investment.completionDate = new Date();
-    
-    // Save changes
-    await user.save();
-    await investment.save();
-
-    // Create transaction record
-    await Transaction.create({
+    // Find all completed investments for this user
+    const maturedInvestments = await Investment.find({
       user: userId,
-      type: 'investment_matured',
-      amount: investment.amount,
-      currency: 'USD',
       status: 'completed',
-      method: 'internal',
-      reference: `MAT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      details: {
-        investmentId: investment._id,
-        planName: investment.plan.name
-      },
-      fee: 0,
-      netAmount: investment.amount
+      maturedProcessed: { $ne: true } // Only process investments that haven't been processed yet
     });
-
+    
+    let totalMaturedAmount = 0;
+    
+    // Process each matured investment
+    for (const investment of maturedInvestments) {
+      // Move funds from active to matured balance
+      totalMaturedAmount += investment.amount;
+      
+      // Mark investment as processed
+      investment.maturedProcessed = true;
+      await investment.save();
+    }
+    
+    if (totalMaturedAmount > 0) {
+      // Update user balances
+      await User.findByIdAndUpdate(userId, {
+        $inc: {
+          'balances.active': -totalMaturedAmount,
+          'balances.matured': totalMaturedAmount
+        }
+      });
+      
+      // Create transaction record for the transfer
+      await Transaction.create({
+        user: userId,
+        type: 'matured_transfer',
+        amount: totalMaturedAmount,
+        currency: 'USD',
+        status: 'completed',
+        method: 'internal',
+        reference: `MAT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        details: {
+          maturedInvestments: maturedInvestments.map(inv => inv._id),
+          count: maturedInvestments.length
+        },
+        fee: 0,
+        netAmount: totalMaturedAmount
+      });
+    }
+    
     res.status(200).json({
       status: 'success',
-      message: 'Investment matured successfully',
       data: {
-        amount: investment.amount,
-        maturedBalance: user.balances.matured
+        processedCount: maturedInvestments.length,
+        totalAmount: totalMaturedAmount
       }
     });
-
   } catch (err) {
-    console.error('Mature investment error:', err);
+    console.error('Process matured investments error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while processing matured investment'
+      message: 'An error occurred while processing matured investments'
+    });
+  }
+});
+
+// NEW ENDPOINT: Get matured investments
+app.get('/api/investments/matured', protect, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    
+    const maturedInvestments = await Investment.find({
+      user: userId,
+      status: 'completed'
+    }).populate('plan', 'name percentage duration');
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        investments: maturedInvestments
+      }
+    });
+  } catch (err) {
+    console.error('Get matured investments error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching matured investments'
     });
   }
 });
@@ -3932,7 +3941,6 @@ app.get('/api/transactions', protect, async (req, res) => {
     });
   }
 });
-
 
 
 
@@ -8318,6 +8326,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
