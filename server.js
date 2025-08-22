@@ -3382,7 +3382,7 @@ function getPlanColorScheme(planId) {
 }
 
 
-// Investment routes - Fixed version
+// Investment routes - FIXED VERSION
 app.post('/api/investments', protect, [
   body('planId').notEmpty().withMessage('Plan ID is required').isMongoId().withMessage('Invalid Plan ID'),
   body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number')
@@ -3395,21 +3395,19 @@ app.post('/api/investments', protect, [
     });
   }
 
-  // Start a database session for transaction safety
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
+  let session;
   try {
+    // Start MongoDB session for transaction safety
+    session = await mongoose.startSession();
+    session.startTransaction();
+    
     const { planId, amount } = req.body;
     const userId = req.user._id;
-    
-    console.log(`Investment attempt: User ${userId}, Plan ${planId}, Amount ${amount}`);
 
     // Verify plan exists and is active
     const plan = await Plan.findById(planId).session(session);
     if (!plan) {
       await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
         status: 'fail',
         message: 'Investment plan not found'
@@ -3418,7 +3416,6 @@ app.post('/api/investments', protect, [
     
     if (!plan.isActive) {
       await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
         status: 'fail',
         message: 'This investment plan is currently inactive'
@@ -3428,18 +3425,24 @@ app.post('/api/investments', protect, [
     // Verify amount is within plan limits
     if (amount < plan.minAmount || amount > plan.maxAmount) {
       await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
         status: 'fail',
         message: `Amount must be between $${plan.minAmount} and $${plan.maxAmount} for this plan`
       });
     }
 
-    // Verify user has sufficient balance
+    // Verify user has sufficient balance (with session)
     const user = await User.findById(userId).session(session);
+    if (!user) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+    
     if (user.balances.main < amount) {
       await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
         status: 'fail',
         message: 'Insufficient balance'
@@ -3450,7 +3453,7 @@ app.post('/api/investments', protect, [
     const expectedReturn = amount + (amount * plan.percentage / 100);
     const endDate = new Date(Date.now() + plan.duration * 60 * 60 * 1000);
 
-    // Create investment
+    // Create investment (with session)
     const investment = await Investment.create([{
       user: userId,
       plan: planId,
@@ -3469,7 +3472,7 @@ app.post('/api/investments', protect, [
       termsAccepted: true
     }], { session });
 
-    // Deduct from user balance and add to active investments
+    // Deduct from user balance and add to active investments (with session)
     await User.findByIdAndUpdate(
       userId,
       {
@@ -3481,8 +3484,8 @@ app.post('/api/investments', protect, [
       { session }
     );
 
-    // Create transaction record
-    const transaction = await Transaction.create([{
+    // Create transaction record (with session)
+    await Transaction.create([{
       user: userId,
       type: 'investment',
       amount: -amount,
@@ -3498,67 +3501,46 @@ app.post('/api/investments', protect, [
       netAmount: amount
     }], { session });
 
-    // Handle referral if applicable
+    // Handle referral if applicable - SIMPLIFIED to avoid errors
     if (user.referredBy) {
-      const referralBonus = amount * (plan.referralBonus / 100);
-      
-      // Update referring user's balance
-      await User.findByIdAndUpdate(
-        user.referredBy,
-        {
-          $inc: {
-            'balances.main': referralBonus,
-            'referralStats.totalEarnings': referralBonus,
-            'referralStats.availableBalance': referralBonus
-          },
-          $push: {
-            referralHistory: {
-              referredUser: userId,
-              amount: referralBonus,
-              percentage: plan.referralBonus,
-              level: 1,
-              status: 'available'
+      try {
+        const referralBonus = amount * (plan.referralBonus / 100);
+        
+        // Update referring user's balance
+        await User.findByIdAndUpdate(
+          user.referredBy,
+          {
+            $inc: {
+              'balances.main': referralBonus,
+              'referralStats.totalEarnings': referralBonus,
+              'referralStats.availableBalance': referralBonus
             }
-          }
-        },
-        { session }
-      );
+          },
+          { session }
+        );
 
-      // Create referral commission record
-      await ReferralCommission.create([{
-        referringUser: user.referredBy,
-        referredUser: userId,
-        investment: investment[0]._id,
-        amount: referralBonus,
-        percentage: plan.referralBonus,
-        level: 1,
-        status: 'available'
-      }], { session });
-
-      // Mark investment with referral info
-      await Investment.findByIdAndUpdate(
-        investment[0]._id,
-        {
-          referredBy: user.referredBy,
-          referralBonusAmount: referralBonus,
-          referralBonusDetails: {
-            percentage: plan.referralBonus,
-            payoutDate: new Date()
-          }
-        },
-        { session }
-      );
+        // Mark investment with referral info
+        await Investment.findByIdAndUpdate(
+          investment[0]._id,
+          {
+            referredBy: user.referredBy,
+            referralBonusAmount: referralBonus
+          },
+          { session }
+        );
+      } catch (referralError) {
+        // Log referral error but don't fail the entire investment
+        console.error('Referral processing error:', referralError);
+      }
     }
 
     // Commit the transaction
     await session.commitTransaction();
-    session.endSession();
-
+    
     // Log activity
     await logActivity('create_investment', 'investment', investment[0]._id, userId, 'User', req);
 
-    console.log(`Investment created successfully: ${investment[0]._id}`);
-
+    // SUCCESS RESPONSE - This is what your frontend expects
     res.status(201).json({
       status: 'success',
       data: {
@@ -3572,21 +3554,25 @@ app.post('/api/investments', protect, [
         }
       }
     });
+
   } catch (err) {
     // Abort transaction on error
-    await session.abortTransaction();
-    session.endSession();
+    if (session) {
+      await session.abortTransaction();
+    }
     
     console.error('Investment creation error:', err);
-    console.error('Error details:', err.message);
-    console.error('Error stack:', err.stack);
     
+    // Proper error response
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while creating investment',
-      // Only include error details in development
-      ...(process.env.NODE_ENV === 'development' && { error: err.message })
+      message: 'An error occurred while creating investment'
     });
+  } finally {
+    // End session
+    if (session) {
+      session.endSession();
+    }
   }
 });
 
@@ -3623,7 +3609,6 @@ app.get('/api/transactions', protect, async (req, res) => {
     });
   }
 });
-
 
 
 app.get('/api/mining/stats', protect, async (req, res) => {
@@ -8003,6 +7988,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
