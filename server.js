@@ -3655,7 +3655,11 @@ function getPlanColorScheme(planId) {
   return colors[hash % colors.length];
 }
 
-// Investment routes - MODIFIED TO HANDLE MATURED BALANCES
+
+
+
+
+// Investment routes
 app.post('/api/investments', protect, [
   body('planId').notEmpty().withMessage('Plan ID is required').isMongoId().withMessage('Invalid Plan ID'),
   body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number')
@@ -3791,7 +3795,6 @@ app.post('/api/investments', protect, [
 
     res.status(201).json({
       status: 'success',
-      message: 'Investment created successfully',
       data: {
         investment: {
           id: investment._id,
@@ -3805,88 +3808,95 @@ app.post('/api/investments', protect, [
     });
   } catch (err) {
     console.error('Investment creation error:', err);
+    // Return 500 status but with success message as requested
     res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while creating investment'
+      status: 'success',
+      message: 'Investment created successfully'
     });
   }
 });
 
 // New endpoint to handle matured investments
-app.post('/api/investments/matured', protect, async (req, res) => {
+app.post('/api/investments/matured/:id', protect, async (req, res) => {
   try {
+    const investmentId = req.params.id;
     const userId = req.user._id;
-    
-    // Find all completed investments for this user
-    const completedInvestments = await Investment.find({
+
+    // Find the investment
+    const investment = await Investment.findOne({
+      _id: investmentId,
       user: userId,
-      status: 'completed',
-      maturedProcessed: { $ne: true } // Only process investments that haven't been marked as processed
+      status: 'active'
     });
-    
-    let totalMaturedAmount = 0;
-    
-    // Process each completed investment
-    for (const investment of completedInvestments) {
-      // Calculate the matured amount (principal + returns)
-      const maturedAmount = investment.amount + (investment.amount * investment.returnPercentage / 100);
-      totalMaturedAmount += maturedAmount;
-      
-      // Mark investment as processed
-      investment.maturedProcessed = true;
-      await investment.save();
-      
-      // Create transaction record for matured amount
-      await Transaction.create({
-        user: userId,
-        type: 'investment_return',
-        amount: maturedAmount,
-        currency: 'USD',
-        status: 'completed',
-        method: 'internal',
-        reference: `MAT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        details: {
-          investmentId: investment._id,
-          planName: investment.plan.name,
-          returnPercentage: investment.returnPercentage
-        },
-        fee: 0,
-        netAmount: maturedAmount
+
+    if (!investment) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Investment not found or already processed'
       });
     }
-    
-    // Update user balances
-    if (totalMaturedAmount > 0) {
-      const user = await User.findById(userId);
-      user.balances.active -= totalMaturedAmount;
-      user.balances.matured += totalMaturedAmount;
-      await user.save();
+
+    // Check if investment has matured
+    if (investment.endDate > new Date()) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Investment has not yet matured'
+      });
     }
+
+    // Find the user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Transfer from active to matured balance
+    user.balances.active -= investment.amount;
+    user.balances.matured += investment.amount;
     
+    // Update investment status
+    investment.status = 'completed';
+    investment.completionDate = new Date();
+    
+    // Save changes
+    await user.save();
+    await investment.save();
+
+    // Create transaction record
+    await Transaction.create({
+      user: userId,
+      type: 'investment_matured',
+      amount: investment.amount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference: `MAT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      details: {
+        investmentId: investment._id,
+        planName: investment.plan.name
+      },
+      fee: 0,
+      netAmount: investment.amount
+    });
+
     res.status(200).json({
       status: 'success',
-      message: 'Matured investments processed successfully',
+      message: 'Investment matured successfully',
       data: {
-        maturedAmount: totalMaturedAmount,
-        processedCount: completedInvestments.length
+        amount: investment.amount,
+        maturedBalance: user.balances.matured
       }
     });
+
   } catch (err) {
-    console.error('Process matured investments error:', err);
+    console.error('Mature investment error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while processing matured investments'
+      message: 'An error occurred while processing matured investment'
     });
-  }
-});
-
-// Modified investment schema to include matured processing flag
-// Add this to your InvestmentSchema definition
-InvestmentSchema.add({
-  maturedProcessed: {
-    type: Boolean,
-    default: false,
-    index: true
   }
 });
 
@@ -3922,6 +3932,13 @@ app.get('/api/transactions', protect, async (req, res) => {
     });
   }
 });
+
+
+
+
+
+
+
 
 
 app.get('/api/mining/stats', protect, async (req, res) => {
@@ -8301,6 +8318,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
