@@ -1339,7 +1339,6 @@ module.exports = {
   Loan,
   KYC,
   SystemLog,
-  NewsletterSubscriber,
   Card,
   SupportTicket,
    ChatMessage,
@@ -7954,6 +7953,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
