@@ -8257,7 +8257,198 @@ app.get('/api/withdrawals/history', protect, async (req, res) => {
 
 
 
+// Admin endpoint to cancel an investment and return funds to user's main balance
+app.post('/api/admin/investments/:id/cancel', adminProtect, restrictTo('super', 'finance'), async (req, res) => {
+  try {
+    const investmentId = req.params.id;
+    
+    // Find the investment and populate user data
+    const investment = await Investment.findById(investmentId)
+      .populate('user', 'balances');
+    
+    if (!investment) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Investment not found'
+      });
+    }
+    
+    // Check if investment is already cancelled or completed
+    if (investment.status === 'cancelled') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Investment is already cancelled'
+      });
+    }
+    
+    if (investment.status === 'completed') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Cannot cancel a completed investment'
+      });
+    }
+    
+    const user = await User.findById(investment.user._id);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+    
+    // Calculate refund amount (original investment amount)
+    const refundAmount = investment.amount;
+    
+    // Return funds from active balance to main balance
+    user.balances.active -= refundAmount;
+    user.balances.main += refundAmount;
+    
+    // Update investment status
+    investment.status = 'cancelled';
+    investment.statusHistory.push({
+      status: 'cancelled',
+      changedAt: new Date(),
+      changedBy: req.admin._id,
+      changedByModel: 'Admin',
+      reason: req.body.reason || 'Admin cancelled investment'
+    });
+    
+    // Save changes
+    await user.save();
+    await investment.save();
+    
+    // Create transaction record for the refund
+    const transaction = await Transaction.create({
+      user: investment.user._id,
+      type: 'refund',
+      amount: refundAmount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference: `REF-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      details: {
+        investmentId: investment._id,
+        planName: investment.plan.name,
+        reason: req.body.reason || 'Admin cancelled investment'
+      },
+      fee: 0,
+      netAmount: refundAmount,
+      processedBy: req.admin._id,
+      processedAt: new Date()
+    });
+    
+    // Add notification for user
+    user.notifications.push({
+      title: 'Investment Cancelled',
+      message: `Your investment in ${investment.plan.name} has been cancelled. $${refundAmount} has been returned to your main balance.`,
+      type: 'info'
+    });
+    
+    await user.save();
+    
+    res.status(200).json({
+      status: 'success',
+      message: 'Investment cancelled successfully',
+      data: {
+        investment: {
+          id: investment._id,
+          status: investment.status,
+          cancelledAt: new Date()
+        },
+        refund: {
+          amount: refundAmount,
+          transactionId: transaction._id
+        }
+      }
+    });
+    
+    // Log admin activity
+    await logActivity('cancel_investment', 'investment', investment._id, req.admin._id, 'Admin', req, {
+      refundAmount,
+      reason: req.body.reason
+    });
+    
+  } catch (err) {
+    console.error('Cancel investment error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while cancelling the investment'
+    });
+  }
+});
 
+// Admin endpoint to get all investments with filtering options
+app.get('/api/admin/investments', adminProtect, restrictTo('super', 'finance', 'support'), async (req, res) => {
+  try {
+    const { page = 1, limit = 20, status, userId, planId, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+    const skip = (page - 1) * limit;
+    
+    // Build query
+    const query = {};
+    if (status) query.status = status;
+    if (userId) query.user = userId;
+    if (planId) query.plan = planId;
+    
+    // Build sort object
+    const sort = {};
+    sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
+    
+    const investments = await Investment.find(query)
+      .populate('user', 'firstName lastName email')
+      .populate('plan', 'name percentage duration')
+      .sort(sort)
+      .skip(skip)
+      .limit(parseInt(limit));
+    
+    const total = await Investment.countDocuments(query);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        investments,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (err) {
+    console.error('Get investments error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching investments'
+    });
+  }
+});
+
+// Admin endpoint to get specific investment details
+app.get('/api/admin/investments/:id', adminProtect, restrictTo('super', 'finance', 'support'), async (req, res) => {
+  try {
+    const investment = await Investment.findById(req.params.id)
+      .populate('user', 'firstName lastName email phone country')
+      .populate('plan', 'name percentage duration minAmount maxAmount')
+      .populate('referredBy', 'firstName lastName email');
+    
+    if (!investment) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Investment not found'
+      });
+    }
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        investment
+      }
+    });
+  } catch (err) {
+    console.error('Get investment error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching the investment'
+    });
+  }
+});
 
 
 
@@ -8323,6 +8514,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
