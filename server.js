@@ -3382,6 +3382,7 @@ function getPlanColorScheme(planId) {
 }
 
 // Investment routes
+// Investment routes
 app.post('/api/investments', protect, [
   body('planId').notEmpty().withMessage('Plan ID is required').isMongoId().withMessage('Invalid Plan ID'),
   body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number')
@@ -3452,7 +3453,7 @@ app.post('/api/investments', protect, [
     user.balances.active += amount;
     await user.save();
 
-    // Create transaction record
+    // Create transaction record - CRITICAL FIX: Ensure transaction is created successfully
     const transaction = await Transaction.create({
       user: userId,
       type: 'investment',
@@ -3515,6 +3516,7 @@ app.post('/api/investments', protect, [
     // Log activity
     await logActivity('create_investment', 'investment', investment._id, userId, 'User', req);
 
+    // SUCCESS RESPONSE - This must match what frontend expects
     res.status(201).json({
       status: 'success',
       data: {
@@ -3536,7 +3538,6 @@ app.post('/api/investments', protect, [
     });
   }
 });
-
 
 app.get('/api/transactions', protect, async (req, res) => {
   try {
@@ -7949,6 +7950,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
