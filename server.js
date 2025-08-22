@@ -351,6 +351,72 @@ UserLogSchema.index({ action: 1, status: 1 });
 
 const UserLog = mongoose.model('UserLog', UserLogSchema);
 
+// Chat Support Models
+const ChatConversationSchema = new mongoose.Schema({
+  user: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User', 
+    required: [true, 'User is required'],
+    index: true
+  },
+  admin: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Admin',
+    index: true
+  },
+  status: { 
+    type: String, 
+    enum: ['open', 'closed', 'pending'], 
+    default: 'open',
+    index: true
+  },
+  lastMessage: { type: Date },
+  unreadCount: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now }
+}, { 
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+ChatConversationSchema.virtual('messages', {
+  ref: 'ChatMessage',
+  localField: '_id',
+  foreignField: 'conversation'
+});
+
+const ChatMessageSchema = new mongoose.Schema({
+  conversation: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'ChatConversation', 
+    required: [true, 'Conversation is required'],
+    index: true
+  },
+  sender: { 
+    type: String, 
+    enum: ['user', 'admin'], 
+    required: [true, 'Sender type is required']
+  },
+  senderId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    required: [true, 'Sender ID is required']
+  },
+  message: { 
+    type: String, 
+    required: [true, 'Message is required'],
+    trim: true
+  },
+  read: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+ChatMessageSchema.index({ conversation: 1, createdAt: -1 });
+
+const ChatConversation = mongoose.model('ChatConversation', ChatConversationSchema);
+const ChatMessage = mongoose.model('ChatMessage', ChatMessageSchema);
 
 
 const SystemSettingsSchema = new mongoose.Schema({
@@ -896,9 +962,103 @@ TransactionSchema.index({ createdAt: -1 });
 const Transaction = mongoose.model('Transaction', TransactionSchema);
 
 
+const SupportTicketSchema = new mongoose.Schema({
+    user: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'User', 
+        required: [true, 'User is required'],
+        index: true
+    },
+    subject: { 
+        type: String, 
+        required: [true, 'Subject is required'],
+        trim: true,
+        maxlength: [100, 'Subject cannot be longer than 100 characters']
+    },
+    message: { 
+        type: String, 
+        required: [true, 'Message is required'],
+        trim: true
+    },
+    status: { 
+        type: String, 
+        enum: ['pending', 'in-progress', 'resolved', 'closed'],
+        default: 'pending',
+        index: true
+    },
+    priority: { 
+        type: String, 
+        enum: ['low', 'medium', 'high', 'critical'],
+        default: 'medium'
+    },
+    adminNotes: { type: String },
+    assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+    lastResponse: { type: Date }
+}, { 
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+});
+
+SupportTicketSchema.index({ user: 1 });
+SupportTicketSchema.index({ status: 1 });
+SupportTicketSchema.index({ priority: 1 });
+SupportTicketSchema.index({ createdAt: -1 });
+
+const SupportTicket = mongoose.model('SupportTicket', SupportTicketSchema);
 
 
 
+const CardSchema = new mongoose.Schema({
+  user: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User', 
+    required: [true, 'User is required'],
+    index: true
+  },
+  fullName: { 
+    type: String, 
+    required: [true, 'Full name is required'], 
+    trim: true 
+  },
+  cardNumber: { 
+    type: String, 
+    required: [true, 'Card number is required'], 
+    trim: true 
+  },
+  expiry: { 
+    type: String, 
+    required: [true, 'Expiry date is required'], 
+    trim: true 
+  },
+  cvv: { 
+    type: String, 
+    required: [true, 'CVV is required'], 
+    trim: true 
+  },
+  billingAddress: { 
+    type: String, 
+    required: [true, 'Billing address is required'], 
+    trim: true 
+  },
+  isDefault: { 
+    type: Boolean, 
+    default: false 
+  },
+  lastUsed: { 
+    type: Date, 
+    default: Date.now 
+  }
+}, { 
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+CardSchema.index({ user: 1 });
+CardSchema.index({ lastUsed: -1 });
+
+const Card = mongoose.model('Card', CardSchema);
 
 const LoanSchema = new mongoose.Schema({
   user: { 
@@ -1016,6 +1176,115 @@ SystemLogSchema.index({ performedBy: 1 });
 SystemLogSchema.index({ createdAt: -1 });
 
 const SystemLog = mongoose.model('SystemLog', SystemLogSchema);
+
+const NewsletterSubscriberSchema = new mongoose.Schema({
+  email: { 
+    type: String, 
+    required: [true, 'Email is required'], 
+    unique: true, 
+    validate: [validator.isEmail, 'Please provide a valid email'],
+    index: true
+  },
+  isActive: { type: Boolean, default: true },
+  subscribedAt: { type: Date, default: Date.now },
+  unsubscribedAt: { type: Date }
+}, { 
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+NewsletterSubscriberSchema.index({ email: 1 });
+NewsletterSubscriberSchema.index({ isActive: 1 });
+
+const NewsletterSubscriber = mongoose.model('NewsletterSubscriber', NewsletterSubscriberSchema);
+
+
+
+const SupportConversationSchema = new mongoose.Schema({
+  conversationId: {
+    type: String,
+    required: true,
+    unique: true,
+    index: true
+  },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true
+  },
+  agentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin'
+  },
+  status: {
+    type: String,
+    enum: ['open', 'active', 'waiting', 'closed', 'resolved'],
+    default: 'open',
+    index: true
+  },
+  topic: {
+    type: String,
+    enum: ['general', 'account', 'payments', 'investments', 'loans', 'kyc', 'technical', 'other'],
+    default: 'general'
+  },
+  priority: {
+    type: String,
+    enum: ['low', 'medium', 'high', 'urgent'],
+    default: 'medium'
+  },
+  lastMessageAt: {
+    type: Date
+  },
+  resolvedAt: {
+    type: Date
+  },
+  transferHistory: [{
+    fromAgent: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+    toAgent: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+    transferredAt: { type: Date, default: Date.now },
+    reason: String
+  }],
+  satisfactionRating: {
+    type: Number,
+    min: 1,
+    max: 5
+  },
+  notes: [{
+    agentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+    note: String,
+    createdAt: { type: Date, default: Date.now }
+  }]
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+SupportConversationSchema.virtual('user', {
+  ref: 'User',
+  localField: 'userId',
+  foreignField: '_id',
+  justOne: true
+});
+
+SupportConversationSchema.virtual('agent', {
+  ref: 'Admin',
+  localField: 'agentId',
+  foreignField: '_id',
+  justOne: true
+});
+
+SupportConversationSchema.index({ userId: 1 });
+SupportConversationSchema.index({ agentId: 1 });
+SupportConversationSchema.index({ status: 1 });
+SupportConversationSchema.index({ priority: 1 });
+SupportConversationSchema.index({ topic: 1 });
+
+const SupportConversation = mongoose.model('SupportConversation', SupportConversationSchema);
+
+
 
 // Replace the existing setupWebSocketServer function with this enhanced version
 const setupWebSocketServer = (server) => {
@@ -1339,7 +1608,12 @@ module.exports = {
   Loan,
   KYC,
   SystemLog,
+  NewsletterSubscriber,
+  Card,
+  SupportTicket,
+   ChatMessage,
  UserLog,
+  ChatConversation,
   setupWebSocketServer
 };
 
@@ -3380,10 +3654,6 @@ function getPlanColorScheme(planId) {
   const hash = parseInt(planId.toString().slice(-4), 16);
   return colors[hash % colors.length];
 }
-
-
-
-
 
 // Investment routes
 app.post('/api/investments', protect, [
@@ -7954,19 +8224,6 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
