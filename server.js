@@ -3382,9 +3382,10 @@ function getPlanColorScheme(planId) {
 }
 
 
-// Investment routes
+
+// POST /api/investments - Create a new investment
 app.post('/api/investments', protect, [
-  body('planId').notEmpty().withMessage('Plan ID is required').isMongoId().withMessage('Invalid Plan ID'),
+  body('planId').isMongoId().withMessage('Valid plan ID is required'),
   body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number')
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -3395,183 +3396,507 @@ app.post('/api/investments', protect, [
     });
   }
 
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { planId, amount } = req.body;
-    const userId = req.user._id;
+    const userId = req.user.id;
 
-    // Verify plan exists and is active
-    const plan = await Plan.findById(planId);
+    // 1. Get the plan details
+    const plan = await Plan.findById(planId).session(session);
     if (!plan || !plan.isActive) {
-      return res.status(400).json({
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
         status: 'fail',
-        message: 'Invalid or inactive investment plan'
+        message: 'Investment plan not found or inactive'
       });
     }
 
-    // Verify amount is within plan limits
+    // 2. Validate investment amount against plan limits
     if (amount < plan.minAmount || amount > plan.maxAmount) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         status: 'fail',
-        message: `Amount must be between $${plan.minAmount} and $${plan.maxAmount} for this plan`
+        message: `Investment amount must be between $${plan.minAmount} and $${plan.maxAmount}`
       });
     }
 
-    // Verify user has sufficient balance
-    const user = await User.findById(userId);
+    // 3. Check user has sufficient main balance
+    const user = await User.findById(userId).session(session);
     if (user.balances.main < amount) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         status: 'fail',
-        message: 'Insufficient balance'
+        message: 'Insufficient balance in main account'
       });
     }
 
-    // Calculate expected return
+    // 4. Calculate expected return
     const expectedReturn = amount + (amount * plan.percentage / 100);
-    const endDate = new Date(Date.now() + plan.duration * 60 * 60 * 1000);
+    const endDate = new Date(Date.now() + plan.duration * 60 * 60 * 1000); // Convert hours to milliseconds
 
-    // Create investment
-    const investment = await Investment.create({
+    // 5. Create the investment
+    const investment = await Investment.create([{
       user: userId,
       plan: planId,
-      amount,
+      amount: amount,
+      currency: 'USD',
       originalAmount: amount,
       originalCurrency: 'USD',
-      currency: 'USD',
-      expectedReturn,
+      expectedReturn: expectedReturn,
       returnPercentage: plan.percentage,
-      endDate,
+      endDate: endDate,
       payoutSchedule: 'end_term',
       status: 'active',
+      startDate: new Date(),
+      kycVerified: user.kycStatus.identity === 'verified' && 
+                   user.kycStatus.address === 'verified',
+      termsAccepted: true,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
-      deviceInfo: getDeviceType(req),
-      termsAccepted: true
-    });
+      deviceInfo: {
+        type: getDeviceType(req)
+      }
+    }], { session });
 
-    // Deduct from user balance
+    // 6. Update user balances (move from main to active)
     user.balances.main -= amount;
     user.balances.active += amount;
-    await user.save();
+    await user.save({ session });
 
-    // Create transaction record - FIXED: Ensure transaction is created properly
-    const transaction = await Transaction.create({
+    // 7. Create transaction record for the investment
+    const investmentTransaction = await Transaction.create([{
       user: userId,
       type: 'investment',
-      amount: -amount,
+      amount: amount,
       currency: 'USD',
       status: 'completed',
       method: 'internal',
-      reference: `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      reference: `INV-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      netAmount: amount,
       details: {
-        investmentId: investment._id,
-        planName: plan.name
-      },
-      fee: 0,
-      netAmount: amount
-    });
+        plan: plan.name,
+        planId: planId,
+        investmentId: investment[0]._id,
+        duration: plan.duration,
+        expectedReturn: expectedReturn
+      }
+    }], { session });
 
-    // Handle referral if applicable
+    // 8. Handle referral bonus if applicable
     if (user.referredBy) {
-      const referralBonus = amount * (plan.referralBonus / 100);
+      const referralBonusAmount = amount * (plan.referralBonus / 100);
       
       // Update referring user's balance
-      await User.findByIdAndUpdate(user.referredBy, {
-        $inc: {
-          'balances.main': referralBonus,
-          'referralStats.totalEarnings': referralBonus,
-          'referralStats.availableBalance': referralBonus
-        },
-        $push: {
-          referralHistory: {
+      const referringUser = await User.findById(user.referredBy).session(session);
+      if (referringUser) {
+        referringUser.balances.main += referralBonusAmount;
+        await referringUser.save({ session });
+
+        // Create referral transaction
+        await Transaction.create([{
+          user: user.referredBy,
+          type: 'referral',
+          amount: referralBonusAmount,
+          currency: 'USD',
+          status: 'completed',
+          method: 'internal',
+          reference: `REF-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          netAmount: referralBonusAmount,
+          details: {
             referredUser: userId,
-            amount: referralBonus,
-            percentage: plan.referralBonus,
-            level: 1,
-            status: 'available'
+            investmentId: investment[0]._id,
+            plan: plan.name,
+            percentage: plan.referralBonus
           }
-        }
-      });
+        }], { session });
 
-      // Create referral commission record
-      await ReferralCommission.create({
-        referringUser: user.referredBy,
-        referredUser: userId,
-        investment: investment._id,
-        amount: referralBonus,
-        percentage: plan.referralBonus,
-        level: 1,
-        status: 'available'
-      });
-
-      // Mark investment with referral info
-      investment.referredBy = user.referredBy;
-      investment.referralBonusAmount = referralBonus;
-      investment.referralBonusDetails = {
-        percentage: plan.referralBonus,
-        payoutDate: new Date()
-      };
-      await investment.save();
+        // Update investment with referral info
+        investment[0].referredBy = user.referredBy;
+        investment[0].referralBonusPaid = true;
+        investment[0].referralBonusAmount = referralBonusAmount;
+        investment[0].referralBonusDetails = {
+          percentage: plan.referralBonus,
+          payoutDate: new Date()
+        };
+        await investment[0].save({ session });
+      }
     }
 
-    // Log activity
-    await logActivity('create_investment', 'investment', investment._id, userId, 'User', req);
+    // 9. Commit the transaction
+    await session.commitTransaction();
+    session.endSession();
 
-    // FIXED: Return success response exactly as expected by frontend
+    // 10. Return success response
     res.status(201).json({
       status: 'success',
+      message: 'Investment created successfully',
       data: {
         investment: {
-          id: investment._id,
+          id: investment[0]._id,
           plan: plan.name,
-          amount: investment.amount,
-          expectedReturn: investment.expectedReturn,
-          endDate: investment.endDate,
-          status: investment.status
-        }
+          amount: investment[0].amount,
+          expectedReturn: investment[0].expectedReturn,
+          endDate: investment[0].endDate,
+          status: investment[0].status
+        },
+        newBalances: user.balances
       }
     });
+
+    // 11. Log the activity
+    await logActivity('create-investment', 'investment', investment[0]._id, userId, 'User', req, {
+      plan: plan.name,
+      amount: amount,
+      duration: plan.duration
+    });
+
   } catch (err) {
-    console.error('Investment creation error:', err);
-    // FIXED: Return proper error format expected by frontend
+    // Rollback transaction on error
+    await session.abortTransaction();
+    session.endSession();
+    
+    console.error('Create investment error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while creating investment'
+      message: 'An error occurred while creating the investment'
     });
   }
 });
 
-app.get('/api/transactions', protect, async (req, res) => {
+// POST /api/investments/matured - Process matured investments
+app.post('/api/investments/matured', protect, async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const { type, page = 1, limit = 20 } = req.query;
-    const skip = (page - 1) * limit;
+    const userId = req.user.id;
+    
+    // 1. Find all active investments that have matured
+    const now = new Date();
+    const maturedInvestments = await Investment.find({
+      user: userId,
+      status: 'active',
+      endDate: { $lte: now }
+    }).session(session);
 
-    const query = { user: req.user.id };
-    if (type) query.type = type;
+    if (maturedInvestments.length === 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(200).json({
+        status: 'success',
+        message: 'No matured investments found',
+        maturedCount: 0
+      });
+    }
 
-    const transactions = await Transaction.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+    // 2. Process each matured investment
+    for (const investment of maturedInvestments) {
+      // Get the plan details to calculate actual return
+      const plan = await Plan.findById(investment.plan).session(session);
+      if (!plan) continue;
 
-    const total = await Transaction.countDocuments(query);
+      // Calculate the actual return (principal + profit)
+      const actualReturn = investment.amount + (investment.amount * plan.percentage / 100);
+      
+      // Update user balances (move from active to matured)
+      const user = await User.findById(userId).session(session);
+      user.balances.active -= investment.amount;
+      user.balances.matured += actualReturn;
+      await user.save({ session });
 
+      // Update investment status and actual return
+      investment.status = 'completed';
+      investment.actualReturn = actualReturn;
+      investment.completionDate = new Date();
+      await investment.save({ session });
+
+      // Create transaction for the matured investment
+      await Transaction.create([{
+        user: userId,
+        type: 'interest',
+        amount: actualReturn - investment.amount, // Only the profit portion
+        currency: 'USD',
+        status: 'completed',
+        method: 'internal',
+        reference: `MAT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        netAmount: actualReturn - investment.amount,
+        details: {
+          investmentId: investment._id,
+          plan: plan.name,
+          principal: investment.amount,
+          profit: actualReturn - investment.amount
+        }
+      }], { session });
+
+      // Create transaction for principal return (if needed)
+      await Transaction.create([{
+        user: userId,
+        type: 'transfer',
+        amount: investment.amount,
+        currency: 'USD',
+        status: 'completed',
+        method: 'internal',
+        reference: `PRIN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        netAmount: investment.amount,
+        details: {
+          investmentId: investment._id,
+          description: 'Principal returned from matured investment',
+          from: 'active',
+          to: 'matured'
+        }
+      }], { session });
+    }
+
+    // 3. Commit the transaction
+    await session.commitTransaction();
+    session.endSession();
+
+    // 4. Return success response
+    res.status(200).json({
+      status: 'success',
+      message: `Processed ${maturedInvestments.length} matured investments`,
+      maturedCount: maturedInvestments.length
+    });
+
+    // 5. Log the activity
+    await logActivity('process-matured-investments', 'investment', null, userId, 'User', req, {
+      count: maturedInvestments.length
+    });
+
+  } catch (err) {
+    // Rollback transaction on error
+    await session.abortTransaction();
+    session.endSession();
+    
+    console.error('Process matured investments error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while processing matured investments'
+    });
+  }
+});
+
+// POST /api/investments/:id/reinvest - Reinvest from matured balance
+app.post('/api/investments/:id/reinvest', protect, [
+  body('amount').optional().isFloat({ min: 1 }).withMessage('Amount must be a positive number')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { id } = req.params;
+    const { amount } = req.body;
+    const userId = req.user.id;
+
+    // 1. Get the original investment
+    const originalInvestment = await Investment.findById(id).session(session);
+    if (!originalInvestment || originalInvestment.user.toString() !== userId) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Investment not found'
+      });
+    }
+
+    if (originalInvestment.status !== 'completed') {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Only completed investments can be reinvested'
+      });
+    }
+
+    // 2. Get the plan (use original plan or allow changing plan)
+    const plan = await Plan.findById(originalInvestment.plan).session(session);
+    if (!plan || !plan.isActive) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Original investment plan no longer available'
+      });
+    }
+
+    // 3. Determine reinvestment amount (use full matured balance or specified amount)
+    const user = await User.findById(userId).session(session);
+    const reinvestAmount = amount || user.balances.matured;
+    
+    if (user.balances.matured < reinvestAmount) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Insufficient balance in matured account'
+      });
+    }
+
+    // 4. Validate against plan limits
+    if (reinvestAmount < plan.minAmount || reinvestAmount > plan.maxAmount) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        status: 'fail',
+        message: `Reinvestment amount must be between $${plan.minAmount} and $${plan.maxAmount}`
+      });
+    }
+
+    // 5. Create new investment
+    const expectedReturn = reinvestAmount + (reinvestAmount * plan.percentage / 100);
+    const endDate = new Date(Date.now() + plan.duration * 60 * 60 * 1000);
+
+    const newInvestment = await Investment.create([{
+      user: userId,
+      plan: originalInvestment.plan,
+      amount: reinvestAmount,
+      currency: 'USD',
+      originalAmount: reinvestAmount,
+      originalCurrency: 'USD',
+      expectedReturn: expectedReturn,
+      returnPercentage: plan.percentage,
+      endDate: endDate,
+      payoutSchedule: 'end_term',
+      status: 'active',
+      startDate: new Date(),
+      kycVerified: true, // Already verified from previous investment
+      termsAccepted: true,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      deviceInfo: {
+        type: getDeviceType(req)
+      },
+      previousInvestment: originalInvestment._id
+    }], { session });
+
+    // 6. Update user balances (move from matured to active)
+    user.balances.matured -= reinvestAmount;
+    user.balances.active += reinvestAmount;
+    await user.save({ session });
+
+    // 7. Create transaction record for the reinvestment
+    await Transaction.create([{
+      user: userId,
+      type: 'investment',
+      amount: reinvestAmount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference: `REINV-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      netAmount: reinvestAmount,
+      details: {
+        plan: plan.name,
+        planId: originalInvestment.plan,
+        investmentId: newInvestment[0]._id,
+        previousInvestmentId: originalInvestment._id,
+        duration: plan.duration,
+        expectedReturn: expectedReturn,
+        source: 'matured'
+      }
+    }], { session });
+
+    // 8. Commit the transaction
+    await session.commitTransaction();
+    session.endSession();
+
+    // 9. Return success response
+    res.status(201).json({
+      status: 'success',
+      message: 'Reinvestment completed successfully',
+      data: {
+        investment: {
+          id: newInvestment[0]._id,
+          plan: plan.name,
+          amount: newInvestment[0].amount,
+          expectedReturn: newInvestment[0].expectedReturn,
+          endDate: newInvestment[0].endDate,
+          status: newInvestment[0].status
+        },
+        newBalances: user.balances
+      }
+    });
+
+    // 10. Log the activity
+    await logActivity('reinvest', 'investment', newInvestment[0]._id, userId, 'User', req, {
+      originalInvestment: originalInvestment._id,
+      amount: reinvestAmount,
+      plan: plan.name
+    });
+
+  } catch (err) {
+    // Rollback transaction on error
+    await session.abortTransaction();
+    session.endSession();
+    
+    console.error('Reinvestment error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while processing reinvestment'
+    });
+  }
+});
+
+// GET /api/investments - Get user's investments
+app.get('/api/investments', protect, async (req, res) => {
+  try {
+    const { status, page = 1, limit = 10 } = req.query;
+    const userId = req.user.id;
+    
+    // Build query
+    const query = { user: userId };
+    if (status) {
+      query.status = status;
+    }
+    
+    // Get investments with pagination
+    const options = {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      sort: { createdAt: -1 },
+      populate: 'plan'
+    };
+    
+    const investments = await Investment.paginate(query, options);
+    
     res.status(200).json({
       status: 'success',
       data: {
-        transactions,
-        total,
-        page: parseInt(page),
-        pages: Math.ceil(total / limit)
+        investments: investments.docs,
+        pagination: {
+          total: investments.total,
+          pages: investments.pages,
+          page: investments.page,
+          limit: investments.limit,
+          hasNext: investments.page < investments.pages,
+          hasPrev: investments.page > 1
+        }
       }
     });
+    
   } catch (err) {
-    console.error('Get transactions error:', err);
+    console.error('Get investments error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching transactions'
+      message: 'An error occurred while fetching investments'
     });
   }
 });
+
+
+
 
 
 app.get('/api/mining/stats', protect, async (req, res) => {
@@ -7951,6 +8276,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
