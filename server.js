@@ -7617,8 +7617,6 @@ app.post('/api/admin/settings/general',
 
 
 
-
-
 app.get('/api/investments/active', protect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -7636,7 +7634,7 @@ app.get('/api/investments/active', protect, async (req, res) => {
       }
     }
     
-    // Get active investments with plan details - ensure returnPercentage is selected
+    // Get active investments with plan details
     const investments = await Investment.find({
       user: req.user.id,
       status: 'active'
@@ -7646,8 +7644,9 @@ app.get('/api/investments/active', protect, async (req, res) => {
     .limit(limit)
     .populate({
       path: 'plan',
-      select: 'name returnPercentage duration minAmount maxAmount referralBonus' // Changed percentage to returnPercentage
+      select: 'name percentage duration minAmount maxAmount referralBonus'
     })
+    .select('amount startDate endDate status plan returnPercentage') // Add returnPercentage here
     .lean(); // Convert to plain JS objects
     
     const total = await Investment.countDocuments({
@@ -7672,8 +7671,8 @@ app.get('/api/investments/active', protect, async (req, res) => {
         ? Math.min(100, (elapsedMs / totalDurationMs) * 100)
         : 0;
       
-      // Get ROI percentage from plan - use returnPercentage instead of percentage
-      const roiPercentage = investment.plan?.returnPercentage || 0; // Changed to returnPercentage
+      // Get ROI percentage - prioritize returnPercentage from investment, fallback to plan percentage
+      const roiPercentage = investment.returnPercentage || investment.plan?.percentage || 0;
       
       // Calculate expected profit
       const expectedProfit = investment.amount * (roiPercentage / 100);
@@ -7682,7 +7681,7 @@ app.get('/api/investments/active', protect, async (req, res) => {
         id: investment._id,
         planName: investment.plan?.name || 'Unknown Plan',
         amount: investment.amount,
-        profitPercentage: roiPercentage,
+        profitPercentage: roiPercentage, // This is what frontend expects as roiPercentage
         durationHours: investment.plan?.duration || 0,
         startDate: investment.startDate,
         endDate: investment.endDate,
@@ -7721,6 +7720,7 @@ app.get('/api/investments/active', protect, async (req, res) => {
     });
   }
 });
+
 
 
 
@@ -8514,6 +8514,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
