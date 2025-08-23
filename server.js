@@ -7636,7 +7636,7 @@ app.get('/api/investments/active', protect, async (req, res) => {
       }
     }
     
-    // Get active investments with plan details
+    // Get active investments with plan details - ensure returnPercentage is selected
     const investments = await Investment.find({
       user: req.user.id,
       status: 'active'
@@ -7646,7 +7646,7 @@ app.get('/api/investments/active', protect, async (req, res) => {
     .limit(limit)
     .populate({
       path: 'plan',
-      select: 'name percentage duration minAmount maxAmount referralBonus'
+      select: 'name returnPercentage duration minAmount maxAmount referralBonus' // Changed percentage to returnPercentage
     })
     .lean(); // Convert to plain JS objects
     
@@ -7672,8 +7672,8 @@ app.get('/api/investments/active', protect, async (req, res) => {
         ? Math.min(100, (elapsedMs / totalDurationMs) * 100)
         : 0;
       
-      // Get ROI percentage from plan
-      const roiPercentage = investment.plan?.percentage || 0;
+      // Get ROI percentage from plan - use returnPercentage instead of percentage
+      const roiPercentage = investment.plan?.returnPercentage || 0; // Changed to returnPercentage
       
       // Calculate expected profit
       const expectedProfit = investment.amount * (roiPercentage / 100);
@@ -8514,6 +8514,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
