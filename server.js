@@ -4548,9 +4548,8 @@ app.get('/api/stats', async (req, res) => {
         const currentHourUTC = now.getUTCHours();
         const isNewDay = currentHourUTC === 0 && now.getUTCMinutes() < 5; // Reset window 00:00-00:05 UTC
 
-        // Base values (only reset investors if it's a new day and we don't have cached data)
+        // Initialize base stats
         let stats = {
-            totalInvestors: 6546512,
             totalInvested: 61236234.21,
             totalWithdrawals: 47236585.06,
             totalLoans: 13236512.17,
@@ -4563,11 +4562,21 @@ app.get('/api/stats', async (req, res) => {
             }
         };
 
-        // If we have previous stats in Redis (even if expired), use them as base
+        // Get or initialize persistent investor count
+        let investorCount = await redis.get('persistent-investor-count');
+        if (!investorCount) {
+            // Initialize with your specified starting value
+            investorCount = 7087098;
+            await redis.set('persistent-investor-count', investorCount.toString());
+        } else {
+            investorCount = parseInt(investorCount);
+        }
+        stats.totalInvestors = investorCount;
+
+        // If we have previous stats in Redis (even if expired), use them as base for other metrics
         const previousStats = await redis.get('previous-stats');
         if (previousStats) {
             const previous = JSON.parse(previousStats);
-            stats.totalInvestors = previous.totalInvestors;
             
             // Only reset daily stats if it's a new day
             if (isNewDay) {
@@ -4615,16 +4624,28 @@ setInterval(async () => {
     try {
         // Get current stats or initialize if not exists
         let stats = {
-            totalInvestors: 6546512,
             totalInvested: 61236234.21,
             totalWithdrawals: 47236585.06,
             totalLoans: 13236512.17,
             lastUpdated: new Date().toISOString()
         };
 
+        // Get persistent investor count
+        let investorCount = await redis.get('persistent-investor-count');
+        if (!investorCount) {
+            // Initialize with your specified starting value if not exists
+            investorCount = 7087098;
+            await redis.set('persistent-investor-count', investorCount.toString());
+        } else {
+            investorCount = parseInt(investorCount);
+        }
+        
         const cachedStats = await redis.get('stats-data');
         if (cachedStats) {
-            stats = JSON.parse(cachedStats);
+            const parsedStats = JSON.parse(cachedStats);
+            stats.totalInvested = parsedStats.totalInvested;
+            stats.totalWithdrawals = parsedStats.totalWithdrawals;
+            stats.totalLoans = parsedStats.totalLoans;
         }
 
         // Update each stat with different intervals and random increments
@@ -4633,8 +4654,10 @@ setInterval(async () => {
 
         // Update investors every 15-30 seconds (13-999 increment)
         if (seconds % getRandomInRange(15, 30, 0) === 0) {
-            stats.totalInvestors += getRandomInRange(13, 999, 0);
+            investorCount += getRandomInRange(13, 999, 0);
+            await redis.set('persistent-investor-count', investorCount.toString());
         }
+        stats.totalInvestors = investorCount;
 
         // Update invested every 5-20 seconds ($1,200.33 - $111,368.21 increment)
         if (seconds % getRandomInRange(5, 20, 0) === 0) {
@@ -4659,6 +4682,10 @@ setInterval(async () => {
                 withdrawals: getRandomInRange(-11.3, 31, 1),
                 loans: getRandomInRange(-11.3, 31, 1)
             };
+        } else if (cachedStats) {
+            // Preserve existing change rates if not recalculating
+            const parsedStats = JSON.parse(cachedStats);
+            stats.changeRates = parsedStats.changeRates;
         }
 
         stats.lastUpdated = now.toISOString();
@@ -4671,8 +4698,6 @@ setInterval(async () => {
         console.error('Stats updater error:', err);
     }
 }, 1000); // Run every second to check for updates
-
-
 
 
 
@@ -8512,3 +8537,4 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
