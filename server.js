@@ -4001,7 +4001,7 @@ app.post('/api/transactions/deposit', protect, [
     };
 
     if (method === 'btc') {
-      transactionData.btcAddress = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
+      transactionData.btcAddress = 'bc1q78syc97weckfh3l4vswafxkerjynzmwey7lr4e';
       transactionData.details += ` to address ${transactionData.btcAddress}`;
     }
 
@@ -8537,4 +8537,5 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
