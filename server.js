@@ -3730,6 +3730,106 @@ app.post('/api/investments', protect, [
     user.balances.active += amount;
     await user.save();
 
+
+    // Investment completion endpoint - moves funds from active to matured
+app.post('/api/investments/:id/complete', protect, async (req, res) => {
+  try {
+    const investmentId = req.params.id;
+    const userId = req.user._id;
+
+    // Find the investment
+    const investment = await Investment.findOne({ 
+      _id: investmentId, 
+      user: userId,
+      status: 'active' 
+    }).populate('plan');
+    
+    if (!investment) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Active investment not found'
+      });
+    }
+
+    // Check if investment has actually matured
+    if (new Date() < investment.endDate) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Investment has not matured yet'
+      });
+    }
+
+    // Find the user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Calculate total return (principal + profit)
+    const totalReturn = investment.amount + (investment.amount * investment.plan.percentage / 100);
+
+    // Transfer from active to matured balance
+    user.balances.active -= investment.amount;
+    user.balances.matured += totalReturn;
+    
+    // Update investment status
+    investment.status = 'completed';
+    investment.completionDate = new Date();
+    investment.actualReturn = totalReturn - investment.amount;
+
+    // Save changes
+    await user.save();
+    await investment.save();
+
+    // Create transaction record for the return
+    const transaction = await Transaction.create({
+      user: userId,
+      type: 'interest',
+      amount: totalReturn - investment.amount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference: `RET-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      details: {
+        investmentId: investment._id,
+        planName: investment.plan.name,
+        principal: investment.amount,
+        interest: totalReturn - investment.amount
+      },
+      fee: 0,
+      netAmount: totalReturn - investment.amount
+    });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        investment: {
+          id: investment._id,
+          status: investment.status,
+          completionDate: investment.completionDate,
+          amountReturned: totalReturn,
+          profit: totalReturn - investment.amount
+        },
+        balances: {
+          active: user.balances.active,
+          matured: user.balances.matured
+        }
+      }
+    });
+
+    await logActivity('complete_investment', 'investment', investment._id, userId, 'User', req);
+  } catch (err) {
+    console.error('Complete investment error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while completing the investment'
+    });
+  }
+});
+
     // Create transaction record
     const transaction = await Transaction.create({
       user: userId,
@@ -8475,6 +8575,8 @@ app.get('/api/admin/investments/:id', adminProtect, restrictTo('super', 'finance
 
 
 
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -8533,10 +8635,76 @@ io.on('connection', (socket) => {
   });
 });
 
+
+// Function to automatically complete matured investments
+const processMaturedInvestments = async () => {
+  try {
+    const now = new Date();
+    const maturedInvestments = await Investment.find({
+      status: 'active',
+      endDate: { $lte: now }
+    }).populate('user plan');
+
+    for (const investment of maturedInvestments) {
+      try {
+        const user = await User.findById(investment.user._id);
+        if (!user) continue;
+
+        // Calculate total return
+        const totalReturn = investment.amount + (investment.amount * investment.plan.percentage / 100);
+
+        // Transfer balances
+        user.balances.active -= investment.amount;
+        user.balances.matured += totalReturn;
+
+        // Update investment
+        investment.status = 'completed';
+        investment.completionDate = now;
+        investment.actualReturn = totalReturn - investment.amount;
+
+        await user.save();
+        await investment.save();
+
+        // Create transaction record
+        await Transaction.create({
+          user: investment.user._id,
+          type: 'interest',
+          amount: totalReturn - investment.amount,
+          currency: 'USD',
+          status: 'completed',
+          method: 'internal',
+          reference: `AUTO-RET-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          details: {
+            investmentId: investment._id,
+            planName: investment.plan.name,
+            principal: investment.amount,
+            interest: totalReturn - investment.amount
+          },
+          fee: 0,
+          netAmount: totalReturn - investment.amount
+        });
+
+        console.log(`Automatically completed investment ${investment._id} for user ${user.email}`);
+      } catch (err) {
+        console.error(`Error processing investment ${investment._id}:`, err);
+      }
+    }
+  } catch (err) {
+    console.error('Error processing matured investments:', err);
+  }
+};
+
+// Run every hour to check for matured investments
+setInterval(processMaturedInvestments, 60 * 60 * 1000);
+
+// Also run once on server start
+processMaturedInvestments();
+
 // Start server
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
