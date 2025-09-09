@@ -1955,9 +1955,6 @@ const checkCSRF = (req, res, next) => {
 // Routes
 
 
-
-
-// User Signup with Comprehensive Tracking
 // User Signup with Comprehensive Tracking - FIXED VERSION
 app.post('/api/signup', [
   body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
@@ -1973,12 +1970,6 @@ app.post('/api/signup', [
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    // Track failed validation attempt - FIXED: Don't use req.user during signup
-    await logSignupActivity(req, 'signup_attempt', 'failed', {
-      error: 'Validation failed',
-      fields: errors.array().map(err => err.param)
-    }, null);
-    
     return res.status(400).json({
       status: 'fail',
       errors: errors.array()
@@ -1988,21 +1979,9 @@ app.post('/api/signup', [
   try {
     const { firstName, lastName, email, password, city, referredBy } = req.body;
 
-    // Track signup attempt - FIXED: Don't use req.user during signup
-    await logSignupActivity(req, 'signup_attempt', 'pending', {
-      email,
-      hasReferredBy: !!referredBy
-    }, null);
-
     // Check if email already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      // Track duplicate email attempt - FIXED: Don't use req.user during signup
-      await logSignupActivity(req, 'signup_attempt', 'failed', {
-        error: 'Email already in use',
-        email
-      }, null);
-      
       return res.status(400).json({
         status: 'fail',
         message: 'Email already in use'
@@ -2016,12 +1995,6 @@ app.post('/api/signup', [
     if (referredBy) {
       referredByUser = await User.findOne({ referralCode: referredBy });
       if (!referredByUser) {
-        // Track invalid referral attempt - FIXED: Don't use req.user during signup
-        await logSignupActivity(req, 'signup_attempt', 'failed', {
-          error: 'Invalid referral code',
-          referralCode: referredBy
-        }, null);
-        
         return res.status(400).json({
           status: 'fail',
           message: 'Invalid referral code'
@@ -2041,27 +2014,19 @@ app.post('/api/signup', [
 
     const token = generateJWT(newUser._id);
 
-    // Track successful signup - FIXED: Pass the new user instead of relying on req.user
-    await logSignupActivity(req, 'signup', 'success', {
-      userId: newUser._id,
-      referralUsed: !!referredByUser,
-      referralSource: referredByUser ? referredByUser._id : 'organic'
-    }, newUser);
-
-    // Send welcome email
-    const welcomeMessage = `Welcome to BitHash, ${firstName}! Your account has been successfully created.`;
-    await sendEmail({
-      email: newUser.email,
-      subject: 'Welcome to BitHash',
-      message: welcomeMessage,
-      html: `<p>${welcomeMessage}</p>`
-    });
-
-    // Track email sent - FIXED: Pass the new user
-    await logSignupActivity(req, 'welcome_email_sent', 'success', {
-      email: newUser.email,
-      userId: newUser._id
-    }, newUser);
+    // Send welcome email (fire and forget)
+    try {
+      const welcomeMessage = `Welcome to BitHash, ${firstName}! Your account has been successfully created.`;
+      await sendEmail({
+        email: newUser.email,
+        subject: 'Welcome to BitHash',
+        message: welcomeMessage,
+        html: `<p>${welcomeMessage}</p>`
+      });
+    } catch (emailError) {
+      console.error('Failed to send welcome email:', emailError);
+      // Don't fail the signup if email fails
+    }
 
     // Set cookie
     res.cookie('jwt', token, {
@@ -2071,13 +2036,7 @@ app.post('/api/signup', [
       sameSite: 'strict'
     });
 
-    // Track session creation - FIXED: Pass the new user
-    await logSignupActivity(req, 'session_created', 'success', {
-      userId: newUser._id,
-      sessionType: 'jwt',
-      rememberMe: false // First login is always session cookie
-    }, newUser);
-
+    // Return success response with user data
     res.status(201).json({
       status: 'success',
       token,
@@ -2091,18 +2050,31 @@ app.post('/api/signup', [
       }
     });
 
-    // Track successful response - FIXED: Pass the new user instead of req.user
-    await logActivity('signup_complete', 'user', newUser._id, newUser._id, 'User', req);
+    // Log successful signup AFTER sending response (non-blocking)
+    try {
+      const deviceInfo = await getUserDeviceInfo(req);
+      await SystemLog.create({
+        action: 'signup_complete',
+        entity: 'User',
+        entityId: newUser._id,
+        performedBy: newUser._id,
+        performedByModel: 'User',
+        ip: deviceInfo.ip,
+        device: deviceInfo.device,
+        location: deviceInfo.location,
+        changes: {
+          userId: newUser._id,
+          referralUsed: !!referredByUser,
+          referralSource: referredByUser ? referredByUser._id : 'organic'
+        }
+      });
+    } catch (logError) {
+      console.error('Failed to log signup activity:', logError);
+    }
 
   } catch (err) {
     console.error('Signup error:', err);
     
-    // Track signup error - FIXED: Don't use req.user during signup
-    await logSignupActivity(req, 'signup_error', 'failed', {
-      error: err.message,
-      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
-    }, null);
-
     res.status(500).json({
       status: 'error',
       message: 'An error occurred during signup'
@@ -2110,43 +2082,7 @@ app.post('/api/signup', [
   }
 });
 
-// ADD THIS HELPER FUNCTION FOR SIGNUP-SPECIFIC LOGGING
-const logSignupActivity = async (req, action, status = 'success', metadata = {}, user = null) => {
-  try {
-    // Get device and location info
-    const deviceInfo = await getUserDeviceInfo(req);
-    
-    // Prepare log data - handle case where user doesn't exist yet
-    const logData = {
-      user: user ? user._id : null,
-      username: user ? user.email : (action === 'signup' ? req.body.email : 'unknown'),
-      email: user ? user.email : (action === 'signup' ? req.body.email : null),
-      action,
-      ipAddress: deviceInfo.ip,
-      userAgent: deviceInfo.device,
-      deviceInfo: {
-        type: getDeviceType(req),
-        os: getOSFromUserAgent(req.headers['user-agent']),
-        browser: getBrowserFromUserAgent(req.headers['user-agent'])
-      },
-      location: {
-        country: deviceInfo.location?.split(', ')[2] || 'Unknown',
-        region: deviceInfo.location?.split(', ')[1] || 'Unknown',
-        city: deviceInfo.location?.split(', ')[0] || 'Unknown',
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
-      },
-      status,
-      metadata
-    };
 
-    // Create the log
-    await UserLog.create(logData);
-
-  } catch (err) {
-    console.error('Error logging signup activity:', err);
-    // Fail silently to not disrupt user experience
-  }
-};
 // User Login with Comprehensive Tracking
 app.post('/api/login', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
@@ -8742,6 +8678,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
