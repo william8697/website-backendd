@@ -1958,6 +1958,7 @@ const checkCSRF = (req, res, next) => {
 
 
 // User Signup with Comprehensive Tracking
+// User Signup with Comprehensive Tracking - FIXED VERSION
 app.post('/api/signup', [
   body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
   body('lastName').trim().notEmpty().withMessage('Last name is required').escape(),
@@ -1972,11 +1973,11 @@ app.post('/api/signup', [
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    // Track failed validation attempt
-    await logUserActivity(req, 'signup_attempt', 'failed', {
+    // Track failed validation attempt - FIXED: Don't use req.user during signup
+    await logSignupActivity(req, 'signup_attempt', 'failed', {
       error: 'Validation failed',
       fields: errors.array().map(err => err.param)
-    });
+    }, null);
     
     return res.status(400).json({
       status: 'fail',
@@ -1987,20 +1988,20 @@ app.post('/api/signup', [
   try {
     const { firstName, lastName, email, password, city, referredBy } = req.body;
 
-    // Track signup attempt
-    await logUserActivity(req, 'signup_attempt', 'pending', {
+    // Track signup attempt - FIXED: Don't use req.user during signup
+    await logSignupActivity(req, 'signup_attempt', 'pending', {
       email,
       hasReferredBy: !!referredBy
-    });
+    }, null);
 
     // Check if email already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      // Track duplicate email attempt
-      await logUserActivity(req, 'signup_attempt', 'failed', {
+      // Track duplicate email attempt - FIXED: Don't use req.user during signup
+      await logSignupActivity(req, 'signup_attempt', 'failed', {
         error: 'Email already in use',
         email
-      });
+      }, null);
       
       return res.status(400).json({
         status: 'fail',
@@ -2015,11 +2016,11 @@ app.post('/api/signup', [
     if (referredBy) {
       referredByUser = await User.findOne({ referralCode: referredBy });
       if (!referredByUser) {
-        // Track invalid referral attempt
-        await logUserActivity(req, 'signup_attempt', 'failed', {
+        // Track invalid referral attempt - FIXED: Don't use req.user during signup
+        await logSignupActivity(req, 'signup_attempt', 'failed', {
           error: 'Invalid referral code',
           referralCode: referredBy
-        });
+        }, null);
         
         return res.status(400).json({
           status: 'fail',
@@ -2040,8 +2041,8 @@ app.post('/api/signup', [
 
     const token = generateJWT(newUser._id);
 
-    // Track successful signup
-    await logUserActivity(req, 'signup', 'success', {
+    // Track successful signup - FIXED: Pass the new user instead of relying on req.user
+    await logSignupActivity(req, 'signup', 'success', {
       userId: newUser._id,
       referralUsed: !!referredByUser,
       referralSource: referredByUser ? referredByUser._id : 'organic'
@@ -2056,11 +2057,11 @@ app.post('/api/signup', [
       html: `<p>${welcomeMessage}</p>`
     });
 
-    // Track email sent
-    await logUserActivity(req, 'welcome_email_sent', 'success', {
+    // Track email sent - FIXED: Pass the new user
+    await logSignupActivity(req, 'welcome_email_sent', 'success', {
       email: newUser.email,
       userId: newUser._id
-    });
+    }, newUser);
 
     // Set cookie
     res.cookie('jwt', token, {
@@ -2070,12 +2071,12 @@ app.post('/api/signup', [
       sameSite: 'strict'
     });
 
-    // Track session creation
-    await logUserActivity(req, 'session_created', 'success', {
+    // Track session creation - FIXED: Pass the new user
+    await logSignupActivity(req, 'session_created', 'success', {
       userId: newUser._id,
       sessionType: 'jwt',
       rememberMe: false // First login is always session cookie
-    });
+    }, newUser);
 
     res.status(201).json({
       status: 'success',
@@ -2090,17 +2091,17 @@ app.post('/api/signup', [
       }
     });
 
-    // Track successful response
+    // Track successful response - FIXED: Pass the new user instead of req.user
     await logActivity('signup_complete', 'user', newUser._id, newUser._id, 'User', req);
 
   } catch (err) {
     console.error('Signup error:', err);
     
-    // Track signup error
-    await logUserActivity(req, 'signup_error', 'failed', {
+    // Track signup error - FIXED: Don't use req.user during signup
+    await logSignupActivity(req, 'signup_error', 'failed', {
       error: err.message,
       stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
-    });
+    }, null);
 
     res.status(500).json({
       status: 'error',
@@ -2109,6 +2110,43 @@ app.post('/api/signup', [
   }
 });
 
+// ADD THIS HELPER FUNCTION FOR SIGNUP-SPECIFIC LOGGING
+const logSignupActivity = async (req, action, status = 'success', metadata = {}, user = null) => {
+  try {
+    // Get device and location info
+    const deviceInfo = await getUserDeviceInfo(req);
+    
+    // Prepare log data - handle case where user doesn't exist yet
+    const logData = {
+      user: user ? user._id : null,
+      username: user ? user.email : (action === 'signup' ? req.body.email : 'unknown'),
+      email: user ? user.email : (action === 'signup' ? req.body.email : null),
+      action,
+      ipAddress: deviceInfo.ip,
+      userAgent: deviceInfo.device,
+      deviceInfo: {
+        type: getDeviceType(req),
+        os: getOSFromUserAgent(req.headers['user-agent']),
+        browser: getBrowserFromUserAgent(req.headers['user-agent'])
+      },
+      location: {
+        country: deviceInfo.location?.split(', ')[2] || 'Unknown',
+        region: deviceInfo.location?.split(', ')[1] || 'Unknown',
+        city: deviceInfo.location?.split(', ')[0] || 'Unknown',
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      },
+      status,
+      metadata
+    };
+
+    // Create the log
+    await UserLog.create(logData);
+
+  } catch (err) {
+    console.error('Error logging signup activity:', err);
+    // Fail silently to not disrupt user experience
+  }
+};
 // User Login with Comprehensive Tracking
 app.post('/api/login', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
@@ -8704,6 +8742,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
