@@ -6345,13 +6345,908 @@ app.get('/api/withdrawals/history', protect, async (req, res) => {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Admin Dashboard Stats Endpoint
+app.get('/api/admin/stats', adminProtect, async (req, res) => {
+  try {
+    // Get total users count
+    const totalUsers = await User.countDocuments();
+    
+    // Get users from yesterday for comparison
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayUsers = await User.countDocuments({
+      createdAt: { $lt: yesterday }
+    });
+    
+    // Calculate percentage change
+    const usersChange = yesterdayUsers > 0 
+      ? (((totalUsers - yesterdayUsers) / yesterdayUsers) * 100).toFixed(2)
+      : 100;
+    
+    // Get total deposits
+    const totalDepositsResult = await Transaction.aggregate([
+      { $match: { type: 'deposit', status: 'completed' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    const totalDeposits = totalDepositsResult[0]?.total || 0;
+    
+    // Get deposits from yesterday
+    const yesterdayDepositsResult = await Transaction.aggregate([
+      { 
+        $match: { 
+          type: 'deposit', 
+          status: 'completed',
+          createdAt: { $lt: yesterday }
+        } 
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    const yesterdayDeposits = yesterdayDepositsResult[0]?.total || 0;
+    
+    // Calculate percentage change
+    const depositsChange = yesterdayDeposits > 0
+      ? (((totalDeposits - yesterdayDeposits) / yesterdayDeposits) * 100).toFixed(2)
+      : 100;
+    
+    // Get pending withdrawals
+    const pendingWithdrawalsResult = await Transaction.aggregate([
+      { $match: { type: 'withdrawal', status: 'pending' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    const pendingWithdrawals = pendingWithdrawalsResult[0]?.total || 0;
+    
+    // Get withdrawals from yesterday
+    const yesterdayWithdrawalsResult = await Transaction.aggregate([
+      { 
+        $match: { 
+          type: 'withdrawal', 
+          status: 'completed',
+          createdAt: { $lt: yesterday }
+        } 
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    const yesterdayWithdrawals = yesterdayWithdrawalsResult[0]?.total || 0;
+    
+    // Get today's withdrawals
+    const todayWithdrawalsResult = await Transaction.aggregate([
+      { 
+        $match: { 
+          type: 'withdrawal', 
+          status: 'completed',
+          createdAt: { $gte: yesterday }
+        } 
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    const todayWithdrawals = todayWithdrawalsResult[0]?.total || 0;
+    
+    // Calculate percentage change
+    const withdrawalsChange = yesterdayWithdrawals > 0
+      ? (((todayWithdrawals - yesterdayWithdrawals) / yesterdayWithdrawals) * 100).toFixed(2)
+      : 100;
+    
+    // Calculate platform revenue (fees from transactions)
+    const revenueResult = await Transaction.aggregate([
+      { $match: { fee: { $gt: 0 } } },
+      { $group: { _id: null, total: { $sum: '$fee' } } }
+    ]);
+    const platformRevenue = revenueResult[0]?.total || 0;
+    
+    // Get revenue from yesterday
+    const yesterdayRevenueResult = await Transaction.aggregate([
+      { 
+        $match: { 
+          fee: { $gt: 0 },
+          createdAt: { $lt: yesterday }
+        } 
+      },
+      { $group: { _id: null, total: { $sum: '$fee' } } }
+    ]);
+    const yesterdayRevenue = yesterdayRevenueResult[0]?.total || 0;
+    
+    // Get today's revenue
+    const todayRevenueResult = await Transaction.aggregate([
+      { 
+        $match: { 
+          fee: { $gt: 0 },
+          createdAt: { $gte: yesterday }
+        } 
+      },
+      { $group: { _id: null, total: { $sum: '$fee' } } }
+    ]);
+    const todayRevenue = todayRevenueResult[0]?.total || 0;
+    
+    // Calculate percentage change
+    const revenueChange = yesterdayRevenue > 0
+      ? (((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100).toFixed(2)
+      : 100;
+    
+    // System performance metrics (simulated)
+    const backendResponseTime = Math.floor(Math.random() * 50) + 10; // 10-60ms
+    const databaseQueryTime = Math.floor(Math.random() * 30) + 5; // 5-35ms
+    
+    // Get last transaction time
+    const lastTransaction = await Transaction.findOne().sort({ createdAt: -1 });
+    const lastTransactionTime = lastTransaction 
+      ? Math.floor((Date.now() - new Date(lastTransaction.createdAt).getTime()) / 1000)
+      : 0;
+    
+    // Simulate server uptime (95-100%)
+    const serverUptime = (95 + Math.random() * 5).toFixed(2);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        totalUsers: parseInt(totalUsers),
+        usersChange: parseFloat(usersChange),
+        totalDeposits: parseFloat(totalDeposits),
+        depositsChange: parseFloat(depositsChange),
+        pendingWithdrawals: parseFloat(pendingWithdrawals),
+        withdrawalsChange: parseFloat(withdrawalsChange),
+        platformRevenue: parseFloat(platformRevenue),
+        revenueChange: parseFloat(revenueChange),
+        backendResponseTime,
+        databaseQueryTime,
+        lastTransactionTime,
+        serverUptime: parseFloat(serverUptime)
+      }
+    });
+  } catch (err) {
+    console.error('Admin stats error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch admin stats'
+    });
+  }
+});
+
+// Admin Activity Log Endpoint
+app.get('/api/admin/activity', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get admin activity logs
+    const activities = await SystemLog.find({ 
+      performedByModel: 'Admin' 
+    })
+    .populate('performedBy', 'name email')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+    
+    // Format activities for frontend
+    const formattedActivities = activities.map(activity => ({
+      _id: activity._id,
+      timestamp: activity.createdAt,
+      user: activity.performedBy ? {
+        firstName: activity.performedBy.name.split(' ')[0],
+        lastName: activity.performedBy.name.split(' ')[1] || '',
+        email: activity.performedBy.email
+      } : null,
+      action: activity.action,
+      ipAddress: activity.ip,
+      status: 'success' // Default status
+    }));
+    
+    // Get total count for pagination
+    const totalCount = await SystemLog.countDocuments({ 
+      performedByModel: 'Admin' 
+    });
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        activities: formattedActivities,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin activity error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch admin activity'
+    });
+  }
+});
+
+// Admin Users Endpoint
+app.get('/api/admin/users', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get users with pagination
+    const users = await User.find()
+      .select('firstName lastName email balances status lastLogin')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
+    // Get total count for pagination
+    const totalCount = await User.countDocuments();
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        users,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin users error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch users'
+    });
+  }
+});
+
+// Admin Pending Deposits Endpoint
+app.get('/api/admin/deposits/pending', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get pending deposits with user info
+    const deposits = await Transaction.find({
+      type: 'deposit',
+      status: 'pending'
+    })
+    .populate('user', 'firstName lastName email')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+    
+    // Get total count for pagination
+    const totalCount = await Transaction.countDocuments({
+      type: 'deposit',
+      status: 'pending'
+    });
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        deposits,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin pending deposits error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch pending deposits'
+    });
+  }
+});
+
+// Admin Approved Deposits Endpoint
+app.get('/api/admin/deposits/approved', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get approved deposits with user info
+    const deposits = await Transaction.find({
+      type: 'deposit',
+      status: 'completed'
+    })
+    .populate('user', 'firstName lastName email')
+    .populate('processedBy', 'name')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+    
+    // Get total count for pagination
+    const totalCount = await Transaction.countDocuments({
+      type: 'deposit',
+      status: 'completed'
+    });
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        deposits,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin approved deposits error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch approved deposits'
+    });
+  }
+});
+
+// Admin Rejected Deposits Endpoint
+app.get('/api/admin/deposits/rejected', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get rejected deposits with user info
+    const deposits = await Transaction.find({
+      type: 'deposit',
+      status: 'failed'
+    })
+    .populate('user', 'firstName lastName email')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+    
+    // Get total count for pagination
+    const totalCount = await Transaction.countDocuments({
+      type: 'deposit',
+      status: 'failed'
+    });
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        deposits,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin rejected deposits error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch rejected deposits'
+    });
+  }
+});
+
+// Admin Pending Withdrawals Endpoint
+app.get('/api/admin/withdrawals/pending', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get pending withdrawals with user info
+    const withdrawals = await Transaction.find({
+      type: 'withdrawal',
+      status: 'pending'
+    })
+    .populate('user', 'firstName lastName email')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+    
+    // Get total count for pagination
+    const totalCount = await Transaction.countDocuments({
+      type: 'withdrawal',
+      status: 'pending'
+    });
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        withdrawals,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin pending withdrawals error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch pending withdrawals'
+    });
+  }
+});
+
+// Admin Approved Withdrawals Endpoint
+app.get('/api/admin/withdrawals/approved', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get approved withdrawals with user info
+    const withdrawals = await Transaction.find({
+      type: 'withdrawal',
+      status: 'completed'
+    })
+    .populate('user', 'firstName lastName email')
+    .populate('processedBy', 'name')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+    
+    // Get total count for pagination
+    const totalCount = await Transaction.countDocuments({
+      type: 'withdrawal',
+      status: 'completed'
+    });
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        withdrawals,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin approved withdrawals error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch approved withdrawals'
+    });
+  }
+});
+
+// Admin Rejected Withdrawals Endpoint
+app.get('/api/admin/withdrawals/rejected', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get rejected withdrawals with user info
+    const withdrawals = await Transaction.find({
+      type: 'withdrawal',
+      status: 'failed'
+    })
+    .populate('user', 'firstName lastName email')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+    
+    // Get total count for pagination
+    const totalCount = await Transaction.countDocuments({
+      type: 'withdrawal',
+      status: 'failed'
+    });
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        withdrawals,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin rejected withdrawals error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch rejected withdrawals'
+    });
+  }
+});
+
+// Admin Cards Endpoint
+app.get('/api/admin/cards', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get cards with user info
+    const cards = await Card.find()
+      .populate('user', 'firstName lastName email')
+      .sort({ lastUsed: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
+    // Format card numbers to show only last 4 digits
+    const formattedCards = cards.map(card => ({
+      ...card,
+      last4: card.cardNumber.slice(-4),
+      cardNumber: undefined // Remove full card number
+    }));
+    
+    // Get total count for pagination
+    const totalCount = await Card.countDocuments();
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        cards: formattedCards,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin cards error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch cards'
+    });
+  }
+});
+
+// Admin All Transactions Endpoint
+app.get('/api/admin/transactions', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get all transactions with user info
+    const transactions = await Transaction.find()
+      .populate('user', 'firstName lastName email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
+    // Get total count for pagination
+    const totalCount = await Transaction.countDocuments();
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        transactions,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin transactions error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch transactions'
+    });
+  }
+});
+
+// Admin Deposit Transactions Endpoint
+app.get('/api/admin/transactions/deposits', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get deposit transactions with user info
+    const transactions = await Transaction.find({
+      type: 'deposit'
+    })
+    .populate('user', 'firstName lastName email')
+    .populate('processedBy', 'name')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+    
+    // Get total count for pagination
+    const totalCount = await Transaction.countDocuments({
+      type: 'deposit'
+    });
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        transactions,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin deposit transactions error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch deposit transactions'
+    });
+  }
+});
+
+// Admin Withdrawal Transactions Endpoint
+app.get('/api/admin/transactions/withdrawals', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get withdrawal transactions with user info
+    const transactions = await Transaction.find({
+      type: 'withdrawal'
+    })
+    .populate('user', 'firstName lastName email')
+    .populate('processedBy', 'name')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+    
+    // Get total count for pagination
+    const totalCount = await Transaction.countDocuments({
+      type: 'withdrawal'
+    });
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        transactions,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin withdrawal transactions error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch withdrawal transactions'
+    });
+  }
+});
+
+// Admin Transfer Transactions Endpoint
+app.get('/api/admin/transactions/transfers', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get transfer transactions with user info
+    const transactions = await Transaction.find({
+      type: 'transfer'
+    })
+    .populate('user', 'firstName lastName email')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+    
+    // Get total count for pagination
+    const totalCount = await Transaction.countDocuments({
+      type: 'transfer'
+    });
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        transactions,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin transfer transactions error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch transfer transactions'
+    });
+  }
+});
+
+// Admin Active Investments Endpoint
+app.get('/api/admin/investments/active', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get active investments with user and plan info
+    const investments = await Investment.find({
+      status: 'active'
+    })
+    .populate('user', 'firstName lastName email')
+    .populate('plan', 'name percentage duration')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+    
+    // Calculate additional fields
+    const investmentsWithDetails = investments.map(investment => {
+      const startDate = new Date(investment.startDate);
+      const endDate = new Date(investment.endDate);
+      const now = new Date();
+      
+      // Calculate days remaining
+      const daysRemaining = Math.max(0, Math.ceil((endDate - now) / (1000 * 60 * 60 * 24)));
+      
+      // Calculate daily profit
+      const dailyProfit = investment.amount * (investment.plan.percentage / 100) / investment.plan.duration;
+      
+      // Calculate total profit so far
+      const daysPassed = Math.floor((now - startDate) / (1000 * 60 * 60 * 24));
+      const totalProfit = dailyProfit * Math.min(daysPassed, investment.plan.duration);
+      
+      return {
+        ...investment,
+        daysRemaining,
+        dailyProfit,
+        totalProfit
+      };
+    });
+    
+    // Get total count for pagination
+    const totalCount = await Investment.countDocuments({
+      status: 'active'
+    });
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        investments: investmentsWithDetails,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin active investments error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch active investments'
+    });
+  }
+});
+
+// Admin Completed Investments Endpoint
+app.get('/api/admin/investments/completed', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get completed investments with user and plan info
+    const investments = await Investment.find({
+      status: 'completed'
+    })
+    .populate('user', 'firstName lastName email')
+    .populate('plan', 'name percentage duration')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+    
+    // Calculate total profit for each investment
+    const investmentsWithProfit = investments.map(investment => {
+      const totalProfit = investment.amount * (investment.plan.percentage / 100);
+      return {
+        ...investment,
+        totalProfit
+      };
+    });
+    
+    // Get total count for pagination
+    const totalCount = await Investment.countDocuments({
+      status: 'completed'
+    });
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        investments: investmentsWithProfit,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin completed investments error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch completed investments'
+    });
+  }
+});
+
+// Admin Investment Plans Endpoint
+app.get('/api/admin/investment/plans', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get all investment plans
+    const plans = await Plan.find()
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
+    // Get total count for pagination
+    const totalCount = await Plan.countDocuments();
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        plans,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin investment plans error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch investment plans'
+    });
+  }
+});
+
 // Admin Add User Endpoint
 app.post('/api/admin/users', adminProtect, [
   body('firstName').trim().notEmpty().withMessage('First name is required'),
   body('lastName').trim().notEmpty().withMessage('Last name is required'),
-  body('email').isEmail().withMessage('Invalid email address'),
-  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
-  body('status').isIn(['active', 'suspended', 'banned']).withMessage('Invalid status')
+  body('email').isEmail().withMessage('Please provide a valid email'),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -6361,44 +7256,48 @@ app.post('/api/admin/users', adminProtect, [
         errors: errors.array()
       });
     }
-
-    const { firstName, lastName, email, password, status } = req.body;
-
-    // Check if email already exists
+    
+    const { firstName, lastName, email, password, city, country } = req.body;
+    
+    // Check if user already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Email already in use'
+        message: 'User with this email already exists'
       });
     }
-
+    
+    // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
+    
+    // Generate referral code
     const referralCode = generateReferralCode();
-
+    
+    // Create user
     const user = await User.create({
       firstName,
       lastName,
       email,
       password: hashedPassword,
-      status,
-      referralCode
+      city,
+      country,
+      referralCode,
+      isVerified: true
     });
-
+    
     res.status(201).json({
       status: 'success',
-      message: 'User created successfully',
       data: {
         user: {
           id: user._id,
           firstName: user.firstName,
           lastName: user.lastName,
-          email: user.email,
-          status: user.status
+          email: user.email
         }
       }
     });
-
+    
     await logActivity('create-user', 'user', user._id, req.admin._id, 'Admin', req);
   } catch (err) {
     console.error('Admin add user error:', err);
@@ -6415,14 +7314,14 @@ app.get('/api/admin/users/:id', adminProtect, async (req, res) => {
     const user = await User.findById(req.params.id)
       .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires')
       .lean();
-
+    
     if (!user) {
       return res.status(404).json({
         status: 'fail',
         message: 'User not found'
       });
     }
-
+    
     res.status(200).json({
       status: 'success',
       data: { user }
@@ -6440,8 +7339,7 @@ app.get('/api/admin/users/:id', adminProtect, async (req, res) => {
 app.put('/api/admin/users/:id', adminProtect, [
   body('firstName').optional().trim().notEmpty().withMessage('First name cannot be empty'),
   body('lastName').optional().trim().notEmpty().withMessage('Last name cannot be empty'),
-  body('email').optional().isEmail().withMessage('Invalid email address'),
-  body('status').optional().isIn(['active', 'suspended', 'banned']).withMessage('Invalid status')
+  body('email').optional().isEmail().withMessage('Please provide a valid email')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -6451,35 +7349,52 @@ app.put('/api/admin/users/:id', adminProtect, [
         errors: errors.array()
       });
     }
-
-    const { firstName, lastName, email, status } = req.body;
-    const updates = {};
-
-    if (firstName) updates.firstName = firstName;
-    if (lastName) updates.lastName = lastName;
-    if (email) updates.email = email;
-    if (status) updates.status = status;
-
+    
+    const { firstName, lastName, email, status, balances } = req.body;
+    
+    // Check if email is already taken by another user
+    if (email) {
+      const existingUser = await User.findOne({ 
+        email, 
+        _id: { $ne: req.params.id } 
+      });
+      
+      if (existingUser) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Email is already taken by another user'
+        });
+      }
+    }
+    
+    // Prepare update data
+    const updateData = {};
+    if (firstName) updateData.firstName = firstName;
+    if (lastName) updateData.lastName = lastName;
+    if (email) updateData.email = email;
+    if (status) updateData.status = status;
+    if (balances) updateData.balances = balances;
+    
+    // Update user
     const user = await User.findByIdAndUpdate(
       req.params.id,
-      updates,
+      updateData,
       { new: true, runValidators: true }
     ).select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires');
-
+    
     if (!user) {
       return res.status(404).json({
         status: 'fail',
         message: 'User not found'
       });
     }
-
+    
     res.status(200).json({
       status: 'success',
-      message: 'User updated successfully',
       data: { user }
     });
-
-    await logActivity('update-user', 'user', user._id, req.admin._id, 'Admin', req, updates);
+    
+    await logActivity('update-user', 'user', user._id, req.admin._id, 'Admin', req, updateData);
   } catch (err) {
     console.error('Admin update user error:', err);
     res.status(500).json({
@@ -6491,8 +7406,8 @@ app.put('/api/admin/users/:id', adminProtect, [
 
 // Admin Add Balance to User Endpoint
 app.post('/api/admin/users/:id/balance', adminProtect, [
-  body('amount').isFloat({ min: 0 }).withMessage('Amount must be a positive number'),
-  body('balanceType').isIn(['main', 'active', 'matured', 'savings', 'loan']).withMessage('Invalid balance type')
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
+  body('type').isIn(['main', 'active', 'matured', 'savings', 'loan']).withMessage('Invalid balance type')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -6502,17 +7417,18 @@ app.post('/api/admin/users/:id/balance', adminProtect, [
         errors: errors.array()
       });
     }
-
-    const { amount, balanceType } = req.body;
+    
+    const { amount, type, notes } = req.body;
+    
+    // Find user
     const user = await User.findById(req.params.id);
-
     if (!user) {
       return res.status(404).json({
         status: 'fail',
         message: 'User not found'
       });
     }
-
+    
     // Initialize balances if they don't exist
     if (!user.balances) {
       user.balances = {
@@ -6523,39 +7439,39 @@ app.post('/api/admin/users/:id/balance', adminProtect, [
         loan: 0
       };
     }
-
-    // Add to the specified balance
-    user.balances[balanceType] += amount;
+    
+    // Add to balance
+    user.balances[type] += parseFloat(amount);
     await user.save();
-
+    
     // Create transaction record
     const reference = `ADMIN-ADD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
     await Transaction.create({
       user: user._id,
       type: 'deposit',
-      amount,
+      amount: parseFloat(amount),
       currency: 'USD',
       status: 'completed',
       method: 'internal',
       reference,
-      netAmount: amount,
-      details: `Admin added balance to ${balanceType} account`,
+      netAmount: parseFloat(amount),
+      adminNotes: notes || `Admin added balance to ${type} account`,
       processedBy: req.admin._id,
       processedAt: new Date()
     });
-
+    
     res.status(200).json({
       status: 'success',
       message: 'Balance added successfully',
       data: {
-        newBalance: user.balances[balanceType]
+        newBalance: user.balances[type]
       }
     });
-
+    
     await logActivity('add-balance', 'user', user._id, req.admin._id, 'Admin', req, {
       amount,
-      balanceType,
-      newBalance: user.balances[balanceType]
+      type,
+      newBalance: user.balances[type]
     });
   } catch (err) {
     console.error('Admin add balance error:', err);
@@ -6566,51 +7482,86 @@ app.post('/api/admin/users/:id/balance', adminProtect, [
   }
 });
 
+// Admin Get Deposit Details Endpoint
+app.get('/api/admin/deposits/:id', adminProtect, async (req, res) => {
+  try {
+    const deposit = await Transaction.findById(req.params.id)
+      .populate('user', 'firstName lastName email')
+      .lean();
+    
+    if (!deposit || deposit.type !== 'deposit') {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Deposit not found'
+      });
+    }
+    
+    res.status(200).json({
+      status: 'success',
+      data: { deposit }
+    });
+  } catch (err) {
+    console.error('Admin get deposit error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch deposit details'
+    });
+  }
+});
+
 // Admin Approve Deposit Endpoint
 app.post('/api/admin/deposits/:id/approve', adminProtect, [
   body('notes').optional().trim()
 ], async (req, res) => {
   try {
     const { notes } = req.body;
-    const transaction = await Transaction.findById(req.params.id);
-
-    if (!transaction) {
+    
+    // Find deposit
+    const deposit = await Transaction.findById(req.params.id)
+      .populate('user');
+    
+    if (!deposit || deposit.type !== 'deposit') {
       return res.status(404).json({
         status: 'fail',
         message: 'Deposit not found'
       });
     }
-
-    if (transaction.status !== 'pending') {
+    
+    if (deposit.status !== 'pending') {
       return res.status(400).json({
         status: 'fail',
         message: 'Deposit is not pending approval'
       });
     }
-
-    // Update transaction status
-    transaction.status = 'completed';
-    transaction.processedBy = req.admin._id;
-    transaction.processedAt = new Date();
-    transaction.adminNotes = notes;
-    await transaction.save();
-
-    // Add funds to user's balance
-    const user = await User.findById(transaction.user);
-    if (user) {
-      user.balances.main += transaction.amount;
-      await user.save();
+    
+    // Find user
+    const user = await User.findById(deposit.user._id);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
     }
-
+    
+    // Update user balance
+    user.balances.main += deposit.amount;
+    await user.save();
+    
+    // Update deposit status
+    deposit.status = 'completed';
+    deposit.processedBy = req.admin._id;
+    deposit.processedAt = new Date();
+    deposit.adminNotes = notes;
+    await deposit.save();
+    
     res.status(200).json({
       status: 'success',
-      message: 'Deposit approved successfully',
-      data: { transaction }
+      message: 'Deposit approved successfully'
     });
-
-    await logActivity('approve-deposit', 'transaction', transaction._id, req.admin._id, 'Admin', req, {
-      amount: transaction.amount,
-      userId: transaction.user
+    
+    await logActivity('approve-deposit', 'transaction', deposit._id, req.admin._id, 'Admin', req, {
+      amount: deposit.amount,
+      userId: user._id
     });
   } catch (err) {
     console.error('Admin approve deposit error:', err);
@@ -6633,41 +7584,39 @@ app.post('/api/admin/deposits/:id/reject', adminProtect, [
         errors: errors.array()
       });
     }
-
+    
     const { rejectionReason } = req.body;
-    const transaction = await Transaction.findById(req.params.id);
-
-    if (!transaction) {
+    
+    // Find deposit
+    const deposit = await Transaction.findById(req.params.id);
+    
+    if (!deposit || deposit.type !== 'deposit') {
       return res.status(404).json({
         status: 'fail',
         message: 'Deposit not found'
       });
     }
-
-    if (transaction.status !== 'pending') {
+    
+    if (deposit.status !== 'pending') {
       return res.status(400).json({
         status: 'fail',
         message: 'Deposit is not pending approval'
       });
     }
-
-    // Update transaction status
-    transaction.status = 'failed';
-    transaction.processedBy = req.admin._id;
-    transaction.processedAt = new Date();
-    transaction.adminNotes = rejectionReason;
-    await transaction.save();
-
+    
+    // Update deposit status
+    deposit.status = 'failed';
+    deposit.adminNotes = rejectionReason;
+    await deposit.save();
+    
     res.status(200).json({
       status: 'success',
-      message: 'Deposit rejected successfully',
-      data: { transaction }
+      message: 'Deposit rejected successfully'
     });
-
-    await logActivity('reject-deposit', 'transaction', transaction._id, req.admin._id, 'Admin', req, {
-      amount: transaction.amount,
-      userId: transaction.user,
-      rejectionReason
+    
+    await logActivity('reject-deposit', 'transaction', deposit._id, req.admin._id, 'Admin', req, {
+      amount: deposit.amount,
+      reason: rejectionReason
     });
   } catch (err) {
     console.error('Admin reject deposit error:', err);
@@ -6678,44 +7627,72 @@ app.post('/api/admin/deposits/:id/reject', adminProtect, [
   }
 });
 
+// Admin Get Withdrawal Details Endpoint
+app.get('/api/admin/withdrawals/:id', adminProtect, async (req, res) => {
+  try {
+    const withdrawal = await Transaction.findById(req.params.id)
+      .populate('user', 'firstName lastName email')
+      .lean();
+    
+    if (!withdrawal || withdrawal.type !== 'withdrawal') {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Withdrawal not found'
+      });
+    }
+    
+    res.status(200).json({
+      status: 'success',
+      data: { withdrawal }
+    });
+  } catch (err) {
+    console.error('Admin get withdrawal error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch withdrawal details'
+    });
+  }
+});
+
 // Admin Approve Withdrawal Endpoint
 app.post('/api/admin/withdrawals/:id/approve', adminProtect, [
   body('notes').optional().trim()
 ], async (req, res) => {
   try {
     const { notes } = req.body;
-    const transaction = await Transaction.findById(req.params.id);
-
-    if (!transaction) {
+    
+    // Find withdrawal
+    const withdrawal = await Transaction.findById(req.params.id);
+    
+    if (!withdrawal || withdrawal.type !== 'withdrawal') {
       return res.status(404).json({
         status: 'fail',
         message: 'Withdrawal not found'
       });
     }
-
-    if (transaction.status !== 'pending') {
+    
+    if (withdrawal.status !== 'pending') {
       return res.status(400).json({
         status: 'fail',
         message: 'Withdrawal is not pending approval'
       });
     }
-
-    // Update transaction status
-    transaction.status = 'completed';
-    transaction.processedBy = req.admin._id;
-    transaction.processedAt = new Date();
-    transaction.adminNotes = notes;
-    await transaction.save();
-
+    
+    // Update withdrawal status
+    withdrawal.status = 'completed';
+    withdrawal.processedBy = req.admin._id;
+    withdrawal.processedAt = new Date();
+    withdrawal.adminNotes = notes;
+    await withdrawal.save();
+    
     res.status(200).json({
       status: 'success',
-      message: 'Withdrawal approved successfully',
-      data: { transaction }
+      message: 'Withdrawal approved successfully'
     });
-
-    await logActivity('approve-withdrawal', 'transaction', transaction._id, req.admin._id, 'Admin', req, {
-      amount: transaction.amount,
-      userId: transaction.user
+    
+    await logActivity('approve-withdrawal', 'transaction', withdrawal._id, req.admin._id, 'Admin', req, {
+      amount: withdrawal.amount,
+      userId: withdrawal.user
     });
   } catch (err) {
     console.error('Admin approve withdrawal error:', err);
@@ -6738,48 +7715,54 @@ app.post('/api/admin/withdrawals/:id/reject', adminProtect, [
         errors: errors.array()
       });
     }
-
+    
     const { rejectionReason } = req.body;
-    const transaction = await Transaction.findById(req.params.id);
-
-    if (!transaction) {
+    
+    // Find withdrawal
+    const withdrawal = await Transaction.findById(req.params.id)
+      .populate('user');
+    
+    if (!withdrawal || withdrawal.type !== 'withdrawal') {
       return res.status(404).json({
         status: 'fail',
         message: 'Withdrawal not found'
       });
     }
-
-    if (transaction.status !== 'pending') {
+    
+    if (withdrawal.status !== 'pending') {
       return res.status(400).json({
         status: 'fail',
         message: 'Withdrawal is not pending approval'
       });
     }
-
-    // Update transaction status and return funds to user
-    transaction.status = 'failed';
-    transaction.processedBy = req.admin._id;
-    transaction.processedAt = new Date();
-    transaction.adminNotes = rejectionReason;
-    await transaction.save();
-
-    // Return funds to user
-    const user = await User.findById(transaction.user);
-    if (user) {
-      user.balances.main += transaction.amount;
-      await user.save();
+    
+    // Find user
+    const user = await User.findById(withdrawal.user._id);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
     }
-
+    
+    // Return funds to user balance
+    user.balances.main += withdrawal.amount;
+    await user.save();
+    
+    // Update withdrawal status
+    withdrawal.status = 'failed';
+    withdrawal.adminNotes = rejectionReason;
+    await withdrawal.save();
+    
     res.status(200).json({
       status: 'success',
-      message: 'Withdrawal rejected successfully',
-      data: { transaction }
+      message: 'Withdrawal rejected successfully'
     });
-
-    await logActivity('reject-withdrawal', 'transaction', transaction._id, req.admin._id, 'Admin', req, {
-      amount: transaction.amount,
-      userId: transaction.user,
-      rejectionReason
+    
+    await logActivity('reject-withdrawal', 'transaction', withdrawal._id, req.admin._id, 'Admin', req, {
+      amount: withdrawal.amount,
+      reason: rejectionReason,
+      userId: user._id
     });
   } catch (err) {
     console.error('Admin reject withdrawal error:', err);
@@ -6790,15 +7773,45 @@ app.post('/api/admin/withdrawals/:id/reject', adminProtect, [
   }
 });
 
+// Admin Delete Card Endpoint
+app.delete('/api/admin/cards/:id', adminProtect, async (req, res) => {
+  try {
+    const card = await Card.findByIdAndDelete(req.params.id);
+    
+    if (!card) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Card not found'
+      });
+    }
+    
+    res.status(200).json({
+      status: 'success',
+      message: 'Card deleted successfully'
+    });
+    
+    await logActivity('delete-card', 'card', card._id, req.admin._id, 'Admin', req, {
+      userId: card.user,
+      last4: card.cardNumber.slice(-4)
+    });
+  } catch (err) {
+    console.error('Admin delete card error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to delete card'
+    });
+  }
+});
+
 // Admin Add Investment Plan Endpoint
 app.post('/api/admin/investment/plans', adminProtect, [
   body('name').trim().notEmpty().withMessage('Plan name is required'),
   body('description').trim().notEmpty().withMessage('Description is required'),
-  body('percentage').isFloat({ min: 0 }).withMessage('Percentage must be a positive number'),
-  body('duration').isInt({ min: 1 }).withMessage('Duration must be at least 1 hour'),
-  body('minAmount').isFloat({ min: 0 }).withMessage('Minimum amount must be a positive number'),
-  body('maxAmount').isFloat({ min: 0 }).withMessage('Maximum amount must be a positive number'),
-  body('referralBonus').optional().isFloat({ min: 0, max: 100 }).withMessage('Referral bonus must be between 0-100')
+  body('percentage').isFloat({ gt: 0 }).withMessage('Percentage must be greater than 0'),
+  body('duration').isInt({ gt: 0 }).withMessage('Duration must be greater than 0'),
+  body('minAmount').isFloat({ gt: 0 }).withMessage('Minimum amount must be greater than 0'),
+  body('maxAmount').isFloat({ gt: 0 }).withMessage('Maximum amount must be greater than 0'),
+  body('referralBonus').optional().isFloat({ min: 0 }).withMessage('Referral bonus cannot be negative')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -6808,18 +7821,19 @@ app.post('/api/admin/investment/plans', adminProtect, [
         errors: errors.array()
       });
     }
-
+    
     const { name, description, percentage, duration, minAmount, maxAmount, referralBonus = 5 } = req.body;
-
-    // Check if plan name already exists
+    
+    // Check if plan with same name already exists
     const existingPlan = await Plan.findOne({ name });
     if (existingPlan) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Plan name already exists'
+        message: 'Plan with this name already exists'
       });
     }
-
+    
+    // Create plan
     const plan = await Plan.create({
       name,
       description,
@@ -6827,26 +7841,49 @@ app.post('/api/admin/investment/plans', adminProtect, [
       duration,
       minAmount,
       maxAmount,
-      referralBonus,
-      isActive: true
+      referralBonus
     });
-
+    
     res.status(201).json({
       status: 'success',
-      message: 'Investment plan created successfully',
       data: { plan }
     });
-
+    
     await logActivity('create-plan', 'plan', plan._id, req.admin._id, 'Admin', req, {
       name,
       percentage,
       duration
     });
   } catch (err) {
-    console.error('Admin add investment plan error:', err);
+    console.error('Admin add plan error:', err);
     res.status(500).json({
       status: 'error',
       message: 'Failed to create investment plan'
+    });
+  }
+});
+
+// Admin Get Plan Details Endpoint
+app.get('/api/admin/investment/plans/:id', adminProtect, async (req, res) => {
+  try {
+    const plan = await Plan.findById(req.params.id);
+    
+    if (!plan) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Plan not found'
+      });
+    }
+    
+    res.status(200).json({
+      status: 'success',
+      data: { plan }
+    });
+  } catch (err) {
+    console.error('Admin get plan error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch plan details'
     });
   }
 });
@@ -6855,11 +7892,11 @@ app.post('/api/admin/investment/plans', adminProtect, [
 app.put('/api/admin/investment/plans/:id', adminProtect, [
   body('name').optional().trim().notEmpty().withMessage('Plan name cannot be empty'),
   body('description').optional().trim().notEmpty().withMessage('Description cannot be empty'),
-  body('percentage').optional().isFloat({ min: 0 }).withMessage('Percentage must be a positive number'),
-  body('duration').optional().isInt({ min: 1 }).withMessage('Duration must be at least 1 hour'),
-  body('minAmount').optional().isFloat({ min: 0 }).withMessage('Minimum amount must be a positive number'),
-  body('maxAmount').optional().isFloat({ min: 0 }).withMessage('Maximum amount must be a positive number'),
-  body('referralBonus').optional().isFloat({ min: 0, max: 100 }).withMessage('Referral bonus must be between 0-100'),
+  body('percentage').optional().isFloat({ gt: 0 }).withMessage('Percentage must be greater than 0'),
+  body('duration').optional().isInt({ gt: 0 }).withMessage('Duration must be greater than 0'),
+  body('minAmount').optional().isFloat({ gt: 0 }).withMessage('Minimum amount must be greater than 0'),
+  body('maxAmount').optional().isFloat({ gt: 0 }).withMessage('Maximum amount must be greater than 0'),
+  body('referralBonus').optional().isFloat({ min: 0 }).withMessage('Referral bonus cannot be negative'),
   body('isActive').optional().isBoolean().withMessage('isActive must be a boolean')
 ], async (req, res) => {
   try {
@@ -6870,29 +7907,57 @@ app.put('/api/admin/investment/plans/:id', adminProtect, [
         errors: errors.array()
       });
     }
-
+    
+    const { name, description, percentage, duration, minAmount, maxAmount, referralBonus, isActive } = req.body;
+    
+    // Check if plan with same name already exists (excluding current plan)
+    if (name) {
+      const existingPlan = await Plan.findOne({ 
+        name, 
+        _id: { $ne: req.params.id } 
+      });
+      
+      if (existingPlan) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Plan with this name already exists'
+        });
+      }
+    }
+    
+    // Prepare update data
+    const updateData = {};
+    if (name) updateData.name = name;
+    if (description) updateData.description = description;
+    if (percentage) updateData.percentage = percentage;
+    if (duration) updateData.duration = duration;
+    if (minAmount) updateData.minAmount = minAmount;
+    if (maxAmount) updateData.maxAmount = maxAmount;
+    if (referralBonus !== undefined) updateData.referralBonus = referralBonus;
+    if (isActive !== undefined) updateData.isActive = isActive;
+    
+    // Update plan
     const plan = await Plan.findByIdAndUpdate(
       req.params.id,
-      req.body,
+      updateData,
       { new: true, runValidators: true }
     );
-
+    
     if (!plan) {
       return res.status(404).json({
         status: 'fail',
-        message: 'Investment plan not found'
+        message: 'Plan not found'
       });
     }
-
+    
     res.status(200).json({
       status: 'success',
-      message: 'Investment plan updated successfully',
       data: { plan }
     });
-
-    await logActivity('update-plan', 'plan', plan._id, req.admin._id, 'Admin', req, req.body);
+    
+    await logActivity('update-plan', 'plan', plan._id, req.admin._id, 'Admin', req, updateData);
   } catch (err) {
-    console.error('Admin update investment plan error:', err);
+    console.error('Admin update plan error:', err);
     res.status(500).json({
       status: 'error',
       message: 'Failed to update investment plan'
@@ -6904,24 +7969,24 @@ app.put('/api/admin/investment/plans/:id', adminProtect, [
 app.delete('/api/admin/investment/plans/:id', adminProtect, async (req, res) => {
   try {
     const plan = await Plan.findByIdAndDelete(req.params.id);
-
+    
     if (!plan) {
       return res.status(404).json({
         status: 'fail',
-        message: 'Investment plan not found'
+        message: 'Plan not found'
       });
     }
-
+    
     res.status(200).json({
       status: 'success',
-      message: 'Investment plan deleted successfully'
+      message: 'Plan deleted successfully'
     });
-
-    await logActivity('delete-plan', 'plan', req.params.id, req.admin._id, 'Admin', req, {
+    
+    await logActivity('delete-plan', 'plan', plan._id, req.admin._id, 'Admin', req, {
       name: plan.name
     });
   } catch (err) {
-    console.error('Admin delete investment plan error:', err);
+    console.error('Admin delete plan error:', err);
     res.status(500).json({
       status: 'error',
       message: 'Failed to delete investment plan'
@@ -6935,50 +8000,54 @@ app.post('/api/admin/investments/:id/cancel', adminProtect, [
 ], async (req, res) => {
   try {
     const { reason } = req.body;
-    const investment = await Investment.findById(req.params.id);
-
+    
+    // Find investment
+    const investment = await Investment.findById(req.params.id)
+      .populate('user', 'firstName lastName email')
+      .populate('plan');
+    
     if (!investment) {
       return res.status(404).json({
         status: 'fail',
         message: 'Investment not found'
       });
     }
-
+    
     if (investment.status !== 'active') {
       return res.status(400).json({
         status: 'fail',
         message: 'Only active investments can be cancelled'
       });
     }
-
+    
+    // Find user
+    const user = await User.findById(investment.user._id);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+    
+    // Return funds to user balance
+    user.balances.active -= investment.amount;
+    user.balances.main += investment.amount;
+    await user.save();
+    
     // Update investment status
     investment.status = 'cancelled';
-    investment.statusHistory.push({
-      status: 'cancelled',
-      changedAt: new Date(),
-      changedBy: req.admin._id,
-      changedByModel: 'Admin',
-      reason: reason || 'Cancelled by admin'
-    });
+    investment.completionDate = new Date();
+    investment.adminNotes = reason;
     await investment.save();
-
-    // Return funds to user
-    const user = await User.findById(investment.user);
-    if (user) {
-      user.balances.active -= investment.amount;
-      user.balances.main += investment.amount;
-      await user.save();
-    }
-
+    
     res.status(200).json({
       status: 'success',
-      message: 'Investment cancelled successfully',
-      data: { investment }
+      message: 'Investment cancelled successfully'
     });
-
+    
     await logActivity('cancel-investment', 'investment', investment._id, req.admin._id, 'Admin', req, {
       amount: investment.amount,
-      userId: investment.user,
+      userId: user._id,
       reason
     });
   } catch (err) {
@@ -6990,34 +8059,349 @@ app.post('/api/admin/investments/:id/cancel', adminProtect, [
   }
 });
 
-// Admin Delete Card Endpoint
-app.delete('/api/admin/cards/:id', adminProtect, async (req, res) => {
+// Admin Get General Settings Endpoint
+app.get('/api/admin/settings/general', adminProtect, async (req, res) => {
   try {
-    const card = await Card.findByIdAndDelete(req.params.id);
-
-    if (!card) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Card not found'
-      });
-    }
-
+    const settings = await SystemSettings.findOne({ type: 'general' }).lean();
+    
+    // Return default settings if none exist
+    const defaultSettings = {
+      platformName: 'BitHash',
+      platformUrl: 'https://bithash.com',
+      platformEmail: 'support@bithash.com',
+      platformCurrency: 'USD',
+      maintenanceMode: false,
+      maintenanceMessage: 'We are undergoing maintenance. Please check back later.',
+      timezone: 'UTC',
+      dateFormat: 'MM/DD/YYYY',
+      maxLoginAttempts: 5,
+      sessionTimeout: 30
+    };
+    
     res.status(200).json({
       status: 'success',
-      message: 'Card deleted successfully'
-    });
-
-    await logActivity('delete-card', 'card', req.params.id, req.admin._id, 'Admin', req, {
-      userId: card.user
+      data: {
+        settings: settings || defaultSettings
+      }
     });
   } catch (err) {
-    console.error('Admin delete card error:', err);
+    console.error('Admin get general settings error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to delete card'
+      message: 'Failed to load general settings'
     });
   }
 });
+
+// Admin Save General Settings Endpoint
+app.post('/api/admin/settings/general', adminProtect, [
+  body('platformName').trim().notEmpty().withMessage('Platform name is required'),
+  body('platformUrl').isURL().withMessage('Invalid platform URL'),
+  body('platformEmail').isEmail().withMessage('Invalid email address'),
+  body('platformCurrency').isIn(['USD', 'EUR', 'GBP', 'BTC']).withMessage('Invalid currency'),
+  body('maintenanceMode').isBoolean().withMessage('Maintenance mode must be boolean'),
+  body('sessionTimeout').isInt({ min: 1, max: 1440 }).withMessage('Session timeout must be between 1-1440 minutes')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+    
+    const settingsData = {
+      type: 'general',
+      ...req.body,
+      updatedBy: req.admin._id,
+      updatedAt: new Date()
+    };
+    
+    const settings = await SystemSettings.findOneAndUpdate(
+      { type: 'general' },
+      settingsData,
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    
+    res.status(200).json({
+      status: 'success',
+      data: { settings }
+    });
+    
+    await logActivity('update-general-settings', 'settings', settings._id, req.admin._id, 'Admin', req, {
+      fields: Object.keys(req.body)
+    });
+  } catch (err) {
+    console.error('Admin save general settings error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to save general settings'
+    });
+  }
+});
+
+// Admin Get Security Settings Endpoint
+app.get('/api/admin/settings/security', adminProtect, async (req, res) => {
+  try {
+    const settings = await SystemSettings.findOne({ type: 'security' }).lean();
+    
+    // Return default settings if none exist
+    const defaultSettings = {
+      twoFactorAuth: true,
+      loginAttempts: 5,
+      passwordResetExpiry: 60,
+      sessionTimeout: 30,
+      ipWhitelist: []
+    };
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        settings: settings || defaultSettings
+      }
+    });
+  } catch (err) {
+    console.error('Admin get security settings error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to load security settings'
+    });
+  }
+});
+
+// Admin Save Security Settings Endpoint
+app.post('/api/admin/settings/security', adminProtect, [
+  body('twoFactorAuth').isBoolean().withMessage('Two-factor auth must be boolean'),
+  body('loginAttempts').isInt({ min: 1, max: 10 }).withMessage('Login attempts must be between 1-10'),
+  body('passwordResetExpiry').isInt({ min: 15, max: 1440 }).withMessage('Password reset expiry must be between 15-1440 minutes'),
+  body('sessionTimeout').isInt({ min: 5, max: 1440 }).withMessage('Session timeout must be between 5-1440 minutes'),
+  body('ipWhitelist').optional().isArray().withMessage('IP whitelist must be an array')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+    
+    const { twoFactorAuth, loginAttempts, passwordResetExpiry, sessionTimeout, ipWhitelist = [] } = req.body;
+    
+    const settingsData = {
+      type: 'security',
+      twoFactorAuth,
+      loginAttempts,
+      passwordResetExpiry,
+      sessionTimeout,
+      ipWhitelist,
+      updatedBy: req.admin._id,
+      updatedAt: new Date()
+    };
+    
+    const settings = await SystemSettings.findOneAndUpdate(
+      { type: 'security' },
+      settingsData,
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    
+    res.status(200).json({
+      status: 'success',
+      data: { settings }
+    });
+    
+    await logActivity('update-security-settings', 'settings', settings._id, req.admin._id, 'Admin', req, {
+      fields: Object.keys(req.body)
+    });
+  } catch (err) {
+    console.error('Admin save security settings error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to save security settings'
+    });
+  }
+});
+
+// Admin Get Email Settings Endpoint
+app.get('/api/admin/settings/email', adminProtect, async (req, res) => {
+  try {
+    const settings = await SystemSettings.findOne({ type: 'email' }).lean();
+    
+    // Return default settings if none exist
+    const defaultSettings = {
+      mailDriver: 'smtp',
+      mailHost: 'smtp.mailtrap.io',
+      mailPort: 2525,
+      mailUsername: '',
+      mailPassword: '',
+      mailEncryption: 'tls',
+      mailFromAddress: 'noreply@bithash.com',
+      mailFromName: 'BitHash'
+    };
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        settings: settings || defaultSettings
+      }
+    });
+  } catch (err) {
+    console.error('Admin get email settings error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to load email settings'
+    });
+  }
+});
+
+// Admin Save Email Settings Endpoint
+app.post('/api/admin/settings/email', adminProtect, [
+  body('mailDriver').isIn(['smtp', 'sendmail', 'mailgun', 'ses']).withMessage('Invalid mail driver'),
+  body('mailHost').optional().trim(),
+  body('mailPort').optional().isInt({ min: 1, max: 65535 }).withMessage('Invalid port number'),
+  body('mailUsername').optional().trim(),
+  body('mailPassword').optional().trim(),
+  body('mailEncryption').optional().isIn(['tls', 'ssl', 'none']).withMessage('Invalid encryption'),
+  body('mailFromAddress').isEmail().withMessage('Invalid from address'),
+  body('mailFromName').trim().notEmpty().withMessage('From name is required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+    
+    const settingsData = {
+      type: 'email',
+      ...req.body,
+      updatedBy: req.admin._id,
+      updatedAt: new Date()
+    };
+    
+    const settings = await SystemSettings.findOneAndUpdate(
+      { type: 'email' },
+      settingsData,
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    
+    res.status(200).json({
+      status: 'success',
+      data: { settings }
+    });
+    
+    await logActivity('update-email-settings', 'settings', settings._id, req.admin._id, 'Admin', req, {
+      fields: Object.keys(req.body).filter(key => key !== 'mailPassword')
+    });
+  } catch (err) {
+    console.error('Admin save email settings error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to save email settings'
+    });
+  }
+});
+
+// Admin Get Payment Settings Endpoint
+app.get('/api/admin/settings/payments', adminProtect, async (req, res) => {
+  try {
+    const settings = await SystemSettings.findOne({ type: 'payment' }).lean();
+    
+    // Return default settings if none exist
+    const defaultSettings = {
+      stripePublicKey: '',
+      stripeSecretKey: '',
+      stripeWebhookSecret: '',
+      btcWalletAddress: 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k',
+      ethWalletAddress: '',
+      minDepositAmount: 10,
+      maxDepositAmount: 10000,
+      depositFee: 0
+    };
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        settings: settings || defaultSettings
+      }
+    });
+  } catch (err) {
+    console.error('Admin get payment settings error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to load payment settings'
+    });
+  }
+});
+
+// Admin Save Payment Settings Endpoint
+app.post('/api/admin/settings/payments', adminProtect, [
+  body('stripePublicKey').optional().trim(),
+  body('stripeSecretKey').optional().trim(),
+  body('stripeWebhookSecret').optional().trim(),
+  body('btcWalletAddress').optional().trim(),
+  body('ethWalletAddress').optional().trim(),
+  body('minDepositAmount').isFloat({ min: 0 }).withMessage('Minimum deposit amount cannot be negative'),
+  body('maxDepositAmount').isFloat({ min: 0 }).withMessage('Maximum deposit amount cannot be negative'),
+  body('depositFee').isFloat({ min: 0, max: 100 }).withMessage('Deposit fee must be between 0-100')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+    
+    const settingsData = {
+      type: 'payment',
+      ...req.body,
+      updatedBy: req.admin._id,
+      updatedAt: new Date()
+    };
+    
+    const settings = await SystemSettings.findOneAndUpdate(
+      { type: 'payment' },
+      settingsData,
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    
+    res.status(200).json({
+      status: 'success',
+      data: { settings }
+    });
+    
+    await logActivity('update-payment-settings', 'settings', settings._id, req.admin._id, 'Admin', req, {
+      fields: Object.keys(req.body).filter(key => !key.includes('Secret') && !key.includes('Key'))
+    });
+  } catch (err) {
+    console.error('Admin save payment settings error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to save payment settings'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -7151,3 +8535,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
