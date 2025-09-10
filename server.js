@@ -1788,7 +1788,7 @@ const initializePlans = async () => {
         percentage: 40,
         duration: 72,
         minAmount: 10000,
-        maxAmount: 30000,
+        maxAmount: 49999,
         referralBonus: 5
       },
       {
@@ -8535,4 +8535,5 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
