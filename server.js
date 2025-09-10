@@ -6345,7 +6345,679 @@ app.get('/api/withdrawals/history', protect, async (req, res) => {
 
 
 
+// Admin Add User Endpoint
+app.post('/api/admin/users', adminProtect, [
+  body('firstName').trim().notEmpty().withMessage('First name is required'),
+  body('lastName').trim().notEmpty().withMessage('Last name is required'),
+  body('email').isEmail().withMessage('Invalid email address'),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+  body('status').isIn(['active', 'suspended', 'banned']).withMessage('Invalid status')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
 
+    const { firstName, lastName, email, password, status } = req.body;
+
+    // Check if email already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Email already in use'
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12);
+    const referralCode = generateReferralCode();
+
+    const user = await User.create({
+      firstName,
+      lastName,
+      email,
+      password: hashedPassword,
+      status,
+      referralCode
+    });
+
+    res.status(201).json({
+      status: 'success',
+      message: 'User created successfully',
+      data: {
+        user: {
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          status: user.status
+        }
+      }
+    });
+
+    await logActivity('create-user', 'user', user._id, req.admin._id, 'Admin', req);
+  } catch (err) {
+    console.error('Admin add user error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to create user'
+    });
+  }
+});
+
+// Admin Get User Details Endpoint
+app.get('/api/admin/users/:id', adminProtect, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id)
+      .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires')
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: { user }
+    });
+  } catch (err) {
+    console.error('Admin get user error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch user details'
+    });
+  }
+});
+
+// Admin Update User Endpoint
+app.put('/api/admin/users/:id', adminProtect, [
+  body('firstName').optional().trim().notEmpty().withMessage('First name cannot be empty'),
+  body('lastName').optional().trim().notEmpty().withMessage('Last name cannot be empty'),
+  body('email').optional().isEmail().withMessage('Invalid email address'),
+  body('status').optional().isIn(['active', 'suspended', 'banned']).withMessage('Invalid status')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+
+    const { firstName, lastName, email, status } = req.body;
+    const updates = {};
+
+    if (firstName) updates.firstName = firstName;
+    if (lastName) updates.lastName = lastName;
+    if (email) updates.email = email;
+    if (status) updates.status = status;
+
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      updates,
+      { new: true, runValidators: true }
+    ).select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires');
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'User updated successfully',
+      data: { user }
+    });
+
+    await logActivity('update-user', 'user', user._id, req.admin._id, 'Admin', req, updates);
+  } catch (err) {
+    console.error('Admin update user error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update user'
+    });
+  }
+});
+
+// Admin Add Balance to User Endpoint
+app.post('/api/admin/users/:id/balance', adminProtect, [
+  body('amount').isFloat({ min: 0 }).withMessage('Amount must be a positive number'),
+  body('balanceType').isIn(['main', 'active', 'matured', 'savings', 'loan']).withMessage('Invalid balance type')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+
+    const { amount, balanceType } = req.body;
+    const user = await User.findById(req.params.id);
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Initialize balances if they don't exist
+    if (!user.balances) {
+      user.balances = {
+        main: 0,
+        active: 0,
+        matured: 0,
+        savings: 0,
+        loan: 0
+      };
+    }
+
+    // Add to the specified balance
+    user.balances[balanceType] += amount;
+    await user.save();
+
+    // Create transaction record
+    const reference = `ADMIN-ADD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    await Transaction.create({
+      user: user._id,
+      type: 'deposit',
+      amount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference,
+      netAmount: amount,
+      details: `Admin added balance to ${balanceType} account`,
+      processedBy: req.admin._id,
+      processedAt: new Date()
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Balance added successfully',
+      data: {
+        newBalance: user.balances[balanceType]
+      }
+    });
+
+    await logActivity('add-balance', 'user', user._id, req.admin._id, 'Admin', req, {
+      amount,
+      balanceType,
+      newBalance: user.balances[balanceType]
+    });
+  } catch (err) {
+    console.error('Admin add balance error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to add balance'
+    });
+  }
+});
+
+// Admin Approve Deposit Endpoint
+app.post('/api/admin/deposits/:id/approve', adminProtect, [
+  body('notes').optional().trim()
+], async (req, res) => {
+  try {
+    const { notes } = req.body;
+    const transaction = await Transaction.findById(req.params.id);
+
+    if (!transaction) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Deposit not found'
+      });
+    }
+
+    if (transaction.status !== 'pending') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Deposit is not pending approval'
+      });
+    }
+
+    // Update transaction status
+    transaction.status = 'completed';
+    transaction.processedBy = req.admin._id;
+    transaction.processedAt = new Date();
+    transaction.adminNotes = notes;
+    await transaction.save();
+
+    // Add funds to user's balance
+    const user = await User.findById(transaction.user);
+    if (user) {
+      user.balances.main += transaction.amount;
+      await user.save();
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Deposit approved successfully',
+      data: { transaction }
+    });
+
+    await logActivity('approve-deposit', 'transaction', transaction._id, req.admin._id, 'Admin', req, {
+      amount: transaction.amount,
+      userId: transaction.user
+    });
+  } catch (err) {
+    console.error('Admin approve deposit error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to approve deposit'
+    });
+  }
+});
+
+// Admin Reject Deposit Endpoint
+app.post('/api/admin/deposits/:id/reject', adminProtect, [
+  body('rejectionReason').trim().notEmpty().withMessage('Rejection reason is required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+
+    const { rejectionReason } = req.body;
+    const transaction = await Transaction.findById(req.params.id);
+
+    if (!transaction) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Deposit not found'
+      });
+    }
+
+    if (transaction.status !== 'pending') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Deposit is not pending approval'
+      });
+    }
+
+    // Update transaction status
+    transaction.status = 'failed';
+    transaction.processedBy = req.admin._id;
+    transaction.processedAt = new Date();
+    transaction.adminNotes = rejectionReason;
+    await transaction.save();
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Deposit rejected successfully',
+      data: { transaction }
+    });
+
+    await logActivity('reject-deposit', 'transaction', transaction._id, req.admin._id, 'Admin', req, {
+      amount: transaction.amount,
+      userId: transaction.user,
+      rejectionReason
+    });
+  } catch (err) {
+    console.error('Admin reject deposit error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to reject deposit'
+    });
+  }
+});
+
+// Admin Approve Withdrawal Endpoint
+app.post('/api/admin/withdrawals/:id/approve', adminProtect, [
+  body('notes').optional().trim()
+], async (req, res) => {
+  try {
+    const { notes } = req.body;
+    const transaction = await Transaction.findById(req.params.id);
+
+    if (!transaction) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Withdrawal not found'
+      });
+    }
+
+    if (transaction.status !== 'pending') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Withdrawal is not pending approval'
+      });
+    }
+
+    // Update transaction status
+    transaction.status = 'completed';
+    transaction.processedBy = req.admin._id;
+    transaction.processedAt = new Date();
+    transaction.adminNotes = notes;
+    await transaction.save();
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Withdrawal approved successfully',
+      data: { transaction }
+    });
+
+    await logActivity('approve-withdrawal', 'transaction', transaction._id, req.admin._id, 'Admin', req, {
+      amount: transaction.amount,
+      userId: transaction.user
+    });
+  } catch (err) {
+    console.error('Admin approve withdrawal error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to approve withdrawal'
+    });
+  }
+});
+
+// Admin Reject Withdrawal Endpoint
+app.post('/api/admin/withdrawals/:id/reject', adminProtect, [
+  body('rejectionReason').trim().notEmpty().withMessage('Rejection reason is required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+
+    const { rejectionReason } = req.body;
+    const transaction = await Transaction.findById(req.params.id);
+
+    if (!transaction) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Withdrawal not found'
+      });
+    }
+
+    if (transaction.status !== 'pending') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Withdrawal is not pending approval'
+      });
+    }
+
+    // Update transaction status and return funds to user
+    transaction.status = 'failed';
+    transaction.processedBy = req.admin._id;
+    transaction.processedAt = new Date();
+    transaction.adminNotes = rejectionReason;
+    await transaction.save();
+
+    // Return funds to user
+    const user = await User.findById(transaction.user);
+    if (user) {
+      user.balances.main += transaction.amount;
+      await user.save();
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Withdrawal rejected successfully',
+      data: { transaction }
+    });
+
+    await logActivity('reject-withdrawal', 'transaction', transaction._id, req.admin._id, 'Admin', req, {
+      amount: transaction.amount,
+      userId: transaction.user,
+      rejectionReason
+    });
+  } catch (err) {
+    console.error('Admin reject withdrawal error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to reject withdrawal'
+    });
+  }
+});
+
+// Admin Add Investment Plan Endpoint
+app.post('/api/admin/investment/plans', adminProtect, [
+  body('name').trim().notEmpty().withMessage('Plan name is required'),
+  body('description').trim().notEmpty().withMessage('Description is required'),
+  body('percentage').isFloat({ min: 0 }).withMessage('Percentage must be a positive number'),
+  body('duration').isInt({ min: 1 }).withMessage('Duration must be at least 1 hour'),
+  body('minAmount').isFloat({ min: 0 }).withMessage('Minimum amount must be a positive number'),
+  body('maxAmount').isFloat({ min: 0 }).withMessage('Maximum amount must be a positive number'),
+  body('referralBonus').optional().isFloat({ min: 0, max: 100 }).withMessage('Referral bonus must be between 0-100')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+
+    const { name, description, percentage, duration, minAmount, maxAmount, referralBonus = 5 } = req.body;
+
+    // Check if plan name already exists
+    const existingPlan = await Plan.findOne({ name });
+    if (existingPlan) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Plan name already exists'
+      });
+    }
+
+    const plan = await Plan.create({
+      name,
+      description,
+      percentage,
+      duration,
+      minAmount,
+      maxAmount,
+      referralBonus,
+      isActive: true
+    });
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Investment plan created successfully',
+      data: { plan }
+    });
+
+    await logActivity('create-plan', 'plan', plan._id, req.admin._id, 'Admin', req, {
+      name,
+      percentage,
+      duration
+    });
+  } catch (err) {
+    console.error('Admin add investment plan error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to create investment plan'
+    });
+  }
+});
+
+// Admin Update Investment Plan Endpoint
+app.put('/api/admin/investment/plans/:id', adminProtect, [
+  body('name').optional().trim().notEmpty().withMessage('Plan name cannot be empty'),
+  body('description').optional().trim().notEmpty().withMessage('Description cannot be empty'),
+  body('percentage').optional().isFloat({ min: 0 }).withMessage('Percentage must be a positive number'),
+  body('duration').optional().isInt({ min: 1 }).withMessage('Duration must be at least 1 hour'),
+  body('minAmount').optional().isFloat({ min: 0 }).withMessage('Minimum amount must be a positive number'),
+  body('maxAmount').optional().isFloat({ min: 0 }).withMessage('Maximum amount must be a positive number'),
+  body('referralBonus').optional().isFloat({ min: 0, max: 100 }).withMessage('Referral bonus must be between 0-100'),
+  body('isActive').optional().isBoolean().withMessage('isActive must be a boolean')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+
+    const plan = await Plan.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true, runValidators: true }
+    );
+
+    if (!plan) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Investment plan not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Investment plan updated successfully',
+      data: { plan }
+    });
+
+    await logActivity('update-plan', 'plan', plan._id, req.admin._id, 'Admin', req, req.body);
+  } catch (err) {
+    console.error('Admin update investment plan error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update investment plan'
+    });
+  }
+});
+
+// Admin Delete Investment Plan Endpoint
+app.delete('/api/admin/investment/plans/:id', adminProtect, async (req, res) => {
+  try {
+    const plan = await Plan.findByIdAndDelete(req.params.id);
+
+    if (!plan) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Investment plan not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Investment plan deleted successfully'
+    });
+
+    await logActivity('delete-plan', 'plan', req.params.id, req.admin._id, 'Admin', req, {
+      name: plan.name
+    });
+  } catch (err) {
+    console.error('Admin delete investment plan error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to delete investment plan'
+    });
+  }
+});
+
+// Admin Cancel Investment Endpoint
+app.post('/api/admin/investments/:id/cancel', adminProtect, [
+  body('reason').optional().trim()
+], async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const investment = await Investment.findById(req.params.id);
+
+    if (!investment) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Investment not found'
+      });
+    }
+
+    if (investment.status !== 'active') {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Only active investments can be cancelled'
+      });
+    }
+
+    // Update investment status
+    investment.status = 'cancelled';
+    investment.statusHistory.push({
+      status: 'cancelled',
+      changedAt: new Date(),
+      changedBy: req.admin._id,
+      changedByModel: 'Admin',
+      reason: reason || 'Cancelled by admin'
+    });
+    await investment.save();
+
+    // Return funds to user
+    const user = await User.findById(investment.user);
+    if (user) {
+      user.balances.active -= investment.amount;
+      user.balances.main += investment.amount;
+      await user.save();
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Investment cancelled successfully',
+      data: { investment }
+    });
+
+    await logActivity('cancel-investment', 'investment', investment._id, req.admin._id, 'Admin', req, {
+      amount: investment.amount,
+      userId: investment.user,
+      reason
+    });
+  } catch (err) {
+    console.error('Admin cancel investment error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to cancel investment'
+    });
+  }
+});
+
+// Admin Delete Card Endpoint
+app.delete('/api/admin/cards/:id', adminProtect, async (req, res) => {
+  try {
+    const card = await Card.findByIdAndDelete(req.params.id);
+
+    if (!card) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Card not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Card deleted successfully'
+    });
+
+    await logActivity('delete-card', 'card', req.params.id, req.admin._id, 'Admin', req, {
+      userId: card.user
+    });
+  } catch (err) {
+    console.error('Admin delete card error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to delete card'
+    });
+  }
+});
 
 
 
@@ -6479,15 +7151,3 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
-
-
-
