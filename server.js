@@ -6006,11 +6006,11 @@ app.get('/api/investments/active', protect, async (req, res) => {
         ? Math.min(100, (elapsedMs / totalDurationMs) * 100)
         : 0;
       
-      // CORRECTED: Get ROI percentage from investment's returnPercentage field
-      const roiPercentage = investment.returnPercentage || 0;
-      
-      // Calculate expected profit
-      const expectedProfit = investment.amount * (roiPercentage / 100);
+// Get ROI percentage from the associated plan (this is the actual ROI percentage)
+const roiPercentage = investment.plan?.percentage || 0;
+
+// Calculate expected profit
+const expectedProfit = investment.amount * (roiPercentage / 100);
       
       return {
         id: investment._id,
@@ -8516,6 +8516,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
