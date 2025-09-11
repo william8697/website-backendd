@@ -3981,39 +3981,6 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
   }
 });
 
-app.get('/api/transactions', protect, async (req, res) => {
-  try {
-    const { type, page = 1, limit = 20 } = req.query;
-    const skip = (page - 1) * limit;
-
-    const query = { user: req.user.id };
-    if (type) query.type = type;
-
-    const transactions = await Transaction.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const total = await Transaction.countDocuments(query);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        transactions,
-        total,
-        page: parseInt(page),
-        pages: Math.ceil(total / limit)
-      }
-    });
-  } catch (err) {
-    console.error('Get transactions error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching transactions'
-    });
-  }
-});
-
 
 
 
@@ -8508,6 +8475,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
