@@ -4028,31 +4028,130 @@ app.get('/api/transactions', protect, async (req, res) => {
 
 
 
-app.get('/api/mining/stats', protect, async (req, res) => {
-  try {
-    const stats = {
-      hashrate: Math.floor(Math.random() * 100) + 50, // Simulated hashrate in TH/s
-      activeWorkers: Math.floor(Math.random() * 5) + 1,
-      shares: {
-        accepted: Math.floor(Math.random() * 1000) + 500,
-        rejected: Math.floor(Math.random() * 10),
-        stale: Math.floor(Math.random() * 20)
-      },
-      estimatedDailyEarnings: (Math.random() * 0.01).toFixed(8)
-    };
 
+app.get('/api/mining', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const cacheKey = `mining-stats:${userId}`;
+    
+    // Try to get cached data first
+    const cachedData = await redis.get(cacheKey);
+    if (cachedData) {
+      const parsedData = JSON.parse(cachedData);
+      // Add small random fluctuations to cached values for realism
+      parsedData.hashRate = fluctuateValue(parsedData.hashRate, 5);
+      parsedData.miningPower = fluctuateValue(parsedData.miningPower, 3);
+      parsedData.btcMined = fluctuateValue(parsedData.btcMined, 1);
+      return res.status(200).json({
+        status: 'success',
+        data: parsedData
+      });
+    }
+
+    // Get user's active investments
+    const activeInvestments = await Investment.find({
+      user: userId,
+      status: 'active'
+    }).populate('plan');
+
+    // Default response if no active investments
+    if (activeInvestments.length === 0) {
+      const defaultData = {
+        hashRate: "0 TH/s",
+        btcMined: "0 BTC",
+        miningPower: "0%",
+        totalExpected: "$0.00", // Changed from totalReturn to totalExpected
+        progress: 0,
+        lastUpdated: new Date().toISOString()
+      };
+      
+      await redis.set(cacheKey, JSON.stringify(defaultData), 'EX', 60);
+      return res.status(200).json({
+        status: 'success',
+        data: defaultData
+      });
+    }
+
+    // Calculate total expected amount at maturity
+    let totalExpected = 0;
+    let totalInvestmentAmount = 0;
+    let maxProgress = 0;
+
+    for (const investment of activeInvestments) {
+      const investmentReturn = investment.amount * (investment.plan.percentage / 100);
+      totalExpected += investment.amount + investmentReturn; // Principal + profit
+      totalInvestmentAmount += investment.amount;
+
+      // Calculate progress for this investment
+      const totalDuration = investment.endDate - investment.createdAt;
+      const elapsed = Date.now() - investment.createdAt;
+      const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
+      maxProgress = Math.max(maxProgress, progress);
+    }
+
+    // Get BTC price from CoinGecko
+    let btcPrice = 60000;
+    try {
+      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+      btcPrice = response.data.bitcoin.usd;
+    } catch (error) {
+      console.error('CoinGecko API error:', error);
+    }
+
+    // Base calculations
+    const baseHashRate = totalInvestmentAmount * 0.1;
+    const baseMiningPower = Math.min(100, (totalInvestmentAmount / 10000) * 100);
+    const baseBtcMined = (totalExpected - totalInvestmentAmount) / btcPrice; // Profit in BTC
+
+    // Apply realistic fluctuations
+    const currentTime = Date.now();
+    const timeFactor = Math.sin(currentTime / 60000);
+    
+    const hashRateFluctuation = 0.05 * timeFactor + (Math.random() * 0.1 - 0.05);
+    const hashRate = baseHashRate * (1 + hashRateFluctuation);
+    
+    const miningPowerFluctuation = 0.02 * timeFactor + (Math.random() * 0.04 - 0.02);
+    const miningPower = baseMiningPower * (1 + miningPowerFluctuation);
+    
+    const btcMined = baseBtcMined * (1 + (Math.random() * 0.01 - 0.005));
+
+    // Simulate network difficulty changes
+    const networkFactor = 1 + (Math.sin(currentTime / 300000) * 0.1);
+    const adjustedHashRate = hashRate / networkFactor;
+    const adjustedMiningPower = miningPower / networkFactor;
+
+    const miningData = {
+      hashRate: `${adjustedHashRate.toFixed(2)} TH/s`,
+      btcMined: `${btcMined.toFixed(8)} BTC`,
+      miningPower: `${Math.min(100, adjustedMiningPower).toFixed(2)}%`,
+      totalExpected: `$${totalExpected.toFixed(2)}`, // Changed from totalReturn to totalExpected
+      totalInvested: `$${totalInvestmentAmount.toFixed(2)}`, // Added total invested for context
+      expectedProfit: `$${(totalExpected - totalInvestmentAmount).toFixed(2)}`, // Added expected profit
+      progress: parseFloat(maxProgress.toFixed(2)),
+      lastUpdated: new Date().toISOString(),
+      networkDifficulty: networkFactor.toFixed(2),
+      workersOnline: Math.floor(3 + Math.random() * 3)
+    };
+    
+    // Cache for 1 minute
+    await redis.set(cacheKey, JSON.stringify(miningData), 'EX', 60);
+    
     res.status(200).json({
       status: 'success',
-      data: stats
+      data: miningData
     });
-  } catch (err) {
-    console.error('Get mining stats error:', err);
+
+  } catch (error) {
+    console.error('Mining endpoint error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'An error occurred while fetching mining stats'
+      message: 'Failed to fetch mining data'
     });
   }
 });
+
+
+
 
 app.post('/api/transactions/deposit', protect, [
   body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
@@ -8516,6 +8615,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
