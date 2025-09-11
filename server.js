@@ -5384,34 +5384,7 @@ function fluctuateValue(valueStr, percent) {
 
 
 
-app.get('/api/transactions', protect, async (req, res) => {
-  try {
-    const { type, status, method, limit = 10, sort = '-createdAt' } = req.query;
-    
-    const query = { user: req.user._id };
-    if (type) query.type = type;
-    if (status) query.status = status;
-    if (method) query.method = method;
 
-    // Explicitly convert limit to number and ensure it's not too large
-    const numLimit = Math.min(parseInt(limit) || 10, 100);
-    
-    const transactions = await Transaction.find(query)
-      .sort(sort)
-      .limit(numLimit)
-      .lean();
-
-    // Ensure we always return an array, even if empty
-    res.status(200).json(transactions);
-
-  } catch (err) {
-    console.error('Get transactions error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching transactions'
-    });
-  }
-});
 
 
 
@@ -8535,5 +8508,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
