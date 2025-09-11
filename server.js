@@ -3982,7 +3982,45 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
 });
 
 
+// Recent transactions endpoint
+app.get('/api/transactions', protect, async (req, res) => {
+  try {
+    const { limit = 10, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
+    
+    // Get transactions from database with real-time data
+    const transactions = await Transaction.find({ user: req.user.id })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
 
+    // Format transactions to match frontend expected structure
+    const formattedTransactions = transactions.map(transaction => ({
+      id: transaction._id,
+      date: transaction.createdAt,
+      type: transaction.type,
+      amount: transaction.amount,
+      status: transaction.status,
+      details: transaction.details || 'N/A',
+      // Include all fields expected by frontend
+      reference: transaction.reference,
+      currency: transaction.currency,
+      method: transaction.method,
+      fee: transaction.fee,
+      netAmount: transaction.netAmount
+    }));
+
+    res.status(200).json(formattedTransactions);
+
+  } catch (err) {
+    console.error('Get transactions error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching transactions'
+    });
+  }
+});
 
 
 
@@ -8475,6 +8513,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
