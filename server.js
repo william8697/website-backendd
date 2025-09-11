@@ -3981,47 +3981,50 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
   }
 });
 
-
-// Recent transactions endpoint
 app.get('/api/transactions', protect, async (req, res) => {
-  try {
-    const { limit = 10, page = 1 } = req.query;
-    const skip = (page - 1) * limit;
-    
-    // Get transactions from database with real-time data
-    const transactions = await Transaction.find({ user: req.user.id })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        if (!token) {
+            return res.status(401).json({
+                status: 'fail',
+                message: 'Authentication required'
+            });
+        }
 
-    // Format transactions to match frontend expected structure
-    const formattedTransactions = transactions.map(transaction => ({
-      id: transaction._id,
-      date: transaction.createdAt,
-      type: transaction.type,
-      amount: transaction.amount,
-      status: transaction.status,
-      details: transaction.details || 'N/A',
-      // Include all fields expected by frontend
-      reference: transaction.reference,
-      currency: transaction.currency,
-      method: transaction.method,
-      fee: transaction.fee,
-      netAmount: transaction.netAmount
-    }));
+        // Get all transaction types that involve money movements
+        const transactions = await Transaction.find({
+            user: req.user.id,
+            type: { $in: ['deposit', 'withdrawal', 'transfer', 'investment', 'interest', 'referral', 'loan'] }
+        })
+        .sort({ createdAt: -1 })
+        .limit(50) // Increased limit to ensure all recent transactions are included
+        .lean();
 
-    res.status(200).json(formattedTransactions);
+        // Format transactions to match frontend expectations
+        const formattedTransactions = transactions.map(transaction => ({
+            id: transaction._id,
+            date: transaction.createdAt,
+            type: transaction.type,
+            amount: transaction.amount,
+            currency: transaction.currency || 'USD',
+            status: transaction.status,
+            method: transaction.method,
+            reference: transaction.reference,
+            details: transaction.details || 'N/A',
+            fee: transaction.fee || 0,
+            netAmount: transaction.netAmount || transaction.amount
+        }));
 
-  } catch (err) {
-    console.error('Get transactions error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching transactions'
-    });
-  }
+        res.status(200).json(formattedTransactions);
+
+    } catch (err) {
+        console.error('Error fetching transactions:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch transactions'
+        });
+    }
 });
-
 
 
 
@@ -8513,6 +8516,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
