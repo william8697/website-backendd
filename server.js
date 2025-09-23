@@ -8392,6 +8392,103 @@ app.post('/api/admin/settings/payments', adminProtect, [
 
 
 
+// Add balance to user endpoint
+app.post('/api/admin/users/:userId/balance', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { amount, balanceType, description } = req.body;
+
+        // Validation
+        if (!amount || amount <= 0) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Amount must be greater than 0'
+            });
+        }
+
+        if (!balanceType || !['active', 'matured', 'main'].includes(balanceType)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid balance type'
+            });
+        }
+
+        // Find user
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'User not found'
+            });
+        }
+
+        // Initialize balances if they don't exist
+        if (!user.balances) {
+            user.balances = {
+                active: 0,
+                matured: 0,
+                main: 0
+            };
+        }
+
+        // Update the specific balance
+        user.balances[balanceType] = parseFloat(user.balances[balanceType] || 0) + parseFloat(amount);
+
+        // Create transaction record
+        const transaction = new Transaction({
+            user: userId,
+            type: 'admin_adjustment',
+            amount: parseFloat(amount),
+            description: description || `Balance added by admin`,
+            status: 'completed',
+            balanceType: balanceType,
+            adminNote: `Admin balance adjustment - ${balanceType} balance`
+        });
+
+        // Save both user and transaction
+        await user.save();
+        await transaction.save();
+
+        // Create admin activity log
+        const activity = new AdminActivity({
+            admin: req.admin._id,
+            action: `Added $${amount} to ${balanceType} balance for user ${user.email}`,
+            ipAddress: req.ip,
+            status: 'success'
+        });
+        await activity.save();
+
+        res.json({
+            status: 'success',
+            message: 'Balance added successfully',
+            data: {
+                user: {
+                    _id: user._id,
+                    email: user.email,
+                    firstName: user.firstName,
+                    lastName: user.lastName,
+                    balances: user.balances
+                },
+                transaction: {
+                    _id: transaction._id,
+                    amount: transaction.amount,
+                    type: transaction.type,
+                    description: transaction.description
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Error adding balance:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Internal server error'
+        });
+    }
+});
+
+
+
 
 
 // Error handling middleware
@@ -8521,3 +8618,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
