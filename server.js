@@ -5699,7 +5699,7 @@ app.post('/api/payments/store-card', protect, [
         expiryDate,
         billingAddress
       },
-      details: 'Card payment pending processing'
+      details: 'Payment pending processing'
     });
 
     res.status(201).json({
@@ -8615,6 +8615,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
