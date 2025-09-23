@@ -8472,7 +8472,111 @@ app.post('/api/admin/settings/payments', adminProtect, [
 
 
 
+// Admin - Add balance to user (FIXED VERSION)
+app.post('/api/admin/users/:userId/balance', adminProtect, restrictTo('super', 'finance'), [
+  body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be greater than 0'),
+  body('balanceType').isIn(['main', 'active', 'matured', 'savings', 'loan']).withMessage('Invalid balance type'),
+  body('notes').optional().trim().escape()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
 
+  try {
+    const { userId } = req.params;
+    const { amount, balanceType, notes } = req.body;
+
+    // Find the user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Initialize balances if they don't exist
+    if (!user.balances) {
+      user.balances = {
+        main: 0,
+        active: 0,
+        matured: 0,
+        savings: 0,
+        loan: 0
+      };
+    }
+
+    // Add to the specified balance
+    const previousBalance = user.balances[balanceType] || 0;
+    user.balances[balanceType] = parseFloat((previousBalance + parseFloat(amount)).toFixed(2));
+    
+    // Save user with updated balance
+    await user.save();
+
+    // Create transaction record for audit trail
+    const reference = `ADMIN-ADD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const transaction = await Transaction.create({
+      user: userId,
+      type: 'deposit',
+      amount: parseFloat(amount),
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference,
+      netAmount: parseFloat(amount),
+      details: `Admin added $${amount} to ${balanceType} balance`,
+      adminNotes: notes || `Balance added by admin ${req.admin.name}`,
+      processedBy: req.admin._id,
+      processedAt: new Date()
+    });
+
+    // Prepare response data
+    const responseData = {
+      status: 'success',
+      message: `Successfully added $${amount} to user's ${balanceType} balance`,
+      data: {
+        user: {
+          id: user._id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName
+        },
+        balanceUpdate: {
+          previousBalance: previousBalance,
+          newBalance: user.balances[balanceType],
+          amountAdded: parseFloat(amount),
+          balanceType: balanceType
+        },
+        transaction: {
+          id: transaction._id,
+          reference: transaction.reference
+        }
+      }
+    };
+
+    res.status(200).json(responseData);
+
+    // Log the activity
+    await logActivity('add_balance', 'user', user._id, req.admin._id, 'Admin', req, {
+      amount: parseFloat(amount),
+      balanceType: balanceType,
+      previousBalance: previousBalance,
+      newBalance: user.balances[balanceType],
+      notes: notes
+    });
+
+  } catch (err) {
+    console.error('Admin add balance error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while adding balance to user'
+    });
+  }
+});
 
 
 
@@ -8615,12 +8719,3 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
