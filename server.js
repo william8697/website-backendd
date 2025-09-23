@@ -7484,83 +7484,6 @@ app.put('/api/admin/users/:id', adminProtect, [
   }
 });
 
-// Admin Add Balance to User Endpoint
-app.post('/api/admin/users/:id/balance', adminProtect, [
-  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
-  body('type').isIn(['main', 'active', 'matured', 'savings', 'loan']).withMessage('Invalid balance type')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'fail',
-        errors: errors.array()
-      });
-    }
-    
-    const { amount, type, notes } = req.body;
-    
-    // Find user
-    const user = await User.findById(req.params.id);
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-    
-    // Initialize balances if they don't exist
-    if (!user.balances) {
-      user.balances = {
-        main: 0,
-        active: 0,
-        matured: 0,
-        savings: 0,
-        loan: 0
-      };
-    }
-    
-    // Add to balance
-    user.balances[type] += parseFloat(amount);
-    await user.save();
-    
-    // Create transaction record
-    const reference = `ADMIN-ADD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-    await Transaction.create({
-      user: user._id,
-      type: 'deposit',
-      amount: parseFloat(amount),
-      currency: 'USD',
-      status: 'completed',
-      method: 'internal',
-      reference,
-      netAmount: parseFloat(amount),
-      adminNotes: notes || `Admin added balance to ${type} account`,
-      processedBy: req.admin._id,
-      processedAt: new Date()
-    });
-    
-    res.status(200).json({
-      status: 'success',
-      message: 'Balance added successfully',
-      data: {
-        newBalance: user.balances[type]
-      }
-    });
-    
-    await logActivity('add-balance', 'user', user._id, req.admin._id, 'Admin', req, {
-      amount,
-      type,
-      newBalance: user.balances[type]
-    });
-  } catch (err) {
-    console.error('Admin add balance error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to add balance'
-    });
-  }
-});
 
 // Admin Get Deposit Details Endpoint
 app.get('/api/admin/deposits/:id', adminProtect, async (req, res) => {
@@ -8719,3 +8642,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
