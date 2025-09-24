@@ -6610,61 +6610,6 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
   }
 });
 
-// Admin Activity Log Endpoint
-app.get('/api/admin/activity', adminProtect, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 5;
-    const skip = (page - 1) * limit;
-    
-    // Get admin activity logs
-    const activities = await SystemLog.find({ 
-      performedByModel: 'Admin' 
-    })
-    .populate('performedBy', 'name email')
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(limit)
-    .lean();
-    
-    // Format activities for frontend
-    const formattedActivities = activities.map(activity => ({
-      _id: activity._id,
-      timestamp: activity.createdAt,
-      user: activity.performedBy ? {
-        firstName: activity.performedBy.name.split(' ')[0],
-        lastName: activity.performedBy.name.split(' ')[1] || '',
-        email: activity.performedBy.email
-      } : null,
-      action: activity.action,
-      ipAddress: activity.ip,
-      status: 'success' // Default status
-    }));
-    
-    // Get total count for pagination
-    const totalCount = await SystemLog.countDocuments({ 
-      performedByModel: 'Admin' 
-    });
-    const totalPages = Math.ceil(totalCount / limit);
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        activities: formattedActivities,
-        totalCount,
-        totalPages,
-        currentPage: page
-      }
-    });
-  } catch (err) {
-    console.error('Admin activity error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch admin activity'
-    });
-  }
-});
-
 // Admin Users Endpoint
 app.get('/api/admin/users', adminProtect, async (req, res) => {
   try {
@@ -6962,49 +6907,7 @@ app.get('/api/admin/withdrawals/rejected', adminProtect, async (req, res) => {
   }
 });
 
-// Admin Cards Endpoint
-app.get('/api/admin/cards', adminProtect, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 5;
-    const skip = (page - 1) * limit;
-    
-    // Get cards with user info
-    const cards = await Card.find()
-      .populate('user', 'firstName lastName email')
-      .sort({ lastUsed: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
-    
-    // Format card numbers to show only last 4 digits
-    const formattedCards = cards.map(card => ({
-      ...card,
-      last4: card.cardNumber.slice(-4),
-      cardNumber: undefined // Remove full card number
-    }));
-    
-    // Get total count for pagination
-    const totalCount = await Card.countDocuments();
-    const totalPages = Math.ceil(totalCount / limit);
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        cards: formattedCards,
-        totalCount,
-        totalPages,
-        currentPage: page
-      }
-    });
-  } catch (err) {
-    console.error('Admin cards error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch cards'
-    });
-  }
-});
+
 
 // Admin All Transactions Endpoint
 app.get('/api/admin/transactions', adminProtect, async (req, res) => {
@@ -7776,35 +7679,7 @@ app.post('/api/admin/withdrawals/:id/reject', adminProtect, [
   }
 });
 
-// Admin Delete Card Endpoint
-app.delete('/api/admin/cards/:id', adminProtect, async (req, res) => {
-  try {
-    const card = await Card.findByIdAndDelete(req.params.id);
-    
-    if (!card) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Card not found'
-      });
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      message: 'Card deleted successfully'
-    });
-    
-    await logActivity('delete-card', 'card', card._id, req.admin._id, 'Admin', req, {
-      userId: card.user,
-      last4: card.cardNumber.slice(-4)
-    });
-  } catch (err) {
-    console.error('Admin delete card error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to delete card'
-    });
-  }
-});
+
 
 // Admin Add Investment Plan Endpoint
 app.post('/api/admin/investment/plans', adminProtect, [
@@ -8618,4 +8493,5 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
