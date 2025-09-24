@@ -3632,11 +3632,11 @@ function getPlanColorScheme(planId) {
 
 
 
-
 // Investment routes
 app.post('/api/investments', protect, [
   body('planId').notEmpty().withMessage('Plan ID is required').isMongoId().withMessage('Invalid Plan ID'),
-  body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number')
+  body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number'),
+  body('balanceSource').isIn(['main', 'matured']).withMessage('Balance source must be main or matured')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -3647,7 +3647,7 @@ app.post('/api/investments', protect, [
   }
 
   try {
-    const { planId, amount } = req.body;
+    const { planId, amount, balanceSource } = req.body;
     const userId = req.user._id;
 
     // Verify plan exists and is active
@@ -3667,12 +3667,12 @@ app.post('/api/investments', protect, [
       });
     }
 
-    // Verify user has sufficient balance
+    // Verify user has sufficient balance in the selected source
     const user = await User.findById(userId);
-    if (user.balances.main < amount) {
+    if (user.balances[balanceSource] < amount) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Insufficient balance'
+        message: `Insufficient balance in ${balanceSource} account`
       });
     }
 
@@ -3693,116 +3693,17 @@ app.post('/api/investments', protect, [
       endDate,
       payoutSchedule: 'end_term',
       status: 'active',
+      balanceSource: balanceSource,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
       deviceInfo: getDeviceType(req),
       termsAccepted: true
     });
 
-    // Deduct from user balance
-    user.balances.main -= amount;
+    // Deduct from selected balance source and add to active balance
+    user.balances[balanceSource] -= amount;
     user.balances.active += amount;
     await user.save();
-
-
-    // Investment completion endpoint - moves funds from active to matured
-app.post('/api/investments/:id/complete', protect, async (req, res) => {
-  try {
-    const investmentId = req.params.id;
-    const userId = req.user._id;
-
-    // Find the investment
-    const investment = await Investment.findOne({ 
-      _id: investmentId, 
-      user: userId,
-      status: 'active' 
-    }).populate('plan');
-    
-    if (!investment) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Active investment not found'
-      });
-    }
-
-    // Check if investment has actually matured
-    if (new Date() < investment.endDate) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Investment has not matured yet'
-      });
-    }
-
-    // Find the user
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-
-    // Calculate total return (principal + profit)
-    const totalReturn = investment.amount + (investment.amount * investment.plan.percentage / 100);
-
-    // Transfer from active to matured balance
-    user.balances.active -= investment.amount;
-    user.balances.matured += totalReturn;
-    
-    // Update investment status
-    investment.status = 'completed';
-    investment.completionDate = new Date();
-    investment.actualReturn = totalReturn - investment.amount;
-
-    // Save changes
-    await user.save();
-    await investment.save();
-
-    // Create transaction record for the return
-    const transaction = await Transaction.create({
-      user: userId,
-      type: 'interest',
-      amount: totalReturn - investment.amount,
-      currency: 'USD',
-      status: 'completed',
-      method: 'internal',
-      reference: `RET-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      details: {
-        investmentId: investment._id,
-        planName: investment.plan.name,
-        principal: investment.amount,
-        interest: totalReturn - investment.amount
-      },
-      fee: 0,
-      netAmount: totalReturn - investment.amount
-    });
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        investment: {
-          id: investment._id,
-          status: investment.status,
-          completionDate: investment.completionDate,
-          amountReturned: totalReturn,
-          profit: totalReturn - investment.amount
-        },
-        balances: {
-          active: user.balances.active,
-          matured: user.balances.matured
-        }
-      }
-    });
-
-    await logActivity('complete_investment', 'investment', investment._id, userId, 'User', req);
-  } catch (err) {
-    console.error('Complete investment error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while completing the investment'
-    });
-  }
-});
 
     // Create transaction record
     const transaction = await Transaction.create({
@@ -3815,7 +3716,8 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       reference: `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       details: {
         investmentId: investment._id,
-        planName: plan.name
+        planName: plan.name,
+        balanceSource: balanceSource
       },
       fee: 0,
       netAmount: amount
@@ -3876,7 +3778,8 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
           amount: investment.amount,
           expectedReturn: investment.expectedReturn,
           endDate: investment.endDate,
-          status: investment.status
+          status: investment.status,
+          balanceSource: investment.balanceSource
         }
       }
     });
@@ -3891,23 +3794,28 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
   }
 });
 
-// Add this endpoint to handle investment completion and balance transfer
+// Investment completion endpoint - moves funds from active to matured with 3% fee
 app.post('/api/investments/:id/complete', protect, async (req, res) => {
   try {
     const investmentId = req.params.id;
     const userId = req.user._id;
 
     // Find the investment
-    const investment = await Investment.findOne({ _id: investmentId, user: userId });
+    const investment = await Investment.findOne({ 
+      _id: investmentId, 
+      user: userId,
+      status: 'active' 
+    }).populate('plan');
+    
     if (!investment) {
       return res.status(404).json({
         status: 'fail',
-        message: 'Investment not found'
+        message: 'Active investment not found'
       });
     }
 
-    // Check if investment has matured
-    if (investment.status !== 'active' || investment.endDate > new Date()) {
+    // Check if investment has actually matured
+    if (new Date() < investment.endDate) {
       return res.status(400).json({
         status: 'fail',
         message: 'Investment has not matured yet'
@@ -3923,24 +3831,33 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       });
     }
 
-    // Calculate total return
-    const totalReturn = investment.expectedReturn;
+    // Calculate total return (principal + profit)
+    const totalReturn = investment.amount + (investment.amount * investment.plan.percentage / 100);
+    
+    // Calculate 3% company fee
+    const companyFee = totalReturn * 0.03;
+    const userPayout = totalReturn - companyFee;
 
-    // Transfer from active to matured balance
+    // Transfer from active to matured balance (minus fee)
     user.balances.active -= investment.amount;
-    user.balances.matured += totalReturn;
-    await user.save();
-
+    user.balances.matured += userPayout;
+    
     // Update investment status
     investment.status = 'completed';
     investment.completionDate = new Date();
+    investment.actualReturn = totalReturn - investment.amount;
+    investment.companyFee = companyFee;
+    investment.userPayout = userPayout;
+
+    // Save changes
+    await user.save();
     await investment.save();
 
     // Create transaction record for the return
     const transaction = await Transaction.create({
       user: userId,
       type: 'interest',
-      amount: totalReturn - investment.amount,
+      amount: userPayout - investment.amount,
       currency: 'USD',
       status: 'completed',
       method: 'internal',
@@ -3949,10 +3866,30 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
         investmentId: investment._id,
         planName: investment.plan.name,
         principal: investment.amount,
-        interest: totalReturn - investment.amount
+        grossProfit: totalReturn - investment.amount,
+        companyFee: companyFee,
+        netProfit: userPayout - investment.amount
+      },
+      fee: companyFee,
+      netAmount: userPayout - investment.amount
+    });
+
+    // Create company revenue transaction
+    await Transaction.create({
+      user: userId,
+      type: 'company_revenue',
+      amount: companyFee,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference: `FEE-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      details: {
+        investmentId: investment._id,
+        source: 'investment_fee',
+        feePercentage: '3%'
       },
       fee: 0,
-      netAmount: totalReturn - investment.amount
+      netAmount: companyFee
     });
 
     res.status(200).json({
@@ -3962,7 +3899,10 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
           id: investment._id,
           status: investment.status,
           completionDate: investment.completionDate,
-          amountReturned: totalReturn
+          grossReturn: totalReturn,
+          companyFee: companyFee,
+          netPayout: userPayout,
+          profit: userPayout - investment.amount
         },
         balances: {
           active: user.balances.active,
@@ -3994,7 +3934,7 @@ app.get('/api/transactions', protect, async (req, res) => {
         // Get all transaction types that involve money movements
         const transactions = await Transaction.find({
             user: req.user.id,
-            type: { $in: ['deposit', 'withdrawal', 'transfer', 'investment', 'interest', 'referral', 'loan'] }
+            type: { $in: ['deposit', 'withdrawal', 'transfer', 'investment', 'interest', 'referral', 'loan', 'company_revenue'] }
         })
         .sort({ createdAt: -1 })
         .limit(50) // Increased limit to ensure all recent transactions are included
@@ -8794,6 +8734,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
