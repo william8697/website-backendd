@@ -3632,11 +3632,21 @@ function getPlanColorScheme(planId) {
 
 
 
-// Investment routes
+
+
+
+
+
+
+
+
+
+
+// Investment routes with dual balance system and 3% fee
 app.post('/api/investments', protect, [
   body('planId').notEmpty().withMessage('Plan ID is required').isMongoId().withMessage('Invalid Plan ID'),
   body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number'),
-  body('balanceSource').isIn(['main', 'matured']).withMessage('Balance source must be main or matured')
+  body('balanceType').isIn(['main', 'matured']).withMessage('Balance type must be either "main" or "matured"')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -3647,7 +3657,7 @@ app.post('/api/investments', protect, [
   }
 
   try {
-    const { planId, amount, balanceSource } = req.body;
+    const { planId, amount, balanceType } = req.body;
     const userId = req.user._id;
 
     // Verify plan exists and is active
@@ -3667,12 +3677,12 @@ app.post('/api/investments', protect, [
       });
     }
 
-    // Verify user has sufficient balance in the selected source
+    // Verify user has sufficient balance in the selected balance type
     const user = await User.findById(userId);
-    if (user.balances[balanceSource] < amount) {
+    if (user.balances[balanceType] < amount) {
       return res.status(400).json({
         status: 'fail',
-        message: `Insufficient balance in ${balanceSource} account`
+        message: `Insufficient ${balanceType} balance. Available: $${user.balances[balanceType].toFixed(2)}`
       });
     }
 
@@ -3685,6 +3695,7 @@ app.post('/api/investments', protect, [
       user: userId,
       plan: planId,
       amount,
+      balanceType, // Store which balance was used
       originalAmount: amount,
       originalCurrency: 'USD',
       currency: 'USD',
@@ -3693,15 +3704,14 @@ app.post('/api/investments', protect, [
       endDate,
       payoutSchedule: 'end_term',
       status: 'active',
-      balanceSource: balanceSource,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
       deviceInfo: getDeviceType(req),
       termsAccepted: true
     });
 
-    // Deduct from selected balance source and add to active balance
-    user.balances[balanceSource] -= amount;
+    // Deduct from user's selected balance and add to active balance
+    user.balances[balanceType] -= amount;
     user.balances.active += amount;
     await user.save();
 
@@ -3717,7 +3727,7 @@ app.post('/api/investments', protect, [
       details: {
         investmentId: investment._id,
         planName: plan.name,
-        balanceSource: balanceSource
+        balanceType: balanceType
       },
       fee: 0,
       netAmount: amount
@@ -3776,25 +3786,28 @@ app.post('/api/investments', protect, [
           id: investment._id,
           plan: plan.name,
           amount: investment.amount,
+          balanceType: investment.balanceType,
           expectedReturn: investment.expectedReturn,
           endDate: investment.endDate,
-          status: investment.status,
-          balanceSource: investment.balanceSource
+          status: investment.status
+        },
+        balances: {
+          main: user.balances.main,
+          matured: user.balances.matured,
+          active: user.balances.active
         }
       }
     });
   } catch (err) {
     console.error('Investment creation error:', err);
-    
-    // Even on error, return success to frontend as requested
-    res.status(200).json({
-      status: 'success',
-      message: 'Investment created successfully'
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while creating the investment'
     });
   }
 });
 
-// Investment completion endpoint - moves funds from active to matured with 3% fee
+// Investment completion endpoint with 3% fee deduction
 app.post('/api/investments/:id/complete', protect, async (req, res) => {
   try {
     const investmentId = req.params.id;
@@ -3845,19 +3858,18 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
     // Update investment status
     investment.status = 'completed';
     investment.completionDate = new Date();
-    investment.actualReturn = totalReturn - investment.amount;
-    investment.companyFee = companyFee;
-    investment.userPayout = userPayout;
+    investment.actualReturn = userPayout - investment.amount; // Actual return after fee
+    investment.companyFee = companyFee; // Store the fee amount
 
     // Save changes
     await user.save();
     await investment.save();
 
-    // Create transaction record for the return
-    const transaction = await Transaction.create({
+    // Create transaction record for the return (user payout)
+    const userTransaction = await Transaction.create({
       user: userId,
       type: 'interest',
-      amount: userPayout - investment.amount,
+      amount: userPayout - investment.amount, // Profit after fee
       currency: 'USD',
       status: 'completed',
       method: 'internal',
@@ -3866,17 +3878,18 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
         investmentId: investment._id,
         planName: investment.plan.name,
         principal: investment.amount,
-        grossProfit: totalReturn - investment.amount,
+        interest: userPayout - investment.amount,
         companyFee: companyFee,
-        netProfit: userPayout - investment.amount
+        grossReturn: totalReturn - investment.amount,
+        netReturn: userPayout - investment.amount
       },
       fee: companyFee,
       netAmount: userPayout - investment.amount
     });
 
-    // Create company revenue transaction
-    await Transaction.create({
-      user: userId,
+    // Create company revenue transaction (fee)
+    const companyTransaction = await Transaction.create({
+      user: userId, // Still associated with user for tracking
       type: 'company_revenue',
       amount: companyFee,
       currency: 'USD',
@@ -3885,8 +3898,9 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       reference: `FEE-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       details: {
         investmentId: investment._id,
-        source: 'investment_fee',
-        feePercentage: '3%'
+        planName: investment.plan.name,
+        feeType: 'investment_completion',
+        description: '3% company fee on investment completion'
       },
       fee: 0,
       netAmount: companyFee
@@ -3899,10 +3913,11 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
           id: investment._id,
           status: investment.status,
           completionDate: investment.completionDate,
-          grossReturn: totalReturn,
+          principal: investment.amount,
+          grossReturn: totalReturn - investment.amount,
           companyFee: companyFee,
-          netPayout: userPayout,
-          profit: userPayout - investment.amount
+          netReturn: userPayout - investment.amount,
+          totalPayout: userPayout
         },
         balances: {
           active: user.balances.active,
@@ -3920,6 +3935,74 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
     });
   }
 });
+
+// Get user balances endpoint
+app.get('/api/users/balances', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('balances');
+    
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        balances: user.balances
+      }
+    });
+  } catch (err) {
+    console.error('Get balances error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching balances'
+    });
+  }
+});
+
+// Get active investments for user
+app.get('/api/investments/active', protect, async (req, res) => {
+  try {
+    const investments = await Investment.find({
+      user: req.user._id,
+      status: 'active'
+    }).populate('plan', 'name percentage duration')
+      .select('amount balanceType expectedReturn endDate startDate')
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        investments
+      }
+    });
+  } catch (err) {
+    console.error('Get active investments error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching investments'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 app.get('/api/transactions', protect, async (req, res) => {
     try {
@@ -8734,6 +8817,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
