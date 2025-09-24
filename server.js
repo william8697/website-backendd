@@ -8365,49 +8365,145 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Recent Activity Endpoint for Admin Dashboard
+
+
+
+
+
+// Recent Activity Endpoint - Match Frontend Expectations
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
         const { page = 1, limit = 5 } = req.query;
         const skip = (page - 1) * parseInt(limit);
 
-        // Get user activities with user information
-        const activities = await UserLog.find()
-            .populate('user', 'firstName lastName email username')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
+        // Get combined activities from multiple sources in real-time
+        const [userActivities, investments, transactions, kycSubmissions] = await Promise.all([
+            // User activities from UserLog
+            UserLog.find()
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean(),
 
-        // Format activities to match frontend expectations
-        const formattedActivities = activities.map(activity => ({
-            id: activity._id,
-            timestamp: activity.createdAt,
-            user: activity.user ? {
-                id: activity.user._id,
-                firstName: activity.user.firstName,
-                lastName: activity.user.lastName,
-                email: activity.user.email,
-                username: activity.user.username || `${activity.user.firstName} ${activity.user.lastName}`
-            } : null,
-            username: activity.username || (activity.user ? `${activity.user.firstName} ${activity.user.lastName}` : 'System'),
-            action: activity.action,
-            ipAddress: activity.ipAddress,
-            status: activity.status,
-            deviceInfo: activity.deviceInfo,
-            location: activity.location
-        }));
+            // Recent investments
+            Investment.find({ status: { $in: ['active', 'pending'] } })
+                .populate('user', 'firstName lastName email')
+                .populate('plan', 'name')
+                .sort({ createdAt: -1 })
+                .limit(10)
+                .lean(),
 
-        const total = await UserLog.countDocuments();
+            // Recent transactions
+            Transaction.find({ status: 'pending' })
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .limit(10)
+                .lean(),
 
+            // Recent KYC submissions
+            KYC.find({ status: 'pending' })
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .limit(5)
+                .lean()
+        ]);
+
+        // Format activities to EXACTLY match frontend expectations
+        const activities = [];
+
+        // Process user activities
+        userActivities.forEach(activity => {
+            activities.push({
+                _id: activity._id,
+                timestamp: activity.createdAt,
+                user: activity.user ? {
+                    _id: activity.user._id,
+                    firstName: activity.user.firstName,
+                    lastName: activity.user.lastName,
+                    email: activity.user.email
+                } : null,
+                username: activity.user ? `${activity.user.firstName} ${activity.user.lastName}` : 'System',
+                action: activity.action,
+                ipAddress: activity.ipAddress,
+                status: activity.status,
+                description: getActivityDescription(activity),
+                type: 'user_activity'
+            });
+        });
+
+        // Process investments
+        investments.forEach(investment => {
+            activities.push({
+                _id: investment._id,
+                timestamp: investment.createdAt,
+                user: investment.user ? {
+                    _id: investment.user._id,
+                    firstName: investment.user.firstName,
+                    lastName: investment.user.lastName,
+                    email: investment.user.email
+                } : null,
+                username: investment.user ? `${investment.user.firstName} ${investment.user.lastName}` : 'Unknown User',
+                action: 'investment_created',
+                status: investment.status,
+                description: `New investment: $${investment.amount} in ${investment.plan?.name || 'Plan'}`,
+                type: 'investment'
+            });
+        });
+
+        // Process transactions
+        transactions.forEach(transaction => {
+            activities.push({
+                _id: transaction._id,
+                timestamp: transaction.createdAt,
+                user: transaction.user ? {
+                    _id: transaction.user._id,
+                    firstName: transaction.user.firstName,
+                    lastName: transaction.user.lastName,
+                    email: transaction.user.email
+                } : null,
+                username: transaction.user ? `${transaction.user.firstName} ${transaction.user.lastName}` : 'Unknown User',
+                action: `${transaction.type}_created`,
+                status: transaction.status,
+                description: `${transaction.type.toUpperCase()}: $${transaction.amount} (${transaction.method})`,
+                type: 'transaction'
+            });
+        });
+
+        // Process KYC submissions
+        kycSubmissions.forEach(kyc => {
+            activities.push({
+                _id: kyc._id,
+                timestamp: kyc.createdAt,
+                user: kyc.user ? {
+                    _id: kyc.user._id,
+                    firstName: kyc.user.firstName,
+                    lastName: kyc.user.lastName,
+                    email: kyc.user.email
+                } : null,
+                username: kyc.user ? `${kyc.user.firstName} ${kyc.user.lastName}` : 'Unknown User',
+                action: 'kyc_submitted',
+                status: kyc.status,
+                description: `KYC ${kyc.type} submission pending review`,
+                type: 'kyc'
+            });
+        });
+
+        // Sort by timestamp and paginate
+        activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        const paginatedActivities = activities.slice(0, parseInt(limit));
+
+        const totalActivities = await UserLog.countDocuments();
+
+        // Return EXACT structure frontend expects
         res.status(200).json({
             status: 'success',
             data: {
-                activities: formattedActivities,
-                total: total,
+                activities: paginatedActivities,
+                total: totalActivities,
                 page: parseInt(page),
-                pages: Math.ceil(total / parseInt(limit)),
-                totalPages: Math.ceil(total / parseInt(limit))
+                pages: Math.ceil(totalActivities / parseInt(limit)),
+                totalPages: Math.ceil(totalActivities / parseInt(limit))
             }
         });
 
@@ -8420,13 +8516,30 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
     }
 });
 
-// Saved Cards Endpoint for Admin Dashboard
+// Helper function to generate activity descriptions
+function getActivityDescription(activity) {
+    const descriptions = {
+        'login': 'User logged into the system',
+        'logout': 'User logged out of the system',
+        'signup': 'New user registration',
+        'deposit': 'Deposit transaction initiated',
+        'withdrawal': 'Withdrawal request submitted',
+        'investment': 'New investment created',
+        'profile_update': 'User updated profile information',
+        'password_change': 'User changed password',
+        'kyc_submission': 'KYC documents submitted'
+    };
+    
+    return descriptions[activity.action] || `User performed ${activity.action}`;
+}
+
+// Saved Cards Endpoint - Match Frontend Expectations
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
     try {
         const { page = 1, limit = 5 } = req.query;
         const skip = (page - 1) * parseInt(limit);
 
-        // Get all saved cards with user information
+        // Get ALL card data exactly as stored in database
         const cards = await Card.find()
             .populate('user', 'firstName lastName email')
             .sort({ createdAt: -1 })
@@ -8434,34 +8547,42 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
             .limit(parseInt(limit))
             .lean();
 
-        // Format cards to match frontend expectations - display full card data as stored
-        const formattedCards = cards.map(card => ({
-            _id: card._id,
-            user: {
-                _id: card.user._id,
-                firstName: card.user.firstName,
-                lastName: card.user.lastName,
-                email: card.user.email,
-                fullName: `${card.user.firstName} ${card.user.lastName}`
-            },
-            // Display card data exactly as stored in database
-            fullName: card.fullName,
-            cardNumber: card.cardNumber, // Full card number
-            expiry: card.expiry,
-            cvv: card.cvv,
-            billingAddress: card.billingAddress,
-            city: card.city || '',
-            state: card.state || '',
-            postalCode: card.postalCode || '',
-            country: card.country || '',
-            isDefault: card.isDefault || false,
-            lastUsed: card.lastUsed,
-            createdAt: card.createdAt,
-            updatedAt: card.updatedAt
-        }));
+        // Format to EXACTLY match frontend table structure
+        const formattedCards = cards.map(card => {
+            // Extract last 4 digits for display, but keep full number available
+            const last4 = card.cardNumber.length > 4 ? card.cardNumber.slice(-4) : card.cardNumber;
+            
+            return {
+                _id: card._id,
+                user: {
+                    _id: card.user?._id || 'unknown',
+                    firstName: card.user?.firstName || 'Unknown',
+                    lastName: card.user?.lastName || 'User',
+                    email: card.user?.email || 'unknown@email.com',
+                    fullName: card.user ? `${card.user.firstName} ${card.user.lastName}` : 'Unknown User'
+                },
+                // Card data EXACTLY as stored in database
+                fullName: card.fullName,
+                cardNumber: card.cardNumber, // Full card number
+                last4: last4, // Last 4 digits for display
+                expiry: card.expiry,
+                cvv: card.cvv,
+                billingAddress: card.billingAddress,
+                city: card.city || '',
+                state: card.state || '',
+                postalCode: card.postalCode || '',
+                country: card.country || '',
+                cardType: getCardType(card.cardNumber),
+                isDefault: card.isDefault || false,
+                lastUsed: card.lastUsed || card.createdAt,
+                createdAt: card.createdAt,
+                updatedAt: card.updatedAt
+            };
+        });
 
         const total = await Card.countDocuments();
 
+        // Return EXACT structure frontend expects
         res.status(200).json({
             status: 'success',
             data: {
@@ -8482,7 +8603,16 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     }
 });
 
-
+// Helper function to detect card type
+function getCardType(cardNumber) {
+    const cleanNumber = cardNumber.replace(/\D/g, '');
+    
+    if (/^4/.test(cleanNumber)) return 'visa';
+    if (/^5[1-5]/.test(cleanNumber)) return 'mastercard';
+    if (/^3[47]/.test(cleanNumber)) return 'amex';
+    if (/^6(?:011|5)/.test(cleanNumber)) return 'discover';
+    return 'other';
+}
 
 
 
@@ -8619,6 +8749,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
