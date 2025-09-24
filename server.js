@@ -8365,377 +8365,159 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
+
+
+
 // Admin Recent Activity Endpoint
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
         const { page = 1, limit = 10 } = req.query;
         const skip = (page - 1) * limit;
 
-        // Get activities from multiple sources
-        const [
-            userActivities,
-            systemLogs,
-            transactions,
-            investments,
-            supportTickets
-        ] = await Promise.all([
-            // User activities (logins, registrations, etc.)
-            UserLog.find({})
-                .populate('user', 'firstName lastName email')
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean(),
-
-            // System logs (admin actions)
-            SystemLog.find({})
-                .populate('performedBy', 'name email')
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean(),
-
-            // Recent transactions
-            Transaction.find({})
-                .populate('user', 'firstName lastName email')
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean(),
-
-            // Recent investments
-            Investment.find({})
-                .populate('user', 'firstName lastName email')
-                .populate('plan', 'name percentage duration')
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean(),
-
-            // Support ticket activities
-            SupportTicket.find({})
-                .populate('user', 'firstName lastName email')
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean()
+        // Get recent user activities with user information
+        const activities = await UserLog.aggregate([
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'user',
+                    foreignField: '_id',
+                    as: 'userInfo'
+                }
+            },
+            {
+                $unwind: {
+                    path: '$userInfo',
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $project: {
+                    timestamp: '$createdAt',
+                    user: {
+                        $cond: {
+                            if: { $eq: ['$userInfo', null] },
+                            then: 'System',
+                            else: {
+                                $concat: [
+                                    '$userInfo.firstName',
+                                    ' ',
+                                    '$userInfo.lastName'
+                                ]
+                            }
+                        }
+                    },
+                    username: {
+                        $cond: {
+                            if: { $eq: ['$userInfo', null] },
+                            then: 'system',
+                            else: '$userInfo.email'
+                        }
+                    },
+                    action: '$action',
+                    ipAddress: '$ipAddress',
+                    status: '$status',
+                    details: '$metadata'
+                }
+            },
+            {
+                $sort: { timestamp: -1 }
+            },
+            {
+                $skip: skip
+            },
+            {
+                $limit: parseInt(limit)
+            }
         ]);
 
-        // Combine and format all activities
-        const activities = [];
-
-        // Format user activities
-        userActivities.forEach(activity => {
-            activities.push({
-                id: activity._id,
-                type: 'user_activity',
-                timestamp: activity.createdAt,
-                user: activity.user ? {
-                    id: activity.user._id,
-                    name: `${activity.user.firstName} ${activity.user.lastName}`,
-                    email: activity.user.email
-                } : null,
-                action: activity.action,
-                description: getUserActivityDescription(activity),
-                ipAddress: activity.ipAddress,
-                status: activity.status,
-                metadata: activity.metadata || {}
-            });
-        });
-
-        // Format system logs
-        systemLogs.forEach(log => {
-            activities.push({
-                id: log._id,
-                type: 'system_log',
-                timestamp: log.createdAt,
-                admin: log.performedBy ? {
-                    id: log.performedBy._id,
-                    name: log.performedBy.name,
-                    email: log.performedBy.email
-                } : null,
-                action: log.action,
-                description: getSystemLogDescription(log),
-                entity: log.entity,
-                entityId: log.entityId,
-                changes: log.changes || {},
-                ipAddress: log.ip
-            });
-        });
-
-        // Format transactions
-        transactions.forEach(transaction => {
-            activities.push({
-                id: transaction._id,
-                type: 'transaction',
-                timestamp: transaction.createdAt,
-                user: transaction.user ? {
-                    id: transaction.user._id,
-                    name: `${transaction.user.firstName} ${transaction.user.lastName}`,
-                    email: transaction.user.email
-                } : null,
-                action: 'transaction_' + transaction.type,
-                description: getTransactionDescription(transaction),
-                amount: transaction.amount,
-                currency: transaction.currency,
-                status: transaction.status,
-                method: transaction.method
-            });
-        });
-
-        // Format investments
-        investments.forEach(investment => {
-            activities.push({
-                id: investment._id,
-                type: 'investment',
-                timestamp: investment.createdAt,
-                user: investment.user ? {
-                    id: investment.user._id,
-                    name: `${investment.user.firstName} ${investment.user.lastName}`,
-                    email: investment.user.email
-                } : null,
-                action: 'investment_' + investment.status,
-                description: getInvestmentDescription(investment),
-                amount: investment.amount,
-                plan: investment.plan ? investment.plan.name : 'N/A',
-                status: investment.status,
-                expectedReturn: investment.expectedReturn
-            });
-        });
-
-        // Format support tickets
-        supportTickets.forEach(ticket => {
-            activities.push({
-                id: ticket._id,
-                type: 'support_ticket',
-                timestamp: ticket.createdAt,
-                user: ticket.user ? {
-                    id: ticket.user._id,
-                    name: `${ticket.user.firstName} ${ticket.user.lastName}`,
-                    email: ticket.user.email
-                } : null,
-                action: 'support_ticket_' + ticket.status,
-                description: getSupportTicketDescription(ticket),
-                subject: ticket.subject,
-                status: ticket.status,
-                priority: ticket.priority
-            });
-        });
-
-        // Sort all activities by timestamp (newest first)
-        activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-        // Paginate results
-        const startIndex = skip;
-        const endIndex = startIndex + parseInt(limit);
-        const paginatedActivities = activities.slice(startIndex, endIndex);
-
         // Get total count for pagination
-        const totalActivities = await Promise.all([
-            UserLog.countDocuments(),
-            SystemLog.countDocuments(),
-            Transaction.countDocuments(),
-            Investment.countDocuments(),
-            SupportTicket.countDocuments()
-        ]).then(counts => counts.reduce((sum, count) => sum + count, 0));
+        const totalActivities = await UserLog.countDocuments();
 
         res.status(200).json({
             status: 'success',
             data: {
-                activities: paginatedActivities,
-                total: totalActivities,
-                page: parseInt(page),
-                pages: Math.ceil(totalActivities / limit),
+                activities: activities.map(activity => ({
+                    id: activity._id,
+                    timestamp: activity.timestamp,
+                    user: activity.user,
+                    username: activity.username,
+                    action: activity.action,
+                    ipAddress: activity.ipAddress,
+                    status: activity.status,
+                    details: activity.details || 'N/A'
+                })),
+                totalCount: totalActivities,
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalActivities / limit),
                 limit: parseInt(limit)
             }
         });
 
     } catch (err) {
-        console.error('Admin activity error:', err);
+        console.error('Admin activity fetch error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to fetch admin activity data'
+            message: 'Failed to fetch recent activity'
         });
     }
 });
 
-// Helper function to generate user activity descriptions
-function getUserActivityDescription(activity) {
-    const user = activity.user ? `${activity.user.firstName} ${activity.user.lastName}` : 'A user';
-    
-    switch (activity.action) {
-        case 'signup':
-            return `${user} signed up for an account`;
-        case 'login':
-            return `${user} logged into their account`;
-        case 'logout':
-            return `${user} logged out of their account`;
-        case 'profile_update':
-            return `${user} updated their profile information`;
-        case 'password_change':
-            return `${user} changed their password`;
-        case 'deposit':
-            return `${user} made a deposit`;
-        case 'withdrawal':
-            return `${user} requested a withdrawal`;
-        case 'investment':
-            return `${user} created a new investment`;
-        case 'kyc_submission':
-            return `${user} submitted KYC documents`;
-        default:
-            return `${user} performed ${activity.action.replace('_', ' ')}`;
-    }
-}
-
-// Helper function to generate system log descriptions
-function getSystemLogDescription(log) {
-    const admin = log.performedBy ? log.performedBy.name : 'System';
-    
-    switch (log.action) {
-        case 'admin-login':
-            return `${admin} logged into admin panel`;
-        case 'approve-deposit':
-            return `${admin} approved a deposit`;
-        case 'reject-deposit':
-            return `${admin} rejected a deposit`;
-        case 'approve-withdrawal':
-            return `${admin} approved a withdrawal`;
-        case 'reject-withdrawal':
-            return `${admin} rejected a withdrawal`;
-        case 'update-user':
-            return `${admin} updated user information`;
-        case 'create-investment-plan':
-            return `${admin} created an investment plan`;
-        default:
-            return `${admin} performed ${log.action.replace('-', ' ')}`;
-    }
-}
-
-// Helper function to generate transaction descriptions
-function getTransactionDescription(transaction) {
-    const user = transaction.user ? `${transaction.user.firstName} ${transaction.user.lastName}` : 'User';
-    const amount = `$${transaction.amount} ${transaction.currency}`;
-    
-    switch (transaction.type) {
-        case 'deposit':
-            return `${user} deposited ${amount} via ${transaction.method}`;
-        case 'withdrawal':
-            return `${user} withdrew ${amount} via ${transaction.method}`;
-        case 'investment':
-            return `${user} invested ${amount}`;
-        case 'interest':
-            return `${user} earned ${amount} in interest`;
-        case 'referral':
-            return `${user} earned ${amount} in referral bonus`;
-        default:
-            return `${user} performed ${transaction.type} of ${amount}`;
-    }
-}
-
-// Helper function to generate investment descriptions
-function getInvestmentDescription(investment) {
-    const user = investment.user ? `${investment.user.firstName} ${investment.user.lastName}` : 'User';
-    const amount = `$${investment.amount}`;
-    const plan = investment.plan ? investment.plan.name : 'investment plan';
-    
-    switch (investment.status) {
-        case 'pending':
-            return `${user} created a ${amount} investment in ${plan}`;
-        case 'active':
-            return `${user}'s ${amount} investment in ${plan} is active`;
-        case 'completed':
-            return `${user}'s ${amount} investment in ${plan} completed`;
-        case 'cancelled':
-            return `${user}'s ${amount} investment in ${plan} was cancelled`;
-        default:
-            return `${user} has a ${amount} investment in ${plan} with status: ${investment.status}`;
-    }
-}
-
-// Helper function to generate support ticket descriptions
-function getSupportTicketDescription(ticket) {
-    const user = ticket.user ? `${ticket.user.firstName} ${ticket.user.lastName}` : 'User';
-    
-    switch (ticket.status) {
-        case 'pending':
-            return `${user} created a support ticket: "${ticket.subject}"`;
-        case 'in-progress':
-            return `Support ticket "${ticket.subject}" is in progress`;
-        case 'resolved':
-            return `Support ticket "${ticket.subject}" has been resolved`;
-        case 'closed':
-            return `Support ticket "${ticket.subject}" was closed`;
-        default:
-            return `${user}'s support ticket "${ticket.subject}" has status: ${ticket.status}`;
-    }
-}
-
-// Admin Cards Endpoint - Fetch saved card information
+// Admin Cards Endpoint - Fetch saved cards as they are in database
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
     try {
         const { page = 1, limit = 10 } = req.query;
         const skip = (page - 1) * limit;
 
         // Get cards with user information
-        const cards = await Card.find({})
-            .populate('user', 'firstName lastName email phone country status')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
-
-        // Format card data for admin view
-        const formattedCards = cards.map(card => {
-            // Mask card number for security (show only last 4 digits)
-            const cardNumber = card.cardNumber;
-            const maskedNumber = cardNumber ? `**** **** **** ${cardNumber.slice(-4)}` : 'N/A';
-            
-            // Determine card type based on number
-            let cardType = 'Unknown';
-            if (cardNumber) {
-                if (cardNumber.startsWith('4')) cardType = 'Visa';
-                else if (cardNumber.startsWith('5')) cardType = 'MasterCard';
-                else if (cardNumber.startsWith('34') || cardNumber.startsWith('37')) cardType = 'American Express';
-                else if (cardNumber.startsWith('6')) cardType = 'Discover';
-            }
-
-            return {
-                id: card._id,
-                user: card.user ? {
-                    id: card.user._id,
-                    name: `${card.user.firstName} ${card.user.lastName}`,
-                    email: card.user.email,
-                    phone: card.user.phone,
-                    country: card.user.country,
-                    status: card.user.status
-                } : null,
-                cardDetails: {
-                    fullName: card.fullName,
-                    cardNumber: maskedNumber,
-                    last4: card.cardNumber ? card.cardNumber.slice(-4) : 'N/A',
-                    expiry: card.expiry,
-                    cardType: cardType,
-                    cvv: '***' // Never expose CVV
-                },
-                billingInfo: {
-                    address: card.billingAddress,
-                    city: card.city,
-                    state: card.state,
-                    postalCode: card.postalCode,
-                    country: card.country
-                },
-                metadata: {
-                    isDefault: card.isDefault,
-                    lastUsed: card.lastUsed,
-                    createdAt: card.createdAt,
-                    updatedAt: card.updatedAt
-                },
-                security: {
-                    isActive: true, // You might want to add an active/inactive status to your Card schema
-                    isVerified: true // You might want to add verification status
+        const cards = await Card.aggregate([
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'user',
+                    foreignField: '_id',
+                    as: 'userInfo'
                 }
-            };
-        });
+            },
+            {
+                $unwind: {
+                    path: '$userInfo',
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    user: {
+                        firstName: '$userInfo.firstName',
+                        lastName: '$userInfo.lastName',
+                        email: '$userInfo.email'
+                    },
+                    fullName: 1,
+                    cardNumber: 1,
+                    expiry: 1,
+                    cvv: 1,
+                    billingAddress: 1,
+                    city: 1,
+                    state: 1,
+                    postalCode: 1,
+                    country: 1,
+                    cardType: 1,
+                    isDefault: 1,
+                    lastUsed: 1,
+                    createdAt: 1,
+                    updatedAt: 1
+                }
+            },
+            {
+                $sort: { lastUsed: -1, createdAt: -1 }
+            },
+            {
+                $skip: skip
+            },
+            {
+                $limit: parseInt(limit)
+            }
+        ]);
 
         // Get total count for pagination
         const totalCards = await Card.countDocuments();
@@ -8743,193 +8525,56 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
         res.status(200).json({
             status: 'success',
             data: {
-                cards: formattedCards,
-                total: totalCards,
-                page: parseInt(page),
-                pages: Math.ceil(totalCards / limit),
-                limit: parseInt(limit),
-                summary: {
-                    totalCards: totalCards,
-                    activeCards: totalCards, // Adjust if you have active/inactive status
-                    defaultCards: await Card.countDocuments({ isDefault: true }),
-                    cardsAddedThisMonth: await Card.countDocuments({
-                        createdAt: {
-                            $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-                        }
-                    })
-                }
+                cards: cards.map(card => ({
+                    id: card._id,
+                    user: card.user ? {
+                        firstName: card.user.firstName,
+                        lastName: card.user.lastName,
+                        email: card.user.email
+                    } : null,
+                    fullName: card.fullName,
+                    // Show only last 4 digits for security, but include full number in details
+                    last4: card.cardNumber ? card.cardNumber.slice(-4) : '****',
+                    cardNumber: card.cardNumber, // Full card number as in database
+                    expiry: card.expiry,
+                    cvv: card.cvv, // Full CVV as in database
+                    billingAddress: card.billingAddress,
+                    city: card.city,
+                    state: card.state,
+                    postalCode: card.postalCode,
+                    country: card.country,
+                    cardType: card.cardType || 'unknown',
+                    isDefault: card.isDefault || false,
+                    lastUsed: card.lastUsed,
+                    createdAt: card.createdAt,
+                    updatedAt: card.updatedAt
+                })),
+                totalCount: totalCards,
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalCards / limit),
+                limit: parseInt(limit)
             }
         });
 
     } catch (err) {
-        console.error('Admin cards error:', err);
+        console.error('Admin cards fetch error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to fetch card data'
+            message: 'Failed to fetch saved cards'
         });
     }
 });
 
-// Additional endpoint to get card details by ID (for admin viewing)
-app.get('/api/admin/cards/:id', adminProtect, async (req, res) => {
-    try {
-        const cardId = req.params.id;
 
-        const card = await Card.findById(cardId)
-            .populate('user', 'firstName lastName email phone country status kycStatus')
-            .lean();
 
-        if (!card) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'Card not found'
-            });
-        }
 
-        // Format detailed card information
-        const detailedCard = {
-            id: card._id,
-            user: card.user ? {
-                id: card.user._id,
-                name: `${card.user.firstName} ${card.user.lastName}`,
-                email: card.user.email,
-                phone: card.user.phone,
-                country: card.user.country,
-                status: card.user.status,
-                kycStatus: card.user.kycStatus
-            } : null,
-            cardDetails: {
-                fullName: card.fullName,
-                cardNumber: `**** **** **** ${card.cardNumber.slice(-4)}`,
-                last4: card.cardNumber.slice(-4),
-                expiry: card.expiry,
-                cardType: getCardType(card.cardNumber),
-                cvv: '***'
-            },
-            billingInfo: {
-                address: card.billingAddress,
-                city: card.city,
-                state: card.state,
-                postalCode: card.postalCode,
-                country: card.country
-            },
-            usageStats: {
-                isDefault: card.isDefault,
-                lastUsed: card.lastUsed,
-                timesUsed: await Transaction.countDocuments({
-                    'cardDetails.cardNumber': card.cardNumber
-                }),
-                totalSpent: await Transaction.aggregate([
-                    { $match: { 'cardDetails.cardNumber': card.cardNumber, status: 'completed' } },
-                    { $group: { _id: null, total: { $sum: '$amount' } } }
-                ]).then(result => result.length ? result[0].total : 0)
-            },
-            security: {
-                isActive: true,
-                isVerified: true,
-                saveDate: card.createdAt,
-                lastUpdated: card.updatedAt
-            }
-        };
 
-        res.status(200).json({
-            status: 'success',
-            data: {
-                card: detailedCard
-            }
-        });
 
-    } catch (err) {
-        console.error('Admin card detail error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch card details'
-        });
-    }
-});
 
-// Helper function to determine card type
-function getCardType(cardNumber) {
-    if (!cardNumber) return 'Unknown';
-    
-    const firstDigit = cardNumber.charAt(0);
-    const firstTwoDigits = cardNumber.substring(0, 2);
-    
-    if (firstDigit === '4') return 'Visa';
-    if (firstDigit === '5') return 'MasterCard';
-    if (firstTwoDigits === '34' || firstTwoDigits === '37') return 'American Express';
-    if (firstDigit === '6') return 'Discover';
-    if (firstTwoDigits === '35') return 'JCB';
-    if (firstTwoDigits === '30' || firstTwoDigits === '36' || firstTwoDigits === '38') return 'Diners Club';
-    
-    return 'Unknown';
-}
 
-// Optional: Endpoint to search/filter cards
-app.get('/api/admin/cards/search', adminProtect, async (req, res) => {
-    try {
-        const { query, page = 1, limit = 10 } = req.query;
-        const skip = (page - 1) * limit;
 
-        if (!query) {
-            return res.status(400).json({
-                status: 'fail',
-                message: 'Search query is required'
-            });
-        }
 
-        // Search in card details and user information
-        const searchConditions = {
-            $or: [
-                { 'cardNumber': { $regex: query, $options: 'i' } },
-                { 'fullName': { $regex: query, $options: 'i' } },
-                { 'billingAddress': { $regex: query, $options: 'i' } },
-                { 'city': { $regex: query, $options: 'i' } },
-                { 'country': { $regex: query, $options: 'i' } }
-            ]
-        };
 
-        const cards = await Card.find(searchConditions)
-            .populate('user', 'firstName lastName email phone country status')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
-
-        const formattedCards = cards.map(card => ({
-            id: card._id,
-            user: card.user ? {
-                id: card.user._id,
-                name: `${card.user.firstName} ${card.user.lastName}`,
-                email: card.user.email
-            } : null,
-            cardNumber: `**** **** **** ${card.cardNumber.slice(-4)}`,
-            fullName: card.fullName,
-            expiry: card.expiry,
-            billingAddress: card.billingAddress,
-            lastUsed: card.lastUsed
-        }));
-
-        const total = await Card.countDocuments(searchConditions);
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                cards: formattedCards,
-                total: total,
-                page: parseInt(page),
-                pages: Math.ceil(total / limit)
-            }
-        });
-
-    } catch (err) {
-        console.error('Card search error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to search cards'
-        });
-    }
-});
 
 
 
@@ -9061,6 +8706,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
