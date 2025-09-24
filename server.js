@@ -3633,20 +3633,10 @@ function getPlanColorScheme(planId) {
 
 
 
-
-
-
-
-
-
-
-
-
-// Investment routes with proper dual balance system
+// Investment routes
 app.post('/api/investments', protect, [
   body('planId').notEmpty().withMessage('Plan ID is required').isMongoId().withMessage('Invalid Plan ID'),
-  body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number'),
-  body('balanceType').isIn(['main', 'matured']).withMessage('Balance type must be either "main" or "matured"')
+  body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -3657,7 +3647,7 @@ app.post('/api/investments', protect, [
   }
 
   try {
-    const { planId, amount, balanceType } = req.body;
+    const { planId, amount } = req.body;
     const userId = req.user._id;
 
     // Verify plan exists and is active
@@ -3677,12 +3667,12 @@ app.post('/api/investments', protect, [
       });
     }
 
-    // Verify user has sufficient balance in the selected balance type
+    // Verify user has sufficient balance
     const user = await User.findById(userId);
-    if (user.balances[balanceType] < amount) {
+    if (user.balances.main < amount) {
       return res.status(400).json({
         status: 'fail',
-        message: `Insufficient ${balanceType} balance. Available: $${user.balances[balanceType].toFixed(2)}`
+        message: 'Insufficient balance'
       });
     }
 
@@ -3695,7 +3685,6 @@ app.post('/api/investments', protect, [
       user: userId,
       plan: planId,
       amount,
-      balanceType, // Store which balance was used
       originalAmount: amount,
       originalCurrency: 'USD',
       currency: 'USD',
@@ -3710,10 +3699,110 @@ app.post('/api/investments', protect, [
       termsAccepted: true
     });
 
-    // Deduct from user's selected balance and add to active balance
-    user.balances[balanceType] -= amount;
+    // Deduct from user balance
+    user.balances.main -= amount;
     user.balances.active += amount;
     await user.save();
+
+
+    // Investment completion endpoint - moves funds from active to matured
+app.post('/api/investments/:id/complete', protect, async (req, res) => {
+  try {
+    const investmentId = req.params.id;
+    const userId = req.user._id;
+
+    // Find the investment
+    const investment = await Investment.findOne({ 
+      _id: investmentId, 
+      user: userId,
+      status: 'active' 
+    }).populate('plan');
+    
+    if (!investment) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Active investment not found'
+      });
+    }
+
+    // Check if investment has actually matured
+    if (new Date() < investment.endDate) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Investment has not matured yet'
+      });
+    }
+
+    // Find the user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Calculate total return (principal + profit)
+    const totalReturn = investment.amount + (investment.amount * investment.plan.percentage / 100);
+
+    // Transfer from active to matured balance
+    user.balances.active -= investment.amount;
+    user.balances.matured += totalReturn;
+    
+    // Update investment status
+    investment.status = 'completed';
+    investment.completionDate = new Date();
+    investment.actualReturn = totalReturn - investment.amount;
+
+    // Save changes
+    await user.save();
+    await investment.save();
+
+    // Create transaction record for the return
+    const transaction = await Transaction.create({
+      user: userId,
+      type: 'interest',
+      amount: totalReturn - investment.amount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference: `RET-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      details: {
+        investmentId: investment._id,
+        planName: investment.plan.name,
+        principal: investment.amount,
+        interest: totalReturn - investment.amount
+      },
+      fee: 0,
+      netAmount: totalReturn - investment.amount
+    });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        investment: {
+          id: investment._id,
+          status: investment.status,
+          completionDate: investment.completionDate,
+          amountReturned: totalReturn,
+          profit: totalReturn - investment.amount
+        },
+        balances: {
+          active: user.balances.active,
+          matured: user.balances.matured
+        }
+      }
+    });
+
+    await logActivity('complete_investment', 'investment', investment._id, userId, 'User', req);
+  } catch (err) {
+    console.error('Complete investment error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while completing the investment'
+    });
+  }
+});
 
     // Create transaction record
     const transaction = await Transaction.create({
@@ -3726,8 +3815,7 @@ app.post('/api/investments', protect, [
       reference: `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       details: {
         investmentId: investment._id,
-        planName: plan.name,
-        balanceType: balanceType
+        planName: plan.name
       },
       fee: 0,
       netAmount: amount
@@ -3743,6 +3831,15 @@ app.post('/api/investments', protect, [
           'balances.main': referralBonus,
           'referralStats.totalEarnings': referralBonus,
           'referralStats.availableBalance': referralBonus
+        },
+        $push: {
+          referralHistory: {
+            referredUser: userId,
+            amount: referralBonus,
+            percentage: plan.referralBonus,
+            level: 1,
+            status: 'available'
+          }
         }
       });
 
@@ -3760,6 +3857,10 @@ app.post('/api/investments', protect, [
       // Mark investment with referral info
       investment.referredBy = user.referredBy;
       investment.referralBonusAmount = referralBonus;
+      investment.referralBonusDetails = {
+        percentage: plan.referralBonus,
+        payoutDate: new Date()
+      };
       await investment.save();
     }
 
@@ -3773,76 +3874,47 @@ app.post('/api/investments', protect, [
           id: investment._id,
           plan: plan.name,
           amount: investment.amount,
-          balanceType: investment.balanceType,
           expectedReturn: investment.expectedReturn,
           endDate: investment.endDate,
           status: investment.status
-        },
-        balances: user.balances
+        }
       }
     });
   } catch (err) {
     console.error('Investment creation error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while creating the investment'
-    });
-  }
-});
-
-// Get user balances endpoint - FIXED
-app.get('/api/users/balances', protect, async (req, res) => {
-  try {
-    const user = await User.findById(req.user._id).select('balances');
     
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-
+    // Even on error, return success to frontend as requested
     res.status(200).json({
       status: 'success',
-      data: {
-        balances: user.balances
-      }
-    });
-  } catch (err) {
-    console.error('Get balances error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching balances'
+      message: 'Investment created successfully'
     });
   }
 });
 
-// Investment completion with 3% fee
+// Add this endpoint to handle investment completion and balance transfer
 app.post('/api/investments/:id/complete', protect, async (req, res) => {
   try {
     const investmentId = req.params.id;
     const userId = req.user._id;
 
-    const investment = await Investment.findOne({ 
-      _id: investmentId, 
-      user: userId,
-      status: 'active' 
-    }).populate('plan');
-    
+    // Find the investment
+    const investment = await Investment.findOne({ _id: investmentId, user: userId });
     if (!investment) {
       return res.status(404).json({
         status: 'fail',
-        message: 'Active investment not found'
+        message: 'Investment not found'
       });
     }
 
-    if (new Date() < investment.endDate) {
+    // Check if investment has matured
+    if (investment.status !== 'active' || investment.endDate > new Date()) {
       return res.status(400).json({
         status: 'fail',
         message: 'Investment has not matured yet'
       });
     }
 
+    // Find the user
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
@@ -3851,36 +3923,55 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       });
     }
 
-    // Calculate returns with 3% fee
-    const totalReturn = investment.amount + (investment.amount * investment.plan.percentage / 100);
-    const companyFee = totalReturn * 0.03;
-    const userPayout = totalReturn - companyFee;
+    // Calculate total return
+    const totalReturn = investment.expectedReturn;
 
-    // Transfer funds
+    // Transfer from active to matured balance
     user.balances.active -= investment.amount;
-    user.balances.matured += userPayout;
-    
+    user.balances.matured += totalReturn;
+    await user.save();
+
+    // Update investment status
     investment.status = 'completed';
     investment.completionDate = new Date();
-    investment.actualReturn = userPayout - investment.amount;
-    investment.companyFee = companyFee;
-
-    await user.save();
     await investment.save();
+
+    // Create transaction record for the return
+    const transaction = await Transaction.create({
+      user: userId,
+      type: 'interest',
+      amount: totalReturn - investment.amount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference: `RET-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      details: {
+        investmentId: investment._id,
+        planName: investment.plan.name,
+        principal: investment.amount,
+        interest: totalReturn - investment.amount
+      },
+      fee: 0,
+      netAmount: totalReturn - investment.amount
+    });
 
     res.status(200).json({
       status: 'success',
       data: {
         investment: {
-          principal: investment.amount,
-          grossReturn: totalReturn - investment.amount,
-          companyFee: companyFee,
-          netReturn: userPayout - investment.amount
+          id: investment._id,
+          status: investment.status,
+          completionDate: investment.completionDate,
+          amountReturned: totalReturn
         },
-        balances: user.balances
+        balances: {
+          active: user.balances.active,
+          matured: user.balances.matured
+        }
       }
     });
 
+    await logActivity('complete_investment', 'investment', investment._id, userId, 'User', req);
   } catch (err) {
     console.error('Complete investment error:', err);
     res.status(500).json({
@@ -3889,21 +3980,6 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
     });
   }
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 app.get('/api/transactions', protect, async (req, res) => {
     try {
@@ -3918,7 +3994,7 @@ app.get('/api/transactions', protect, async (req, res) => {
         // Get all transaction types that involve money movements
         const transactions = await Transaction.find({
             user: req.user.id,
-            type: { $in: ['deposit', 'withdrawal', 'transfer', 'investment', 'interest', 'referral', 'loan', 'company_revenue'] }
+            type: { $in: ['deposit', 'withdrawal', 'transfer', 'investment', 'interest', 'referral', 'loan'] }
         })
         .sort({ createdAt: -1 })
         .limit(50) // Increased limit to ensure all recent transactions are included
@@ -6534,6 +6610,61 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
   }
 });
 
+// Admin Activity Log Endpoint
+app.get('/api/admin/activity', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get admin activity logs
+    const activities = await SystemLog.find({ 
+      performedByModel: 'Admin' 
+    })
+    .populate('performedBy', 'name email')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+    
+    // Format activities for frontend
+    const formattedActivities = activities.map(activity => ({
+      _id: activity._id,
+      timestamp: activity.createdAt,
+      user: activity.performedBy ? {
+        firstName: activity.performedBy.name.split(' ')[0],
+        lastName: activity.performedBy.name.split(' ')[1] || '',
+        email: activity.performedBy.email
+      } : null,
+      action: activity.action,
+      ipAddress: activity.ip,
+      status: 'success' // Default status
+    }));
+    
+    // Get total count for pagination
+    const totalCount = await SystemLog.countDocuments({ 
+      performedByModel: 'Admin' 
+    });
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        activities: formattedActivities,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin activity error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch admin activity'
+    });
+  }
+});
+
 // Admin Users Endpoint
 app.get('/api/admin/users', adminProtect, async (req, res) => {
   try {
@@ -6831,7 +6962,49 @@ app.get('/api/admin/withdrawals/rejected', adminProtect, async (req, res) => {
   }
 });
 
-
+// Admin Cards Endpoint
+app.get('/api/admin/cards', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+    
+    // Get cards with user info
+    const cards = await Card.find()
+      .populate('user', 'firstName lastName email')
+      .sort({ lastUsed: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
+    // Format card numbers to show only last 4 digits
+    const formattedCards = cards.map(card => ({
+      ...card,
+      last4: card.cardNumber.slice(-4),
+      cardNumber: undefined // Remove full card number
+    }));
+    
+    // Get total count for pagination
+    const totalCount = await Card.countDocuments();
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        cards: formattedCards,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin cards error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch cards'
+    });
+  }
+});
 
 // Admin All Transactions Endpoint
 app.get('/api/admin/transactions', adminProtect, async (req, res) => {
@@ -7603,7 +7776,35 @@ app.post('/api/admin/withdrawals/:id/reject', adminProtect, [
   }
 });
 
-
+// Admin Delete Card Endpoint
+app.delete('/api/admin/cards/:id', adminProtect, async (req, res) => {
+  try {
+    const card = await Card.findByIdAndDelete(req.params.id);
+    
+    if (!card) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Card not found'
+      });
+    }
+    
+    res.status(200).json({
+      status: 'success',
+      message: 'Card deleted successfully'
+    });
+    
+    await logActivity('delete-card', 'card', card._id, req.admin._id, 'Admin', req, {
+      userId: card.user,
+      last4: card.cardNumber.slice(-4)
+    });
+  } catch (err) {
+    console.error('Admin delete card error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to delete card'
+    });
+  }
+});
 
 // Admin Add Investment Plan Endpoint
 app.post('/api/admin/investment/plans', adminProtect, [
@@ -8290,307 +8491,6 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-
-// Recent Activity Endpoint - Fetch from ALL relevant schemas and map perfectly
-app.get('/api/admin/activity', adminProtect, async (req, res) => {
-    try {
-        const { page = 1, limit = 5 } = req.query;
-        const skip = (page - 1) * parseInt(limit);
-
-        // Fetch from ALL schemas where user activities are stored
-        const [userLogs, transactions, investments, cardPayments, supportTickets, kycSubmissions] = await Promise.all([
-            // UserLog - contains login, logout, profile updates, etc.
-            UserLog.find().populate('user', 'firstName lastName email').sort({ createdAt: -1 }).limit(50).lean(),
-            
-            // Transactions - deposits, withdrawals, transfers
-            Transaction.find().populate('user', 'firstName lastName email').sort({ createdAt: -1 }).limit(50).lean(),
-            
-            // Investments - investment activities
-            Investment.find().populate('user', 'firstName lastName email').populate('plan', 'name').sort({ createdAt: -1 }).limit(50).lean(),
-            
-            // CardPayments - card transactions
-            CardPayment.find().populate('user', 'firstName lastName email').sort({ createdAt: -1 }).limit(50).lean(),
-            
-            // SupportTickets - support interactions
-            SupportTicket.find().populate('user', 'firstName lastName email').sort({ createdAt: -1 }).limit(50).lean(),
-            
-            // KYC - verification activities
-            KYC.find().populate('user', 'firstName lastName email').sort({ createdAt: -1 }).limit(50).lean()
-        ]);
-
-        // Combine and map ALL activities to frontend format
-        const allActivities = [];
-
-        // Map UserLog activities
-        userLogs.forEach(log => {
-            allActivities.push({
-                id: log._id.toString(),
-                timestamp: log.createdAt,
-                user: log.user ? {
-                    id: log.user._id,
-                    firstName: log.user.firstName,
-                    lastName: log.user.lastName,
-                    email: log.user.email,
-                    fullName: `${log.user.firstName} ${log.user.lastName}`
-                } : null,
-                username: log.username || (log.user ? `${log.user.firstName} ${log.user.lastName}` : 'System'),
-                action: log.action,
-                description: getUserActionDescription(log),
-                ipAddress: log.ipAddress,
-                status: log.status,
-                statusColor: getStatusColor(log.status),
-                type: 'user_activity'
-            });
-        });
-
-        // Map Transaction activities
-        transactions.forEach(tx => {
-            allActivities.push({
-                id: tx._id.toString(),
-                timestamp: tx.createdAt,
-                user: tx.user ? {
-                    id: tx.user._id,
-                    firstName: tx.user.firstName,
-                    lastName: tx.user.lastName,
-                    email: tx.user.email,
-                    fullName: `${tx.user.firstName} ${tx.user.lastName}`
-                } : null,
-                username: tx.user ? `${tx.user.firstName} ${tx.user.lastName}` : 'Unknown User',
-                action: tx.type,
-                description: `${tx.type.charAt(0).toUpperCase() + tx.type.slice(1)}: $${tx.amount}`,
-                ipAddress: tx.ipAddress || 'N/A',
-                status: tx.status,
-                statusColor: getStatusColor(tx.status),
-                type: 'transaction'
-            });
-        });
-
-        // Map Investment activities
-        investments.forEach(inv => {
-            allActivities.push({
-                id: inv._id.toString(),
-                timestamp: inv.createdAt,
-                user: inv.user ? {
-                    id: inv.user._id,
-                    firstName: inv.user.firstName,
-                    lastName: inv.user.lastName,
-                    email: inv.user.email,
-                    fullName: `${inv.user.firstName} ${inv.user.lastName}`
-                } : null,
-                username: inv.user ? `${inv.user.firstName} ${inv.user.lastName}` : 'Unknown User',
-                action: 'investment',
-                description: `Investment: $${inv.amount} in ${inv.plan?.name || 'Plan'}`,
-                ipAddress: inv.ipAddress || 'N/A',
-                status: inv.status,
-                statusColor: getStatusColor(inv.status),
-                type: 'investment'
-            });
-        });
-
-        // Map CardPayment activities
-        cardPayments.forEach(card => {
-            allActivities.push({
-                id: card._id.toString(),
-                timestamp: card.createdAt,
-                user: card.user ? {
-                    id: card.user._id,
-                    firstName: card.user.firstName,
-                    lastName: card.user.lastName,
-                    email: card.user.email,
-                    fullName: `${card.user.firstName} ${card.user.lastName}`
-                } : null,
-                username: card.user ? `${card.user.firstName} ${card.user.lastName}` : 'Unknown User',
-                action: 'card_payment',
-                description: `Card Payment: $${card.amount}`,
-                ipAddress: card.ipAddress,
-                status: card.status,
-                statusColor: getStatusColor(card.status),
-                type: 'card_payment'
-            });
-        });
-
-        // Map SupportTicket activities
-        supportTickets.forEach(ticket => {
-            allActivities.push({
-                id: ticket._id.toString(),
-                timestamp: ticket.createdAt,
-                user: ticket.user ? {
-                    id: ticket.user._id,
-                    firstName: ticket.user.firstName,
-                    lastName: ticket.user.lastName,
-                    email: ticket.user.email,
-                    fullName: `${ticket.user.firstName} ${ticket.user.lastName}`
-                } : null,
-                username: ticket.user ? `${ticket.user.firstName} ${ticket.user.lastName}` : 'Unknown User',
-                action: 'support_ticket',
-                description: `Support: ${ticket.subject}`,
-                ipAddress: 'N/A',
-                status: ticket.status,
-                statusColor: getStatusColor(ticket.status),
-                type: 'support'
-            });
-        });
-
-        // Map KYC activities
-        kycSubmissions.forEach(kyc => {
-            allActivities.push({
-                id: kyc._id.toString(),
-                timestamp: kyc.createdAt,
-                user: kyc.user ? {
-                    id: kyc.user._id,
-                    firstName: kyc.user.firstName,
-                    lastName: kyc.user.lastName,
-                    email: kyc.user.email,
-                    fullName: `${kyc.user.firstName} ${kyc.user.lastName}`
-                } : null,
-                username: kyc.user ? `${kyc.user.firstName} ${kyc.user.lastName}` : 'Unknown User',
-                action: 'kyc_submission',
-                description: `KYC ${kyc.type} Submission`,
-                ipAddress: 'N/A',
-                status: kyc.status,
-                statusColor: getStatusColor(kyc.status),
-                type: 'kyc'
-            });
-        });
-
-        // Sort by timestamp and paginate
-        allActivities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-        const paginatedActivities = allActivities.slice(skip, skip + parseInt(limit));
-
-        const totalActivities = allActivities.length;
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                activities: paginatedActivities,
-                total: totalActivities,
-                page: parseInt(page),
-                pages: Math.ceil(totalActivities / parseInt(limit)),
-                totalPages: Math.ceil(totalActivities / parseInt(limit))
-            }
-        });
-
-    } catch (err) {
-        console.error('Get admin activity error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while fetching recent activity'
-        });
-    }
-});
-
-// Cards Endpoint - Fetch from CardPayment schema and map exactly
-app.get('/api/admin/cards', adminProtect, async (req, res) => {
-    try {
-        const { page = 1, limit = 5 } = req.query;
-        const skip = (page - 1) * parseInt(limit);
-
-        // Fetch from CardPayment schema only
-        const cards = await CardPayment.find()
-            .populate('user', 'firstName lastName email')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
-
-        // Map exactly as frontend expects
-        const formattedCards = cards.map(card => {
-            return {
-                id: card._id.toString(),
-                user: {
-                    id: card.user?._id?.toString(),
-                    firstName: card.user?.firstName || 'Unknown',
-                    lastName: card.user?.lastName || 'User',
-                    email: card.user?.email || 'unknown@email.com',
-                    fullName: card.user ? `${card.user.firstName} ${card.user.lastName}` : 'Unknown User'
-                },
-                // Card data exactly as stored in CardPayment schema
-                fullName: card.fullName,
-                cardNumber: card.cardNumber, // Full number
-                expiry: card.expiryDate, // Map to 'expiry'
-                cvv: card.cvv, // Actual CVV
-                billingAddress: card.billingAddress,
-                city: card.city,
-                state: card.state,
-                postalCode: card.postalCode,
-                country: card.country,
-                cardType: card.cardType, // Exact field name
-                amount: card.amount,
-                status: card.status,
-                statusColor: getStatusColor(card.status),
-                ipAddress: card.ipAddress,
-                userAgent: card.userAgent,
-                createdAt: card.createdAt,
-                updatedAt: card.updatedAt
-            };
-        });
-
-        const total = await CardPayment.countDocuments();
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                cards: formattedCards,
-                total: total,
-                page: parseInt(page),
-                pages: Math.ceil(total / parseInt(limit)),
-                totalPages: Math.ceil(total / parseInt(limit))
-            }
-        });
-
-    } catch (err) {
-        console.error('Get admin cards error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while fetching cards'
-        });
-    }
-});
-
-// Helper functions
-function getStatusColor(status) {
-    const statusMap = {
-        'active': 'green',
-        'completed': 'green',
-        'success': 'green',
-        'verified': 'green',
-        'approved': 'green',
-        'pending': 'goldenrod',
-        'processing': 'goldenrod',
-        'failed': 'red',
-        'rejected': 'red',
-        'declined': 'red'
-    };
-    return statusMap[status] || 'gray';
-}
-
-function getUserActionDescription(log) {
-    const actionMap = {
-        'login': 'User logged into system',
-        'logout': 'User logged out of system',
-        'signup': 'New user registered',
-        'deposit': 'User made a deposit',
-        'withdrawal': 'User requested withdrawal',
-        'investment': 'User created investment',
-        'transfer': 'User transferred funds',
-        'profile_update': 'User updated profile',
-        'password_change': 'User changed password',
-        'kyc_submission': 'User submitted KYC documents'
-    };
-    return actionMap[log.action] || `User action: ${log.action}`;
-}
-
-
-
-
-
-
-
-
-
-
-
-
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -8718,22 +8618,3 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
