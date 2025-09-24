@@ -3566,7 +3566,12 @@ app.delete('/api/admin/two-factor', adminProtect, [
   }
 });
 
-// Dashboard Endpoints
+
+
+
+
+
+
 // Plans Endpoint with login state detection
 app.get('/api/plans', async (req, res) => {
   try {
@@ -3574,11 +3579,13 @@ app.get('/api/plans', async (req, res) => {
     const plans = await Plan.find({ isActive: true }).lean();
     
     // Get user balance if logged in
-    let userBalance = 0;
+    let userMainBalance = 0;
+    let userMaturedBalance = 0;
     let isLoggedIn = false;
     if (req.user) {
       const user = await User.findById(req.user.id).select('balances');
-      userBalance = user.balances.main;
+      userMainBalance = user.balances.main;
+      userMaturedBalance = user.balances.matured;
       isLoggedIn = true;
     }
 
@@ -3594,14 +3601,17 @@ app.get('/api/plans', async (req, res) => {
       referralBonus: plan.referralBonus,
       colorScheme: getPlanColorScheme(plan._id),
       buttonState: isLoggedIn ? 'Invest' : 'Login to Invest',
-      canInvest: isLoggedIn && userBalance >= plan.minAmount
+      canInvest: isLoggedIn && (userMainBalance >= plan.minAmount || userMaturedBalance >= plan.minAmount)
     }));
 
     res.status(200).json({
       status: 'success',
       data: {
         plans: formattedPlans,
-        userBalance: isLoggedIn ? userBalance : null,
+        userBalances: isLoggedIn ? {
+          main: userMainBalance,
+          matured: userMaturedBalance
+        } : null,
         isLoggedIn
       }
     });
@@ -3629,14 +3639,11 @@ function getPlanColorScheme(planId) {
   return colors[hash % colors.length];
 }
 
-
-
-
-
 // Investment routes
 app.post('/api/investments', protect, [
   body('planId').notEmpty().withMessage('Plan ID is required').isMongoId().withMessage('Invalid Plan ID'),
-  body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number')
+  body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number'),
+  body('balanceType').isIn(['main', 'matured']).withMessage('Balance type must be either "main" or "matured"')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -3647,7 +3654,7 @@ app.post('/api/investments', protect, [
   }
 
   try {
-    const { planId, amount } = req.body;
+    const { planId, amount, balanceType } = req.body;
     const userId = req.user._id;
 
     // Verify plan exists and is active
@@ -3667,25 +3674,31 @@ app.post('/api/investments', protect, [
       });
     }
 
-    // Verify user has sufficient balance
+    // Verify user has sufficient balance in the selected balance type
     const user = await User.findById(userId);
-    if (user.balances.main < amount) {
+    const selectedBalance = user.balances[balanceType];
+    
+    if (selectedBalance < amount) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Insufficient balance'
+        message: `Insufficient ${balanceType} balance`
       });
     }
 
-    // Calculate expected return
-    const expectedReturn = amount + (amount * plan.percentage / 100);
+    // Calculate investment amount after 3% fee
+    const investmentFee = amount * 0.03;
+    const investmentAmountAfterFee = amount - investmentFee;
+
+    // Calculate expected return based on the amount after fee
+    const expectedReturn = investmentAmountAfterFee + (investmentAmountAfterFee * plan.percentage / 100);
     const endDate = new Date(Date.now() + plan.duration * 60 * 60 * 1000);
 
     // Create investment
     const investment = await Investment.create({
       user: userId,
       plan: planId,
-      amount,
-      originalAmount: amount,
+      amount: investmentAmountAfterFee, // Store the amount after fee
+      originalAmount: amount, // Store original amount before fee
       originalCurrency: 'USD',
       currency: 'USD',
       expectedReturn,
@@ -3696,115 +3709,17 @@ app.post('/api/investments', protect, [
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
       deviceInfo: getDeviceType(req),
-      termsAccepted: true
+      termsAccepted: true,
+      investmentFee: investmentFee, // Store the fee for record keeping
+      balanceType: balanceType // Store which balance was used
     });
 
-    // Deduct from user balance
-    user.balances.main -= amount;
-    user.balances.active += amount;
+    // Deduct from user's selected balance
+    user.balances[balanceType] -= amount;
+    user.balances.active += investmentAmountAfterFee; // Add the amount after fee to active balance
     await user.save();
 
-
-    // Investment completion endpoint - moves funds from active to matured
-app.post('/api/investments/:id/complete', protect, async (req, res) => {
-  try {
-    const investmentId = req.params.id;
-    const userId = req.user._id;
-
-    // Find the investment
-    const investment = await Investment.findOne({ 
-      _id: investmentId, 
-      user: userId,
-      status: 'active' 
-    }).populate('plan');
-    
-    if (!investment) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Active investment not found'
-      });
-    }
-
-    // Check if investment has actually matured
-    if (new Date() < investment.endDate) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Investment has not matured yet'
-      });
-    }
-
-    // Find the user
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-
-    // Calculate total return (principal + profit)
-    const totalReturn = investment.amount + (investment.amount * investment.plan.percentage / 100);
-
-    // Transfer from active to matured balance
-    user.balances.active -= investment.amount;
-    user.balances.matured += totalReturn;
-    
-    // Update investment status
-    investment.status = 'completed';
-    investment.completionDate = new Date();
-    investment.actualReturn = totalReturn - investment.amount;
-
-    // Save changes
-    await user.save();
-    await investment.save();
-
-    // Create transaction record for the return
-    const transaction = await Transaction.create({
-      user: userId,
-      type: 'interest',
-      amount: totalReturn - investment.amount,
-      currency: 'USD',
-      status: 'completed',
-      method: 'internal',
-      reference: `RET-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      details: {
-        investmentId: investment._id,
-        planName: investment.plan.name,
-        principal: investment.amount,
-        interest: totalReturn - investment.amount
-      },
-      fee: 0,
-      netAmount: totalReturn - investment.amount
-    });
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        investment: {
-          id: investment._id,
-          status: investment.status,
-          completionDate: investment.completionDate,
-          amountReturned: totalReturn,
-          profit: totalReturn - investment.amount
-        },
-        balances: {
-          active: user.balances.active,
-          matured: user.balances.matured
-        }
-      }
-    });
-
-    await logActivity('complete_investment', 'investment', investment._id, userId, 'User', req);
-  } catch (err) {
-    console.error('Complete investment error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while completing the investment'
-    });
-  }
-});
-
-    // Create transaction record
+    // Create transaction record for the investment with fee
     const transaction = await Transaction.create({
       user: userId,
       type: 'investment',
@@ -3815,15 +3730,18 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       reference: `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       details: {
         investmentId: investment._id,
-        planName: plan.name
+        planName: plan.name,
+        balanceType: balanceType,
+        investmentFee: investmentFee,
+        amountAfterFee: investmentAmountAfterFee
       },
-      fee: 0,
-      netAmount: amount
+      fee: investmentFee,
+      netAmount: -investmentAmountAfterFee
     });
 
     // Handle referral if applicable
     if (user.referredBy) {
-      const referralBonus = amount * (plan.referralBonus / 100);
+      const referralBonus = investmentAmountAfterFee * (plan.referralBonus / 100); // Calculate bonus on amount after fee
       
       // Update referring user's balance
       await User.findByIdAndUpdate(user.referredBy, {
@@ -3874,9 +3792,12 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
           id: investment._id,
           plan: plan.name,
           amount: investment.amount,
+          originalAmount: investment.originalAmount,
+          investmentFee: investmentFee,
           expectedReturn: investment.expectedReturn,
           endDate: investment.endDate,
-          status: investment.status
+          status: investment.status,
+          balanceType: balanceType
         }
       }
     });
@@ -3891,23 +3812,28 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
   }
 });
 
-// Add this endpoint to handle investment completion and balance transfer
+// Investment completion endpoint - moves funds from active to matured
 app.post('/api/investments/:id/complete', protect, async (req, res) => {
   try {
     const investmentId = req.params.id;
     const userId = req.user._id;
 
     // Find the investment
-    const investment = await Investment.findOne({ _id: investmentId, user: userId });
+    const investment = await Investment.findOne({ 
+      _id: investmentId, 
+      user: userId,
+      status: 'active' 
+    }).populate('plan');
+    
     if (!investment) {
       return res.status(404).json({
         status: 'fail',
-        message: 'Investment not found'
+        message: 'Active investment not found'
       });
     }
 
-    // Check if investment has matured
-    if (investment.status !== 'active' || investment.endDate > new Date()) {
+    // Check if investment has actually matured
+    if (new Date() < investment.endDate) {
       return res.status(400).json({
         status: 'fail',
         message: 'Investment has not matured yet'
@@ -3923,17 +3849,20 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       });
     }
 
-    // Calculate total return
+    // Calculate total return (principal + profit)
     const totalReturn = investment.expectedReturn;
 
     // Transfer from active to matured balance
     user.balances.active -= investment.amount;
     user.balances.matured += totalReturn;
-    await user.save();
-
+    
     // Update investment status
     investment.status = 'completed';
     investment.completionDate = new Date();
+    investment.actualReturn = totalReturn - investment.amount;
+
+    // Save changes
+    await user.save();
     await investment.save();
 
     // Create transaction record for the return
@@ -3949,7 +3878,9 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
         investmentId: investment._id,
         planName: investment.plan.name,
         principal: investment.amount,
-        interest: totalReturn - investment.amount
+        interest: totalReturn - investment.amount,
+        originalInvestment: investment.originalAmount,
+        investmentFee: investment.investmentFee
       },
       fee: 0,
       netAmount: totalReturn - investment.amount
@@ -3962,7 +3893,10 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
           id: investment._id,
           status: investment.status,
           completionDate: investment.completionDate,
-          amountReturned: totalReturn
+          amountReturned: totalReturn,
+          profit: totalReturn - investment.amount,
+          originalInvestment: investment.originalAmount,
+          investmentFee: investment.investmentFee
         },
         balances: {
           active: user.balances.active,
@@ -3980,6 +3914,12 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
     });
   }
 });
+
+
+
+
+
+
 
 app.get('/api/transactions', protect, async (req, res) => {
     try {
@@ -8618,3 +8558,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
