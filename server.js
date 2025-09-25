@@ -1153,6 +1153,50 @@ KYCSchema.index({ type: 1 });
 
 const KYC = mongoose.model('KYC', KYCSchema);
 
+const PlatformRevenueSchema = new mongoose.Schema({
+  source: {
+    type: String,
+    enum: ['investment_fee', 'withdrawal_fee', 'other'],
+    required: true
+  },
+  amount: {
+    type: Number,
+    required: true,
+    min: 0
+  },
+  currency: {
+    type: String,
+    default: 'USD'
+  },
+  transactionId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Transaction'
+  },
+  investmentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Investment'
+  },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  description: String,
+  metadata: mongoose.Schema.Types.Mixed,
+  recordedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, {
+  timestamps: true
+});
+
+PlatformRevenueSchema.index({ source: 1 });
+PlatformRevenueSchema.index({ recordedAt: -1 });
+PlatformRevenueSchema.index({ userId: 1 });
+
+const PlatformRevenue = mongoose.model('PlatformRevenue', PlatformRevenueSchema);
+
+
 const SystemLogSchema = new mongoose.Schema({
   action: { type: String, required: [true, 'Action is required'] },
   entity: { type: String, required: [true, 'Entity is required'] },
@@ -8558,4 +8602,5 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
