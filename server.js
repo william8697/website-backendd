@@ -3615,7 +3615,6 @@ app.delete('/api/admin/two-factor', adminProtect, [
 
 
 
-
 // Plans Endpoint with login state detection
 app.get('/api/plans', async (req, res) => {
   try {
@@ -3758,7 +3757,7 @@ app.post('/api/investments', protect, [
       balanceType: balanceType // Store which balance was used
     });
 
-    // Deduct from user's selected balance
+    // Deduct from user's selected balance (only the original amount)
     user.balances[balanceType] -= amount;
     user.balances.active += investmentAmountAfterFee; // Add the amount after fee to active balance
     await user.save();
@@ -3781,6 +3780,23 @@ app.post('/api/investments', protect, [
       },
       fee: investmentFee,
       netAmount: -investmentAmountAfterFee
+    });
+
+    // Record platform revenue from the investment fee
+    await PlatformRevenue.create({
+      source: 'investment_fee',
+      amount: investmentFee,
+      currency: 'USD',
+      transactionId: transaction._id,
+      investmentId: investment._id,
+      userId: userId,
+      description: `3% investment fee for ${plan.name} investment`,
+      metadata: {
+        planName: plan.name,
+        originalAmount: amount,
+        amountAfterFee: investmentAmountAfterFee,
+        feePercentage: 3
+      }
     });
 
     // Handle referral if applicable
@@ -3835,8 +3851,8 @@ app.post('/api/investments', protect, [
         investment: {
           id: investment._id,
           plan: plan.name,
-          amount: investment.amount,
-          originalAmount: investment.originalAmount,
+          amount: investment.amount, // This shows amount after fee to user
+          originalAmount: investment.originalAmount, // Original amount for reference
           investmentFee: investmentFee,
           expectedReturn: investment.expectedReturn,
           endDate: investment.endDate,
@@ -3893,11 +3909,11 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       });
     }
 
-    // Calculate total return (principal + profit)
+    // Calculate total return (principal + profit) - based on amount after fee
     const totalReturn = investment.expectedReturn;
 
     // Transfer from active to matured balance
-    user.balances.active -= investment.amount;
+    user.balances.active -= investment.amount; // This is the amount after fee
     user.balances.matured += totalReturn;
     
     // Update investment status
@@ -3921,10 +3937,10 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       details: {
         investmentId: investment._id,
         planName: investment.plan.name,
-        principal: investment.amount,
+        principal: investment.amount, // Amount after fee
         interest: totalReturn - investment.amount,
-        originalInvestment: investment.originalAmount,
-        investmentFee: investment.investmentFee
+        originalInvestment: investment.originalAmount, // Original amount for reference
+        investmentFee: investment.investmentFee // Fee already deducted and recorded as revenue
       },
       fee: 0,
       netAmount: totalReturn - investment.amount
@@ -3938,9 +3954,9 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
           status: investment.status,
           completionDate: investment.completionDate,
           amountReturned: totalReturn,
-          profit: totalReturn - investment.amount,
-          originalInvestment: investment.originalAmount,
-          investmentFee: investment.investmentFee
+          profit: totalReturn - investment.amount, // Profit calculated on amount after fee
+          originalInvestment: investment.originalAmount, // Show original amount for transparency
+          investmentFee: investment.investmentFee // Show fee that was deducted
         },
         balances: {
           active: user.balances.active,
@@ -3958,7 +3974,6 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
     });
   }
 });
-
 
 
 
@@ -8602,5 +8617,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
