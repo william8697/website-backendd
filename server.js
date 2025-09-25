@@ -6443,17 +6443,7 @@ app.get('/api/withdrawals/history', protect, async (req, res) => {
 
 
 
-
-
-
-
-
-
-
-
-
-
-// Admin Dashboard Stats Endpoint
+// Admin Dashboard Stats Endpoint with Real-time Revenue
 app.get('/api/admin/stats', adminProtect, async (req, res) => {
   try {
     // Get total users count
@@ -6534,34 +6524,35 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
       ? (((todayWithdrawals - yesterdayWithdrawals) / yesterdayWithdrawals) * 100).toFixed(2)
       : 100;
     
-    // Calculate platform revenue (fees from transactions)
-    const revenueResult = await Transaction.aggregate([
-      { $match: { fee: { $gt: 0 } } },
-      { $group: { _id: null, total: { $sum: '$fee' } } }
+    // REAL-TIME REVENUE DATA FROM PLATFORMREVENUE SCHEMA
+    // Get total platform revenue from revenue schema
+    const totalRevenueResult = await PlatformRevenue.aggregate([
+      { $match: { status: { $ne: 'rejected' } } }, // Exclude rejected revenue
+      { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
-    const platformRevenue = revenueResult[0]?.total || 0;
+    const platformRevenue = totalRevenueResult[0]?.total || 0;
     
     // Get revenue from yesterday
-    const yesterdayRevenueResult = await Transaction.aggregate([
+    const yesterdayRevenueResult = await PlatformRevenue.aggregate([
       { 
         $match: { 
-          fee: { $gt: 0 },
-          createdAt: { $lt: yesterday }
+          status: { $ne: 'rejected' },
+          recordedAt: { $lt: yesterday }
         } 
       },
-      { $group: { _id: null, total: { $sum: '$fee' } } }
+      { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const yesterdayRevenue = yesterdayRevenueResult[0]?.total || 0;
     
     // Get today's revenue
-    const todayRevenueResult = await Transaction.aggregate([
+    const todayRevenueResult = await PlatformRevenue.aggregate([
       { 
         $match: { 
-          fee: { $gt: 0 },
-          createdAt: { $gte: yesterday }
+          status: { $ne: 'rejected' },
+          recordedAt: { $gte: yesterday }
         } 
       },
-      { $group: { _id: null, total: { $sum: '$fee' } } }
+      { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const todayRevenue = todayRevenueResult[0]?.total || 0;
     
@@ -6569,6 +6560,65 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
     const revenueChange = yesterdayRevenue > 0
       ? (((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100).toFixed(2)
       : 100;
+    
+    // Get revenue breakdown by source for detailed analytics
+    const revenueBySource = await PlatformRevenue.aggregate([
+      { $match: { status: { $ne: 'rejected' } } },
+      { 
+        $group: { 
+          _id: '$source',
+          total: { $sum: '$amount' },
+          count: { $sum: 1 }
+        } 
+      },
+      { $sort: { total: -1 } }
+    ]);
+    
+    // Get recent revenue transactions (last 7 days)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    
+    const recentRevenue = await PlatformRevenue.aggregate([
+      { 
+        $match: { 
+          status: { $ne: 'rejected' },
+          recordedAt: { $gte: sevenDaysAgo }
+        } 
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: "%Y-%m-%d", date: "$recordedAt" }
+          },
+          dailyRevenue: { $sum: '$amount' },
+          transactionCount: { $sum: 1 }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ]);
+    
+    // Calculate average revenue per transaction
+    const revenueStats = await PlatformRevenue.aggregate([
+      { $match: { status: { $ne: 'rejected' } } },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$amount' },
+          totalTransactions: { $sum: 1 },
+          avgRevenuePerTransaction: { $avg: '$amount' },
+          minRevenue: { $min: '$amount' },
+          maxRevenue: { $max: '$amount' }
+        }
+      }
+    ]);
+    
+    const revenueStatsData = revenueStats[0] || {
+      totalRevenue: 0,
+      totalTransactions: 0,
+      avgRevenuePerTransaction: 0,
+      minRevenue: 0,
+      maxRevenue: 0
+    };
     
     // System performance metrics (simulated)
     const backendResponseTime = Math.floor(Math.random() * 50) + 10; // 10-60ms
@@ -6580,24 +6630,51 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
       ? Math.floor((Date.now() - new Date(lastTransaction.createdAt).getTime()) / 1000)
       : 0;
     
+    // Get last revenue transaction time
+    const lastRevenue = await PlatformRevenue.findOne().sort({ recordedAt: -1 });
+    const lastRevenueTime = lastRevenue 
+      ? Math.floor((Date.now() - new Date(lastRevenue.recordedAt).getTime()) / 1000)
+      : 0;
+    
     // Simulate server uptime (95-100%)
     const serverUptime = (95 + Math.random() * 5).toFixed(2);
     
     res.status(200).json({
       status: 'success',
       data: {
+        // Core metrics (existing)
         totalUsers: parseInt(totalUsers),
         usersChange: parseFloat(usersChange),
         totalDeposits: parseFloat(totalDeposits),
         depositsChange: parseFloat(depositsChange),
         pendingWithdrawals: parseFloat(pendingWithdrawals),
         withdrawalsChange: parseFloat(withdrawalsChange),
+        
+        // Enhanced revenue metrics (from PlatformRevenue schema)
         platformRevenue: parseFloat(platformRevenue),
         revenueChange: parseFloat(revenueChange),
+        todayRevenue: parseFloat(todayRevenue),
+        yesterdayRevenue: parseFloat(yesterdayRevenue),
+        
+        // Detailed revenue analytics
+        revenueBreakdown: revenueBySource,
+        recentRevenueTrend: recentRevenue,
+        revenueStats: {
+          totalTransactions: revenueStatsData.totalTransactions,
+          avgRevenuePerTransaction: parseFloat(revenueStatsData.avgRevenuePerTransaction.toFixed(2)),
+          minRevenue: parseFloat(revenueStatsData.minRevenue),
+          maxRevenue: parseFloat(revenueStatsData.maxRevenue)
+        },
+        
+        // System metrics
         backendResponseTime,
         databaseQueryTime,
         lastTransactionTime,
-        serverUptime: parseFloat(serverUptime)
+        lastRevenueTime,
+        serverUptime: parseFloat(serverUptime),
+        
+        // Timestamp for real-time updates
+        lastUpdated: new Date().toISOString()
       }
     });
   } catch (err) {
@@ -6608,6 +6685,20 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
     });
   }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // Admin Activity Log Endpoint
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
@@ -8617,6 +8708,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
