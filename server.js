@@ -8536,16 +8536,14 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-
-
-// Admin Recent Activities Endpoint
+// Admin User Activities Endpoint
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
         
-        // Build query based on filters
+        // Build query filters
         let query = {};
         
         // Filter by action type if provided
@@ -8568,7 +8566,7 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                 query.createdAt.$lte = new Date(req.query.endDate);
             }
         }
-        
+
         // Get activities with user information and pagination
         const activities = await UserLog.find(query)
             .populate('user', 'firstName lastName email')
@@ -8576,81 +8574,56 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
             .skip(skip)
             .limit(limit)
             .lean();
-        
+
         // Get total count for pagination
         const totalCount = await UserLog.countDocuments(query);
         const totalPages = Math.ceil(totalCount / limit);
-        
+
         // Format the response with color-coded status
         const formattedActivities = activities.map(activity => {
             let statusColor = '';
-            let statusText = '';
-            
             switch (activity.status) {
                 case 'success':
                     statusColor = 'green';
-                    statusText = 'Success';
                     break;
                 case 'pending':
+                case 'active':
                     statusColor = 'gold';
-                    statusText = 'Pending';
                     break;
                 case 'failed':
                     statusColor = 'red';
-                    statusText = 'Failed';
                     break;
                 default:
                     statusColor = 'gray';
-                    statusText = activity.status;
             }
-            
-            // Map action types to readable names
-            const actionMap = {
-                'signup': 'Sign Up',
-                'login': 'Login',
-                'logout': 'Logout',
-                'profile_update': 'Profile Update',
-                'password_change': 'Password Change',
-                '2fa_enable': '2FA Enabled',
-                '2fa_disable': '2FA Disabled',
-                'deposit': 'Deposit',
-                'withdrawal': 'Withdrawal',
-                'investment': 'Investment',
-                'transfer': 'Transfer',
-                'kyc_submission': 'KYC Submission',
-                'settings_change': 'Settings Change',
-                'api_key_create': 'API Key Created',
-                'api_key_delete': 'API Key Deleted',
-                'device_login': 'Device Login',
-                'password_reset_request': 'Password Reset Request',
-                'password_reset_complete': 'Password Reset Complete',
-                'email_verification': 'Email Verification',
-                'account_deletion': 'Account Deletion',
-                'session_timeout': 'Session Timeout',
-                'failed_login': 'Failed Login',
-                'suspicious_activity': 'Suspicious Activity'
-            };
-            
+
             return {
                 id: activity._id,
                 timestamp: activity.createdAt,
-                user: {
-                    id: activity.user?._id,
-                    name: activity.user ? `${activity.user.firstName} ${activity.user.lastName}` : activity.username,
-                    email: activity.email
+                user: activity.user ? {
+                    id: activity.user._id,
+                    name: `${activity.user.firstName} ${activity.user.lastName}`,
+                    email: activity.user.email
+                } : {
+                    id: null,
+                    name: activity.username || 'Unknown User',
+                    email: activity.email || 'N/A'
                 },
                 action: activity.action,
-                actionName: actionMap[activity.action] || activity.action,
+                description: getActionDescription(activity.action, activity.metadata),
                 ipAddress: activity.ipAddress,
-                device: activity.deviceInfo,
-                location: activity.location,
+                device: activity.deviceInfo ? 
+                    `${activity.deviceInfo.type} - ${activity.deviceInfo.browser} (${activity.deviceInfo.os})` : 
+                    'Unknown',
+                location: activity.location ? 
+                    `${activity.location.city || ''}, ${activity.location.region || ''}, ${activity.location.country || ''}`.replace(/^, |, $/g, '') : 
+                    'Unknown',
                 status: activity.status,
                 statusColor: statusColor,
-                statusText: statusText,
                 metadata: activity.metadata || {}
             };
         });
-        
+
         res.status(200).json({
             status: 'success',
             data: {
@@ -8662,9 +8635,9 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                 hasPrevPage: page > 1
             }
         });
-        
+
     } catch (err) {
-        console.error('Admin activity error:', err);
+        console.error('Admin activity fetch error:', err);
         res.status(500).json({
             status: 'error',
             message: 'Failed to fetch user activities'
@@ -8672,34 +8645,75 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
     }
 });
 
-// Admin Activity Statistics Endpoint
+// Helper function to generate descriptive action messages
+function getActionDescription(action, metadata = {}) {
+    const actionDescriptions = {
+        'signup': 'User signed up for an account',
+        'login': 'User logged into their account',
+        'logout': 'User logged out of their account',
+        'profile_update': 'User updated their profile information',
+        'password_change': 'User changed their password',
+        '2fa_enable': 'User enabled two-factor authentication',
+        '2fa_disable': 'User disabled two-factor authentication',
+        'deposit': `User made a deposit of $${metadata.amount || 'N/A'} via ${metadata.method || 'unknown method'}`,
+        'withdrawal': `User requested a withdrawal of $${metadata.amount || 'N/A'} via ${metadata.method || 'unknown method'}`,
+        'investment': `User created an investment of $${metadata.amount || 'N/A'} in ${metadata.plan || 'unknown plan'}`,
+        'transfer': `User transferred $${metadata.amount || 'N/A'} from ${metadata.from || 'unknown'} to ${metadata.to || 'unknown'}`,
+        'kyc_submission': 'User submitted KYC documents for verification',
+        'settings_change': 'User modified their account settings',
+        'api_key_create': 'User generated a new API key',
+        'api_key_delete': 'User deleted an API key',
+        'device_login': 'User logged in from a new device',
+        'password_reset_request': 'User requested a password reset',
+        'password_reset_complete': 'User successfully reset their password',
+        'email_verification': 'User verified their email address',
+        'account_deletion': 'User initiated account deletion',
+        'session_timeout': 'User session expired due to inactivity',
+        'failed_login': 'Failed login attempt detected',
+        'suspicious_activity': 'Suspicious activity detected'
+    };
+
+    return actionDescriptions[action] || `User performed action: ${action}`;
+}
+
+// Additional endpoint for activity statistics
 app.get('/api/admin/activity/stats', adminProtect, async (req, res) => {
     try {
-        // Get activity counts by type
-        const activityCounts = await UserLog.aggregate([
+        // Get activity counts by type for the last 30 days
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+        const activityStats = await UserLog.aggregate([
+            {
+                $match: {
+                    createdAt: { $gte: thirtyDaysAgo }
+                }
+            },
             {
                 $group: {
                     _id: '$action',
-                    count: { $sum: 1 }
+                    count: { $sum: 1 },
+                    successCount: {
+                        $sum: {
+                            $cond: [{ $eq: ['$status', 'success'] }, 1, 0]
+                        }
+                    },
+                    failedCount: {
+                        $sum: {
+                            $cond: [{ $eq: ['$status', 'failed'] }, 1, 0]
+                        }
+                    }
                 }
             },
-            { $sort: { count: -1 } }
-        ]);
-        
-        // Get status distribution
-        const statusCounts = await UserLog.aggregate([
             {
-                $group: {
-                    _id: '$status',
-                    count: { $sum: 1 }
-                }
+                $sort: { count: -1 }
             }
         ]);
-        
+
         // Get daily activity for the last 7 days
         const sevenDaysAgo = new Date();
         sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-        
+
         const dailyActivity = await UserLog.aggregate([
             {
                 $match: {
@@ -8709,68 +8723,37 @@ app.get('/api/admin/activity/stats', adminProtect, async (req, res) => {
             {
                 $group: {
                     _id: {
-                        $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+                        $dateToString: {
+                            format: '%Y-%m-%d',
+                            date: '$createdAt'
+                        }
                     },
                     count: { $sum: 1 },
-                    success: {
-                        $sum: { $cond: [{ $eq: ["$status", "success"] }, 1, 0] }
-                    },
-                    failed: {
-                        $sum: { $cond: [{ $eq: ["$status", "failed"] }, 1, 0] }
-                    }
+                    uniqueUsers: { $addToSet: '$user' }
                 }
-            },
-            { $sort: { _id: 1 } }
-        ]);
-        
-        // Get top active users
-        const topUsers = await UserLog.aggregate([
-            {
-                $group: {
-                    _id: '$user',
-                    activityCount: { $sum: 1 },
-                    lastActivity: { $max: '$createdAt' }
-                }
-            },
-            { $sort: { activityCount: -1 } },
-            { $limit: 10 },
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: '_id',
-                    foreignField: '_id',
-                    as: 'userInfo'
-                }
-            },
-            {
-                $unwind: '$userInfo'
             },
             {
                 $project: {
-                    userId: '$_id',
-                    firstName: '$userInfo.firstName',
-                    lastName: '$userInfo.lastName',
-                    email: '$userInfo.email',
-                    activityCount: 1,
-                    lastActivity: 1
+                    date: '$_id',
+                    activityCount: '$count',
+                    uniqueUserCount: { $size: '$uniqueUsers' }
                 }
+            },
+            {
+                $sort: { date: 1 }
             }
         ]);
-        
+
         res.status(200).json({
             status: 'success',
             data: {
-                activityCounts,
-                statusCounts,
+                activityStats,
                 dailyActivity,
-                topUsers,
-                totalActivities: await UserLog.countDocuments(),
-                todayActivities: await UserLog.countDocuments({
-                    createdAt: { $gte: new Date().setHours(0, 0, 0, 0) }
-                })
+                totalActivities: await UserLog.countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
+                uniqueUsers: await UserLog.distinct('user', { createdAt: { $gte: thirtyDaysAgo } }).then(users => users.length)
             }
         });
-        
+
     } catch (err) {
         console.error('Admin activity stats error:', err);
         res.status(500).json({
@@ -8780,7 +8763,7 @@ app.get('/api/admin/activity/stats', adminProtect, async (req, res) => {
     }
 });
 
-// Admin Search Activities Endpoint
+// Endpoint to search activities
 app.get('/api/admin/activity/search', adminProtect, async (req, res) => {
     try {
         const { query, page = 1, limit = 10 } = req.query;
@@ -8791,10 +8774,10 @@ app.get('/api/admin/activity/search', adminProtect, async (req, res) => {
                 message: 'Search query is required'
             });
         }
-        
+
         const skip = (page - 1) * limit;
-        
-        // Search across multiple fields
+
+        // Search in multiple fields
         const searchQuery = {
             $or: [
                 { 'username': { $regex: query, $options: 'i' } },
@@ -8804,39 +8787,34 @@ app.get('/api/admin/activity/search', adminProtect, async (req, res) => {
                 { 'metadata': { $regex: query, $options: 'i' } }
             ]
         };
-        
+
         const activities = await UserLog.find(searchQuery)
             .populate('user', 'firstName lastName email')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
             .lean();
-        
+
         const totalCount = await UserLog.countDocuments(searchQuery);
-        const totalPages = Math.ceil(totalCount / limit);
-        
+
         res.status(200).json({
             status: 'success',
             data: {
                 activities,
                 totalCount,
-                totalPages,
-                currentPage: parseInt(page)
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalCount / limit)
             }
         });
-        
+
     } catch (err) {
-        console.error('Admin activity search error:', err);
+        console.error('Activity search error:', err);
         res.status(500).json({
             status: 'error',
             message: 'Failed to search activities'
         });
     }
 });
-
-
-
-
 
 
 
@@ -8970,6 +8948,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
