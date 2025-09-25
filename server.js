@@ -8538,258 +8538,301 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-
-
-
-// Admin Activity Endpoint - FIXES THE 404 ERROR
+// Admin Recent Activities Endpoint
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-
-    // Get activities from both UserLog and SystemLog
-    const [userActivities, systemActivities] = await Promise.all([
-      UserLog.find()
-        .populate('user', 'firstName lastName email')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      
-      SystemLog.find()
-        .populate('performedBy', 'name email')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean()
-    ]);
-
-    // Combine and sort all activities by date
-    const allActivities = [...userActivities, ...systemActivities]
-      .sort((a, b) => new Date(b.createdAt || b.timestamp) - new Date(a.createdAt || a.timestamp))
-      .slice(0, limit);
-
-    // Format activities for frontend
-    const formattedActivities = allActivities.map(activity => {
-      const isUserLog = activity.user !== undefined;
-      
-      return {
-        _id: activity._id,
-        timestamp: activity.createdAt || activity.timestamp,
-        user: isUserLog 
-          ? `${activity.user?.firstName || ''} ${activity.user?.lastName || ''}`.trim() 
-          : (activity.performedBy?.name || 'System'),
-        email: isUserLog ? activity.user?.email : activity.performedBy?.email,
-        action: activity.action,
-        ipAddress: activity.ipAddress || activity.ip,
-        status: activity.status || 'success',
-        entity: activity.entity || 'User',
-        details: activity.metadata || activity.changes || {}
-      };
-    });
-
-    // Get total counts for pagination
-    const totalUserActivities = await UserLog.countDocuments();
-    const totalSystemActivities = await SystemLog.countDocuments();
-    const totalCount = totalUserActivities + totalSystemActivities;
-    const totalPages = Math.ceil(totalCount / limit);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        activities: formattedActivities,
-        totalCount,
-        totalPages,
-        currentPage: page
-      }
-    });
-
-  } catch (err) {
-    console.error('Admin activity error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch admin activity'
-    });
-  }
-});
-
-// Enhanced Admin Activity with Filters
-app.get('/api/admin/activities', adminProtect, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
-    const { type, action, status, dateFrom, dateTo, userId } = req.query;
-
-    // Build query for UserLog
-    const userLogQuery = {};
-    if (action) userLogQuery.action = action;
-    if (status) userLogQuery.status = status;
-    if (userId) userLogQuery.user = userId;
-    
-    if (dateFrom || dateTo) {
-      userLogQuery.createdAt = {};
-      if (dateFrom) userLogQuery.createdAt.$gte = new Date(dateFrom);
-      if (dateTo) userLogQuery.createdAt.$lte = new Date(dateTo);
-    }
-
-    // Build query for SystemLog
-    const systemLogQuery = {};
-    if (action) systemLogQuery.action = action;
-    if (userId) systemLogQuery.performedBy = userId;
-    
-    if (dateFrom || dateTo) {
-      systemLogQuery.createdAt = {};
-      if (dateFrom) systemLogQuery.createdAt.$gte = new Date(dateFrom);
-      if (dateTo) systemLogQuery.createdAt.$lte = new Date(dateTo);
-    }
-
-    let activities = [];
-    let totalCount = 0;
-
-    if (!type || type === 'all') {
-      // Get both user and system activities
-      const [userActivities, systemActivities] = await Promise.all([
-        UserLog.find(userLogQuery)
-          .populate('user', 'firstName lastName email')
-          .sort({ createdAt: -1 })
-          .skip(skip)
-          .limit(limit)
-          .lean(),
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
         
-        SystemLog.find(systemLogQuery)
-          .populate('performedBy', 'name email')
-          .sort({ createdAt: -1 })
-          .skip(skip)
-          .limit(limit)
-          .lean()
-      ]);
-
-      activities = [...userActivities, ...systemActivities]
-        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-        .slice(0, limit);
-
-      const totalUser = await UserLog.countDocuments(userLogQuery);
-      const totalSystem = await SystemLog.countDocuments(systemLogQuery);
-      totalCount = totalUser + totalSystem;
-
-    } else if (type === 'user') {
-      // Get only user activities
-      activities = await UserLog.find(userLogQuery)
-        .populate('user', 'firstName lastName email')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean();
-
-      totalCount = await UserLog.countDocuments(userLogQuery);
-
-    } else if (type === 'system') {
-      // Get only system activities
-      activities = await SystemLog.find(systemLogQuery)
-        .populate('performedBy', 'name email')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean();
-
-      totalCount = await SystemLog.countDocuments(systemLogQuery);
+        // Build query based on filters
+        let query = {};
+        
+        // Filter by action type if provided
+        if (req.query.action) {
+            query.action = req.query.action;
+        }
+        
+        // Filter by status if provided
+        if (req.query.status) {
+            query.status = req.query.status;
+        }
+        
+        // Filter by date range if provided
+        if (req.query.startDate || req.query.endDate) {
+            query.createdAt = {};
+            if (req.query.startDate) {
+                query.createdAt.$gte = new Date(req.query.startDate);
+            }
+            if (req.query.endDate) {
+                query.createdAt.$lte = new Date(req.query.endDate);
+            }
+        }
+        
+        // Get activities with user information and pagination
+        const activities = await UserLog.find(query)
+            .populate('user', 'firstName lastName email')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+        
+        // Get total count for pagination
+        const totalCount = await UserLog.countDocuments(query);
+        const totalPages = Math.ceil(totalCount / limit);
+        
+        // Format the response with color-coded status
+        const formattedActivities = activities.map(activity => {
+            let statusColor = '';
+            let statusText = '';
+            
+            switch (activity.status) {
+                case 'success':
+                    statusColor = 'green';
+                    statusText = 'Success';
+                    break;
+                case 'pending':
+                    statusColor = 'gold';
+                    statusText = 'Pending';
+                    break;
+                case 'failed':
+                    statusColor = 'red';
+                    statusText = 'Failed';
+                    break;
+                default:
+                    statusColor = 'gray';
+                    statusText = activity.status;
+            }
+            
+            // Map action types to readable names
+            const actionMap = {
+                'signup': 'Sign Up',
+                'login': 'Login',
+                'logout': 'Logout',
+                'profile_update': 'Profile Update',
+                'password_change': 'Password Change',
+                '2fa_enable': '2FA Enabled',
+                '2fa_disable': '2FA Disabled',
+                'deposit': 'Deposit',
+                'withdrawal': 'Withdrawal',
+                'investment': 'Investment',
+                'transfer': 'Transfer',
+                'kyc_submission': 'KYC Submission',
+                'settings_change': 'Settings Change',
+                'api_key_create': 'API Key Created',
+                'api_key_delete': 'API Key Deleted',
+                'device_login': 'Device Login',
+                'password_reset_request': 'Password Reset Request',
+                'password_reset_complete': 'Password Reset Complete',
+                'email_verification': 'Email Verification',
+                'account_deletion': 'Account Deletion',
+                'session_timeout': 'Session Timeout',
+                'failed_login': 'Failed Login',
+                'suspicious_activity': 'Suspicious Activity'
+            };
+            
+            return {
+                id: activity._id,
+                timestamp: activity.createdAt,
+                user: {
+                    id: activity.user?._id,
+                    name: activity.user ? `${activity.user.firstName} ${activity.user.lastName}` : activity.username,
+                    email: activity.email
+                },
+                action: activity.action,
+                actionName: actionMap[activity.action] || activity.action,
+                ipAddress: activity.ipAddress,
+                device: activity.deviceInfo,
+                location: activity.location,
+                status: activity.status,
+                statusColor: statusColor,
+                statusText: statusText,
+                metadata: activity.metadata || {}
+            };
+        });
+        
+        res.status(200).json({
+            status: 'success',
+            data: {
+                activities: formattedActivities,
+                totalCount,
+                totalPages,
+                currentPage: page,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
+            }
+        });
+        
+    } catch (err) {
+        console.error('Admin activity error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch user activities'
+        });
     }
-
-    // Format activities
-    const formattedActivities = activities.map(activity => {
-      const isUserLog = activity.user !== undefined;
-      
-      return {
-        id: activity._id,
-        timestamp: activity.createdAt,
-        user: isUserLog 
-          ? `${activity.user?.firstName || ''} ${activity.user?.lastName || ''}`.trim() 
-          : (activity.performedBy?.name || 'System'),
-        email: isUserLog ? activity.user?.email : activity.performedBy?.email,
-        action: activity.action,
-        ipAddress: activity.ipAddress || activity.ip,
-        device: activity.deviceInfo?.type || activity.device,
-        location: activity.location?.city || 'Unknown',
-        status: activity.status || 'success',
-        entity: activity.entity || 'User',
-        details: activity.metadata || activity.changes || {},
-        type: isUserLog ? 'user' : 'system'
-      };
-    });
-
-    const totalPages = Math.ceil(totalCount / limit);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        activities: formattedActivities,
-        totalCount,
-        totalPages,
-        currentPage: page
-      }
-    });
-
-  } catch (err) {
-    console.error('Admin activities error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch activities'
-    });
-  }
 });
 
-// Admin Dashboard Recent Activity (Simplified for Dashboard)
-app.get('/api/admin/dashboard/activity', adminProtect, async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 10;
-
-    // Get recent activities from both logs
-    const [userActivities, systemActivities] = await Promise.all([
-      UserLog.find()
-        .populate('user', 'firstName lastName email')
-        .sort({ createdAt: -1 })
-        .limit(limit)
-        .lean(),
-      
-      SystemLog.find()
-        .populate('performedBy', 'name email')
-        .sort({ createdAt: -1 })
-        .limit(limit)
-        .lean()
-    ]);
-
-    // Combine and get most recent activities
-    const recentActivities = [...userActivities, ...systemActivities]
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-      .slice(0, limit)
-      .map(activity => ({
-        id: activity._id,
-        time: new Date(activity.createdAt).toLocaleTimeString(),
-        user: activity.user 
-          ? `${activity.user.firstName} ${activity.user.lastName}`
-          : (activity.performedBy?.name || 'System'),
-        action: activity.action,
-        ipAddress: activity.ipAddress || activity.ip,
-        status: activity.status || 'success'
-      }));
-
-    res.status(200).json({
-      status: 'success',
-      data: recentActivities
-    });
-
-  } catch (err) {
-    console.error('Dashboard activity error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch dashboard activity'
-    });
-  }
+// Admin Activity Statistics Endpoint
+app.get('/api/admin/activity/stats', adminProtect, async (req, res) => {
+    try {
+        // Get activity counts by type
+        const activityCounts = await UserLog.aggregate([
+            {
+                $group: {
+                    _id: '$action',
+                    count: { $sum: 1 }
+                }
+            },
+            { $sort: { count: -1 } }
+        ]);
+        
+        // Get status distribution
+        const statusCounts = await UserLog.aggregate([
+            {
+                $group: {
+                    _id: '$status',
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+        
+        // Get daily activity for the last 7 days
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        
+        const dailyActivity = await UserLog.aggregate([
+            {
+                $match: {
+                    createdAt: { $gte: sevenDaysAgo }
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+                    },
+                    count: { $sum: 1 },
+                    success: {
+                        $sum: { $cond: [{ $eq: ["$status", "success"] }, 1, 0] }
+                    },
+                    failed: {
+                        $sum: { $cond: [{ $eq: ["$status", "failed"] }, 1, 0] }
+                    }
+                }
+            },
+            { $sort: { _id: 1 } }
+        ]);
+        
+        // Get top active users
+        const topUsers = await UserLog.aggregate([
+            {
+                $group: {
+                    _id: '$user',
+                    activityCount: { $sum: 1 },
+                    lastActivity: { $max: '$createdAt' }
+                }
+            },
+            { $sort: { activityCount: -1 } },
+            { $limit: 10 },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: '_id',
+                    foreignField: '_id',
+                    as: 'userInfo'
+                }
+            },
+            {
+                $unwind: '$userInfo'
+            },
+            {
+                $project: {
+                    userId: '$_id',
+                    firstName: '$userInfo.firstName',
+                    lastName: '$userInfo.lastName',
+                    email: '$userInfo.email',
+                    activityCount: 1,
+                    lastActivity: 1
+                }
+            }
+        ]);
+        
+        res.status(200).json({
+            status: 'success',
+            data: {
+                activityCounts,
+                statusCounts,
+                dailyActivity,
+                topUsers,
+                totalActivities: await UserLog.countDocuments(),
+                todayActivities: await UserLog.countDocuments({
+                    createdAt: { $gte: new Date().setHours(0, 0, 0, 0) }
+                })
+            }
+        });
+        
+    } catch (err) {
+        console.error('Admin activity stats error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch activity statistics'
+        });
+    }
 });
 
-
+// Admin Search Activities Endpoint
+app.get('/api/admin/activity/search', adminProtect, async (req, res) => {
+    try {
+        const { query, page = 1, limit = 10 } = req.query;
+        
+        if (!query) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'Search query is required'
+            });
+        }
+        
+        const skip = (page - 1) * limit;
+        
+        // Search across multiple fields
+        const searchQuery = {
+            $or: [
+                { 'username': { $regex: query, $options: 'i' } },
+                { 'email': { $regex: query, $options: 'i' } },
+                { 'action': { $regex: query, $options: 'i' } },
+                { 'ipAddress': { $regex: query, $options: 'i' } },
+                { 'metadata': { $regex: query, $options: 'i' } }
+            ]
+        };
+        
+        const activities = await UserLog.find(searchQuery)
+            .populate('user', 'firstName lastName email')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+        
+        const totalCount = await UserLog.countDocuments(searchQuery);
+        const totalPages = Math.ceil(totalCount / limit);
+        
+        res.status(200).json({
+            status: 'success',
+            data: {
+                activities,
+                totalCount,
+                totalPages,
+                currentPage: parseInt(page)
+            }
+        });
+        
+    } catch (err) {
+        console.error('Admin activity search error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to search activities'
+        });
+    }
+});
 
 
 
@@ -8927,6 +8970,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
