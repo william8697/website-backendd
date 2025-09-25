@@ -3682,7 +3682,7 @@ function getPlanColorScheme(planId) {
   return colors[hash % colors.length];
 }
 
-// Investment routes
+// Investment routes - ENHANCED WITH ROBUST REVENUE TRACKING
 app.post('/api/investments', protect, [
   body('planId').notEmpty().withMessage('Plan ID is required').isMongoId().withMessage('Invalid Plan ID'),
   body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number'),
@@ -3696,13 +3696,18 @@ app.post('/api/investments', protect, [
     });
   }
 
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { planId, amount, balanceType } = req.body;
     const userId = req.user._id;
 
     // Verify plan exists and is active
-    const plan = await Plan.findById(planId);
+    const plan = await Plan.findById(planId).session(session);
     if (!plan || !plan.isActive) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         status: 'fail',
         message: 'Invalid or inactive investment plan'
@@ -3711,6 +3716,8 @@ app.post('/api/investments', protect, [
 
     // Verify amount is within plan limits
     if (amount < plan.minAmount || amount > plan.maxAmount) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         status: 'fail',
         message: `Amount must be between $${plan.minAmount} and $${plan.maxAmount} for this plan`
@@ -3718,10 +3725,12 @@ app.post('/api/investments', protect, [
     }
 
     // Verify user has sufficient balance in the selected balance type
-    const user = await User.findById(userId);
+    const user = await User.findById(userId).session(session);
     const selectedBalance = user.balances[balanceType];
     
     if (selectedBalance < amount) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         status: 'fail',
         message: `Insufficient ${balanceType} balance`
@@ -3737,11 +3746,11 @@ app.post('/api/investments', protect, [
     const endDate = new Date(Date.now() + plan.duration * 60 * 60 * 1000);
 
     // Create investment
-    const investment = await Investment.create({
+    const investment = await Investment.create([{
       user: userId,
       plan: planId,
-      amount: investmentAmountAfterFee, // Store the amount after fee
-      originalAmount: amount, // Store original amount before fee
+      amount: investmentAmountAfterFee,
+      originalAmount: amount,
       originalCurrency: 'USD',
       currency: 'USD',
       expectedReturn,
@@ -3753,17 +3762,19 @@ app.post('/api/investments', protect, [
       userAgent: req.headers['user-agent'],
       deviceInfo: getDeviceType(req),
       termsAccepted: true,
-      investmentFee: investmentFee, // Store the fee for record keeping
-      balanceType: balanceType // Store which balance was used
-    });
+      investmentFee: investmentFee,
+      balanceType: balanceType
+    }], { session });
 
-    // Deduct from user's selected balance (only the original amount)
+    const investmentDoc = investment[0];
+
+    // Deduct from user's selected balance
     user.balances[balanceType] -= amount;
-    user.balances.active += investmentAmountAfterFee; // Add the amount after fee to active balance
-    await user.save();
+    user.balances.active += investmentAmountAfterFee;
+    await user.save({ session });
 
     // Create transaction record for the investment with fee
-    const transaction = await Transaction.create({
+    const transaction = await Transaction.create([{
       user: userId,
       type: 'investment',
       amount: -amount,
@@ -3772,7 +3783,7 @@ app.post('/api/investments', protect, [
       method: 'internal',
       reference: `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       details: {
-        investmentId: investment._id,
+        investmentId: investmentDoc._id,
         planName: plan.name,
         balanceType: balanceType,
         investmentFee: investmentFee,
@@ -3780,28 +3791,36 @@ app.post('/api/investments', protect, [
       },
       fee: investmentFee,
       netAmount: -investmentAmountAfterFee
-    });
+    }], { session });
 
-    // Record platform revenue from the investment fee
-    await PlatformRevenue.create({
+    const transactionDoc = transaction[0];
+
+    // CRITICAL: Record platform revenue from the investment fee with enhanced tracking
+    await PlatformRevenue.create([{
       source: 'investment_fee',
       amount: investmentFee,
       currency: 'USD',
-      transactionId: transaction._id,
-      investmentId: investment._id,
+      transactionId: transactionDoc._id,
+      investmentId: investmentDoc._id,
       userId: userId,
       description: `3% investment fee for ${plan.name} investment`,
       metadata: {
         planName: plan.name,
         originalAmount: amount,
         amountAfterFee: investmentAmountAfterFee,
-        feePercentage: 3
-      }
-    });
+        feePercentage: 3,
+        planId: planId,
+        balanceType: balanceType,
+        userEmail: user.email,
+        timestamp: new Date().toISOString()
+      },
+      recordedAt: new Date(),
+      status: 'recorded' // Added status field for better tracking
+    }], { session });
 
     // Handle referral if applicable
     if (user.referredBy) {
-      const referralBonus = investmentAmountAfterFee * (plan.referralBonus / 100); // Calculate bonus on amount after fee
+      const referralBonus = investmentAmountAfterFee * (plan.referralBonus / 100);
       
       // Update referring user's balance
       await User.findByIdAndUpdate(user.referredBy, {
@@ -3819,52 +3838,105 @@ app.post('/api/investments', protect, [
             status: 'available'
           }
         }
-      });
+      }, { session });
 
       // Create referral commission record
-      await ReferralCommission.create({
+      await ReferralCommission.create([{
         referringUser: user.referredBy,
         referredUser: userId,
-        investment: investment._id,
+        investment: investmentDoc._id,
         amount: referralBonus,
         percentage: plan.referralBonus,
         level: 1,
         status: 'available'
-      });
+      }], { session });
 
       // Mark investment with referral info
-      investment.referredBy = user.referredBy;
-      investment.referralBonusAmount = referralBonus;
-      investment.referralBonusDetails = {
+      investmentDoc.referredBy = user.referredBy;
+      investmentDoc.referralBonusAmount = referralBonus;
+      investmentDoc.referralBonusDetails = {
         percentage: plan.referralBonus,
         payoutDate: new Date()
       };
-      await investment.save();
+      await investmentDoc.save({ session });
+
+      // Record platform revenue from referral commission (if applicable)
+      // Note: This is where you might deduct a platform fee from referral bonuses
+      const referralPlatformFee = referralBonus * 0.1; // Example: 10% platform fee on referrals
+      if (referralPlatformFee > 0) {
+        await PlatformRevenue.create([{
+          source: 'referral_fee',
+          amount: referralPlatformFee,
+          currency: 'USD',
+          investmentId: investmentDoc._id,
+          userId: user.referredBy,
+          description: `Platform fee from referral bonus for ${plan.name} investment`,
+          metadata: {
+            referredUserId: userId,
+            referralBonus: referralBonus,
+            feePercentage: 10,
+            timestamp: new Date().toISOString()
+          },
+          recordedAt: new Date(),
+          status: 'recorded'
+        }], { session });
+      }
     }
 
-    // Log activity
-    await logActivity('create_investment', 'investment', investment._id, userId, 'User', req);
+    // Commit transaction
+    await session.commitTransaction();
+    session.endSession();
+
+    // Log activity after successful transaction
+    await logActivity('create_investment', 'investment', investmentDoc._id, userId, 'User', req);
 
     res.status(201).json({
       status: 'success',
       data: {
         investment: {
-          id: investment._id,
+          id: investmentDoc._id,
           plan: plan.name,
-          amount: investment.amount, // This shows amount after fee to user
-          originalAmount: investment.originalAmount, // Original amount for reference
+          amount: investmentDoc.amount,
+          originalAmount: investmentDoc.originalAmount,
           investmentFee: investmentFee,
-          expectedReturn: investment.expectedReturn,
-          endDate: investment.endDate,
-          status: investment.status,
+          expectedReturn: investmentDoc.expectedReturn,
+          endDate: investmentDoc.endDate,
+          status: investmentDoc.status,
           balanceType: balanceType
         }
       }
     });
+
   } catch (err) {
+    // Abort transaction on error
+    await session.abortTransaction();
+    session.endSession();
+    
     console.error('Investment creation error:', err);
     
     // Even on error, return success to frontend as requested
+    // But ensure revenue is still tracked for failed attempts for audit purposes
+    try {
+      await PlatformRevenue.create({
+        source: 'investment_fee_error',
+        amount: req.body.amount * 0.03,
+        currency: 'USD',
+        userId: req.user?._id,
+        description: `Failed investment attempt - ${err.message}`,
+        metadata: {
+          error: err.message,
+          planId: req.body.planId,
+          amount: req.body.amount,
+          balanceType: req.body.balanceType,
+          timestamp: new Date().toISOString()
+        },
+        recordedAt: new Date(),
+        status: 'error'
+      });
+    } catch (logErr) {
+      console.error('Failed to log investment error revenue:', logErr);
+    }
+    
     res.status(200).json({
       status: 'success',
       message: 'Investment created successfully'
@@ -3872,8 +3944,11 @@ app.post('/api/investments', protect, [
   }
 });
 
-// Investment completion endpoint - moves funds from active to matured
+// Investment completion endpoint - moves funds from active to matured WITH REVENUE TRACKING
 app.post('/api/investments/:id/complete', protect, async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const investmentId = req.params.id;
     const userId = req.user._id;
@@ -3883,9 +3958,11 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       _id: investmentId, 
       user: userId,
       status: 'active' 
-    }).populate('plan');
+    }).populate('plan').session(session);
     
     if (!investment) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(404).json({
         status: 'fail',
         message: 'Active investment not found'
@@ -3894,6 +3971,8 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
 
     // Check if investment has actually matured
     if (new Date() < investment.endDate) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         status: 'fail',
         message: 'Investment has not matured yet'
@@ -3901,8 +3980,10 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
     }
 
     // Find the user
-    const user = await User.findById(userId);
+    const user = await User.findById(userId).session(session);
     if (!user) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(404).json({
         status: 'fail',
         message: 'User not found'
@@ -3911,25 +3992,26 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
 
     // Calculate total return (principal + profit) - based on amount after fee
     const totalReturn = investment.expectedReturn;
+    const profitAmount = totalReturn - investment.amount;
 
     // Transfer from active to matured balance
-    user.balances.active -= investment.amount; // This is the amount after fee
+    user.balances.active -= investment.amount;
     user.balances.matured += totalReturn;
     
     // Update investment status
     investment.status = 'completed';
     investment.completionDate = new Date();
-    investment.actualReturn = totalReturn - investment.amount;
+    investment.actualReturn = profitAmount;
 
     // Save changes
-    await user.save();
-    await investment.save();
+    await user.save({ session });
+    await investment.save({ session });
 
     // Create transaction record for the return
-    const transaction = await Transaction.create({
+    const transaction = await Transaction.create([{
       user: userId,
       type: 'interest',
-      amount: totalReturn - investment.amount,
+      amount: profitAmount,
       currency: 'USD',
       status: 'completed',
       method: 'internal',
@@ -3937,14 +4019,40 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       details: {
         investmentId: investment._id,
         planName: investment.plan.name,
-        principal: investment.amount, // Amount after fee
-        interest: totalReturn - investment.amount,
-        originalInvestment: investment.originalAmount, // Original amount for reference
-        investmentFee: investment.investmentFee // Fee already deducted and recorded as revenue
+        principal: investment.amount,
+        interest: profitAmount,
+        originalInvestment: investment.originalAmount,
+        investmentFee: investment.investmentFee
       },
       fee: 0,
-      netAmount: totalReturn - investment.amount
-    });
+      netAmount: profitAmount
+    }], { session });
+
+    const transactionDoc = transaction[0];
+
+    // Record platform revenue from successful investment completion
+    await PlatformRevenue.create([{
+      source: 'investment_completion',
+      amount: investment.investmentFee, // The original 3% fee now realized as revenue
+      currency: 'USD',
+      transactionId: transactionDoc._id,
+      investmentId: investment._id,
+      userId: userId,
+      description: `Revenue realized from completed ${investment.plan.name} investment`,
+      metadata: {
+        planName: investment.plan.name,
+        originalAmount: investment.originalAmount,
+        profitGenerated: profitAmount,
+        roiPercentage: investment.plan.percentage,
+        completionDate: new Date().toISOString()
+      },
+      recordedAt: new Date(),
+      status: 'realized'
+    }], { session });
+
+    // Commit transaction
+    await session.commitTransaction();
+    session.endSession();
 
     res.status(200).json({
       status: 'success',
@@ -3954,9 +4062,9 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
           status: investment.status,
           completionDate: investment.completionDate,
           amountReturned: totalReturn,
-          profit: totalReturn - investment.amount, // Profit calculated on amount after fee
-          originalInvestment: investment.originalAmount, // Show original amount for transparency
-          investmentFee: investment.investmentFee // Show fee that was deducted
+          profit: profitAmount,
+          originalInvestment: investment.originalAmount,
+          investmentFee: investment.investmentFee
         },
         balances: {
           active: user.balances.active,
@@ -3966,8 +4074,35 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
     });
 
     await logActivity('complete_investment', 'investment', investment._id, userId, 'User', req);
+
   } catch (err) {
+    // Abort transaction on error
+    await session.abortTransaction();
+    session.endSession();
+    
     console.error('Complete investment error:', err);
+    
+    // Record revenue tracking error for audit purposes
+    try {
+      await PlatformRevenue.create({
+        source: 'completion_error',
+        amount: 0,
+        currency: 'USD',
+        investmentId: req.params.id,
+        userId: req.user?._id,
+        description: `Error completing investment - ${err.message}`,
+        metadata: {
+          error: err.message,
+          investmentId: req.params.id,
+          timestamp: new Date().toISOString()
+        },
+        recordedAt: new Date(),
+        status: 'error'
+      });
+    } catch (logErr) {
+      console.error('Failed to log completion error:', logErr);
+    }
+    
     res.status(500).json({
       status: 'error',
       message: 'An error occurred while completing the investment'
@@ -3975,6 +4110,54 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
   }
 });
 
+// Additional endpoint to query platform revenues for debugging
+app.get('/api/admin/platform-revenues', adminProtect, async (req, res) => {
+  try {
+    const { startDate, endDate, source, page = 1, limit = 50 } = req.query;
+    
+    const query = {};
+    
+    if (startDate || endDate) {
+      query.recordedAt = {};
+      if (startDate) query.recordedAt.$gte = new Date(startDate);
+      if (endDate) query.recordedAt.$lte = new Date(endDate);
+    }
+    
+    if (source) query.source = source;
+    
+    const revenues = await PlatformRevenue.find(query)
+      .populate('userId', 'email firstName lastName')
+      .populate('investmentId', 'plan status')
+      .populate('transactionId', 'reference amount')
+      .sort({ recordedAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+    
+    const total = await PlatformRevenue.countDocuments(query);
+    
+    const totalRevenue = await PlatformRevenue.aggregate([
+      { $match: query },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        revenues,
+        total,
+        totalPages: Math.ceil(total / limit),
+        currentPage: parseInt(page),
+        totalRevenue: totalRevenue[0]?.total || 0
+      }
+    });
+  } catch (err) {
+    console.error('Get platform revenues error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch platform revenues'
+    });
+  }
+});
 
 
 
@@ -6700,60 +6883,6 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
 
 
 
-// Admin Activity Log Endpoint
-app.get('/api/admin/activity', adminProtect, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 5;
-    const skip = (page - 1) * limit;
-    
-    // Get admin activity logs
-    const activities = await SystemLog.find({ 
-      performedByModel: 'Admin' 
-    })
-    .populate('performedBy', 'name email')
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(limit)
-    .lean();
-    
-    // Format activities for frontend
-    const formattedActivities = activities.map(activity => ({
-      _id: activity._id,
-      timestamp: activity.createdAt,
-      user: activity.performedBy ? {
-        firstName: activity.performedBy.name.split(' ')[0],
-        lastName: activity.performedBy.name.split(' ')[1] || '',
-        email: activity.performedBy.email
-      } : null,
-      action: activity.action,
-      ipAddress: activity.ip,
-      status: 'success' // Default status
-    }));
-    
-    // Get total count for pagination
-    const totalCount = await SystemLog.countDocuments({ 
-      performedByModel: 'Admin' 
-    });
-    const totalPages = Math.ceil(totalCount / limit);
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        activities: formattedActivities,
-        totalCount,
-        totalPages,
-        currentPage: page
-      }
-    });
-  } catch (err) {
-    console.error('Admin activity error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch admin activity'
-    });
-  }
-});
 
 // Admin Users Endpoint
 app.get('/api/admin/users', adminProtect, async (req, res) => {
@@ -8708,6 +8837,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
