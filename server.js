@@ -8537,83 +8537,45 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Admin Recent Activity Endpoint - REWRITTEN FROM SCRATCH
+// Admin Recent Activity Endpoint - Simplified for Frontend Requirements
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 5; // Default to 5 as frontend expects
         const skip = (page - 1) * limit;
-
-        // Fetch activities from multiple schemas to get comprehensive user activity
-        const activities = await UserLog.aggregate([
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: 'user',
-                    foreignField: '_id',
-                    as: 'userData'
-                }
-            },
-            {
-                $unwind: {
-                    path: '$userData',
-                    preserveNullAndEmptyArrays: true
-                }
-            },
-            {
-                $project: {
-                    _id: 1,
-                    timestamp: '$createdAt',
-                    action: 1,
-                    ipAddress: 1,
-                    status: 1,
-                    user: {
-                        $cond: {
-                            if: { $ne: ['$userData', null] },
-                            then: {
-                                firstName: '$userData.firstName',
-                                lastName: '$userData.lastName',
-                                email: '$userData.email'
-                            },
-                            else: {
-                                firstName: 'System',
-                                lastName: '',
-                                email: 'system@bithash.com'
-                            }
-                        }
-                    }
-                }
-            },
-            {
-                $sort: { timestamp: -1 }
-            },
-            {
-                $skip: skip
-            },
-            {
-                $limit: limit
-            }
-        ]);
+        
+        // Get activities with user information and pagination
+        const activities = await UserLog.find({})
+            .populate('user', 'firstName lastName email')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
 
         // Get total count for pagination
         const totalCount = await UserLog.countDocuments();
         const totalPages = Math.ceil(totalCount / limit);
 
-        // Format response exactly as frontend expects
+        // Format the response EXACTLY as frontend expects
+        const formattedActivities = activities.map(activity => {
+            return {
+                _id: activity._id,
+                timestamp: activity.createdAt,
+                user: activity.user ? {
+                    firstName: activity.user.firstName,
+                    lastName: activity.user.lastName
+                } : null,
+                action: activity.action,
+                ipAddress: activity.ipAddress,
+                status: activity.status
+            };
+        });
+
         res.status(200).json({
             status: 'success',
             data: {
-                activities: activities.map(activity => ({
-                    _id: activity._id,
-                    timestamp: activity.timestamp,
-                    user: activity.user,
-                    action: activity.action,
-                    ipAddress: activity.ipAddress,
-                    status: activity.status
-                })),
-                totalCount,
-                totalPages,
-                currentPage: page
+                activities: formattedActivities,
+                totalPages: totalPages
             }
         });
 
@@ -8621,11 +8583,10 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
         console.error('Admin activity fetch error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to fetch recent activity'
+            message: 'Failed to fetch user activities'
         });
     }
 });
-
 
 
 
@@ -8757,3 +8718,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
