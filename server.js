@@ -8536,103 +8536,84 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Admin User Activities Endpoint
+
+// Admin Recent Activity Endpoint - REWRITTEN FROM SCRATCH
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
+        const limit = parseInt(req.query.limit) || 5; // Default to 5 as frontend expects
         const skip = (page - 1) * limit;
-        
-        // Build query filters
-        let query = {};
-        
-        // Filter by action type if provided
-        if (req.query.action) {
-            query.action = req.query.action;
-        }
-        
-        // Filter by status if provided
-        if (req.query.status) {
-            query.status = req.query.status;
-        }
-        
-        // Filter by date range if provided
-        if (req.query.startDate || req.query.endDate) {
-            query.createdAt = {};
-            if (req.query.startDate) {
-                query.createdAt.$gte = new Date(req.query.startDate);
-            }
-            if (req.query.endDate) {
-                query.createdAt.$lte = new Date(req.query.endDate);
-            }
-        }
 
-        // Get activities with user information and pagination
-        const activities = await UserLog.find(query)
-            .populate('user', 'firstName lastName email')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .lean();
+        // Fetch activities from multiple schemas to get comprehensive user activity
+        const activities = await UserLog.aggregate([
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'user',
+                    foreignField: '_id',
+                    as: 'userData'
+                }
+            },
+            {
+                $unwind: {
+                    path: '$userData',
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    timestamp: '$createdAt',
+                    action: 1,
+                    ipAddress: 1,
+                    status: 1,
+                    user: {
+                        $cond: {
+                            if: { $ne: ['$userData', null] },
+                            then: {
+                                firstName: '$userData.firstName',
+                                lastName: '$userData.lastName',
+                                email: '$userData.email'
+                            },
+                            else: {
+                                firstName: 'System',
+                                lastName: '',
+                                email: 'system@bithash.com'
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                $sort: { timestamp: -1 }
+            },
+            {
+                $skip: skip
+            },
+            {
+                $limit: limit
+            }
+        ]);
 
         // Get total count for pagination
-        const totalCount = await UserLog.countDocuments(query);
+        const totalCount = await UserLog.countDocuments();
         const totalPages = Math.ceil(totalCount / limit);
 
-        // Format the response with color-coded status
-        const formattedActivities = activities.map(activity => {
-            let statusColor = '';
-            switch (activity.status) {
-                case 'success':
-                    statusColor = 'green';
-                    break;
-                case 'pending':
-                case 'active':
-                    statusColor = 'gold';
-                    break;
-                case 'failed':
-                    statusColor = 'red';
-                    break;
-                default:
-                    statusColor = 'gray';
-            }
-
-            return {
-                id: activity._id,
-                timestamp: activity.createdAt,
-                user: activity.user ? {
-                    id: activity.user._id,
-                    name: `${activity.user.firstName} ${activity.user.lastName}`,
-                    email: activity.user.email
-                } : {
-                    id: null,
-                    name: activity.username || 'Unknown User',
-                    email: activity.email || 'N/A'
-                },
-                action: activity.action,
-                description: getActionDescription(activity.action, activity.metadata),
-                ipAddress: activity.ipAddress,
-                device: activity.deviceInfo ? 
-                    `${activity.deviceInfo.type} - ${activity.deviceInfo.browser} (${activity.deviceInfo.os})` : 
-                    'Unknown',
-                location: activity.location ? 
-                    `${activity.location.city || ''}, ${activity.location.region || ''}, ${activity.location.country || ''}`.replace(/^, |, $/g, '') : 
-                    'Unknown',
-                status: activity.status,
-                statusColor: statusColor,
-                metadata: activity.metadata || {}
-            };
-        });
-
+        // Format response exactly as frontend expects
         res.status(200).json({
             status: 'success',
             data: {
-                activities: formattedActivities,
+                activities: activities.map(activity => ({
+                    _id: activity._id,
+                    timestamp: activity.timestamp,
+                    user: activity.user,
+                    action: activity.action,
+                    ipAddress: activity.ipAddress,
+                    status: activity.status
+                })),
                 totalCount,
                 totalPages,
-                currentPage: page,
-                hasNextPage: page < totalPages,
-                hasPrevPage: page > 1
+                currentPage: page
             }
         });
 
@@ -8640,182 +8621,10 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
         console.error('Admin activity fetch error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to fetch user activities'
+            message: 'Failed to fetch recent activity'
         });
     }
 });
-
-// Helper function to generate descriptive action messages
-function getActionDescription(action, metadata = {}) {
-    const actionDescriptions = {
-        'signup': 'User signed up for an account',
-        'login': 'User logged into their account',
-        'logout': 'User logged out of their account',
-        'profile_update': 'User updated their profile information',
-        'password_change': 'User changed their password',
-        '2fa_enable': 'User enabled two-factor authentication',
-        '2fa_disable': 'User disabled two-factor authentication',
-        'deposit': `User made a deposit of $${metadata.amount || 'N/A'} via ${metadata.method || 'unknown method'}`,
-        'withdrawal': `User requested a withdrawal of $${metadata.amount || 'N/A'} via ${metadata.method || 'unknown method'}`,
-        'investment': `User created an investment of $${metadata.amount || 'N/A'} in ${metadata.plan || 'unknown plan'}`,
-        'transfer': `User transferred $${metadata.amount || 'N/A'} from ${metadata.from || 'unknown'} to ${metadata.to || 'unknown'}`,
-        'kyc_submission': 'User submitted KYC documents for verification',
-        'settings_change': 'User modified their account settings',
-        'api_key_create': 'User generated a new API key',
-        'api_key_delete': 'User deleted an API key',
-        'device_login': 'User logged in from a new device',
-        'password_reset_request': 'User requested a password reset',
-        'password_reset_complete': 'User successfully reset their password',
-        'email_verification': 'User verified their email address',
-        'account_deletion': 'User initiated account deletion',
-        'session_timeout': 'User session expired due to inactivity',
-        'failed_login': 'Failed login attempt detected',
-        'suspicious_activity': 'Suspicious activity detected'
-    };
-
-    return actionDescriptions[action] || `User performed action: ${action}`;
-}
-
-// Additional endpoint for activity statistics
-app.get('/api/admin/activity/stats', adminProtect, async (req, res) => {
-    try {
-        // Get activity counts by type for the last 30 days
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-        const activityStats = await UserLog.aggregate([
-            {
-                $match: {
-                    createdAt: { $gte: thirtyDaysAgo }
-                }
-            },
-            {
-                $group: {
-                    _id: '$action',
-                    count: { $sum: 1 },
-                    successCount: {
-                        $sum: {
-                            $cond: [{ $eq: ['$status', 'success'] }, 1, 0]
-                        }
-                    },
-                    failedCount: {
-                        $sum: {
-                            $cond: [{ $eq: ['$status', 'failed'] }, 1, 0]
-                        }
-                    }
-                }
-            },
-            {
-                $sort: { count: -1 }
-            }
-        ]);
-
-        // Get daily activity for the last 7 days
-        const sevenDaysAgo = new Date();
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-        const dailyActivity = await UserLog.aggregate([
-            {
-                $match: {
-                    createdAt: { $gte: sevenDaysAgo }
-                }
-            },
-            {
-                $group: {
-                    _id: {
-                        $dateToString: {
-                            format: '%Y-%m-%d',
-                            date: '$createdAt'
-                        }
-                    },
-                    count: { $sum: 1 },
-                    uniqueUsers: { $addToSet: '$user' }
-                }
-            },
-            {
-                $project: {
-                    date: '$_id',
-                    activityCount: '$count',
-                    uniqueUserCount: { $size: '$uniqueUsers' }
-                }
-            },
-            {
-                $sort: { date: 1 }
-            }
-        ]);
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                activityStats,
-                dailyActivity,
-                totalActivities: await UserLog.countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
-                uniqueUsers: await UserLog.distinct('user', { createdAt: { $gte: thirtyDaysAgo } }).then(users => users.length)
-            }
-        });
-
-    } catch (err) {
-        console.error('Admin activity stats error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch activity statistics'
-        });
-    }
-});
-
-// Endpoint to search activities
-app.get('/api/admin/activity/search', adminProtect, async (req, res) => {
-    try {
-        const { query, page = 1, limit = 10 } = req.query;
-        
-        if (!query) {
-            return res.status(400).json({
-                status: 'fail',
-                message: 'Search query is required'
-            });
-        }
-
-        const skip = (page - 1) * limit;
-
-        // Search in multiple fields
-        const searchQuery = {
-            $or: [
-                { 'username': { $regex: query, $options: 'i' } },
-                { 'email': { $regex: query, $options: 'i' } },
-                { 'action': { $regex: query, $options: 'i' } },
-                { 'ipAddress': { $regex: query, $options: 'i' } },
-                { 'metadata': { $regex: query, $options: 'i' } }
-            ]
-        };
-
-        const activities = await UserLog.find(searchQuery)
-            .populate('user', 'firstName lastName email')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
-
-        const totalCount = await UserLog.countDocuments(searchQuery);
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                activities,
-                totalCount,
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(totalCount / limit)
-            }
-        });
-
-    } catch (err) {
-        console.error('Activity search error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to search activities'
-        });
-    }
-});
-
 
 
 
@@ -8948,13 +8757,3 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
-
