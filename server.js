@@ -8535,13 +8535,11 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-
-
-// Admin Recent Activity Endpoint - Simplified for Frontend Requirements
+// Admin Recent Activity Endpoint - Fixed to match frontend expectations
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 5; // Default to 5 as frontend expects
+        const limit = parseInt(req.query.limit) || 5;
         const skip = (page - 1) * limit;
         
         // Get activities with user information and pagination
@@ -8556,10 +8554,9 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
         const totalCount = await UserLog.countDocuments();
         const totalPages = Math.ceil(totalCount / limit);
 
-        // Format the response EXACTLY as frontend expects
+        // Format the response EXACTLY as frontend expects - FIXED FIELD NAMES
         const formattedActivities = activities.map(activity => {
             return {
-                _id: activity._id,
                 timestamp: activity.createdAt,
                 user: activity.user ? {
                     firstName: activity.user.firstName,
@@ -8574,7 +8571,7 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
         res.status(200).json({
             status: 'success',
             data: {
-                activities: formattedActivities,
+                activities: formattedActivities, // Frontend expects 'activities' not 'activity'
                 totalPages: totalPages
             }
         });
@@ -8587,7 +8584,6 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
         });
     }
 });
-
 
 
 
@@ -8718,4 +8714,5 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
