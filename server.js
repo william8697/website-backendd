@@ -8535,57 +8535,6 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Admin Recent Activity Endpoint - Fixed to match frontend expectations
-app.get('/api/admin/activity', adminProtect, async (req, res) => {
-    try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 5;
-        const skip = (page - 1) * limit;
-        
-        // Get activities with user information and pagination
-        const activities = await UserLog.find({})
-            .populate('user', 'firstName lastName email')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .lean();
-
-        // Get total count for pagination
-        const totalCount = await UserLog.countDocuments();
-        const totalPages = Math.ceil(totalCount / limit);
-
-        // Format the response EXACTLY as frontend expects - FIXED FIELD NAMES
-        const formattedActivities = activities.map(activity => {
-            return {
-                timestamp: activity.createdAt,
-                user: activity.user ? {
-                    firstName: activity.user.firstName,
-                    lastName: activity.user.lastName
-                } : null,
-                action: activity.action,
-                ipAddress: activity.ipAddress,
-                status: activity.status
-            };
-        });
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                activities: formattedActivities, // Frontend expects 'activities' not 'activity'
-                totalPages: totalPages
-            }
-        });
-
-    } catch (err) {
-        console.error('Admin activity fetch error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch user activities'
-        });
-    }
-});
-
-
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -8714,5 +8663,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
