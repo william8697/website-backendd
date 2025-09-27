@@ -8537,23 +8537,36 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Admin Activity Endpoint - FIX FOR 404 ERROR
+
+
+
+
+// Admin Activity Endpoint - FIXED VERSION
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, action, status, userId } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Get activities from UserLog with proper user population
-    const userLogs = await UserLog.find({})
+    // Build query based on filters
+    const query = {};
+    if (action) query.action = action;
+    if (status) query.status = status;
+    if (userId) query.user = userId;
+
+    // Get total count for pagination
+    const totalActivities = await UserLog.countDocuments(query);
+
+    // Get user logs with proper population and sorting
+    const userLogs = await UserLog.find(query)
       .populate('user', 'firstName lastName email')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
       .lean();
 
-    // Map to EXACT format frontend expects
+    // Transform activities to match frontend expectations
     const activities = userLogs.map(log => {
-      // Get real user name
+      // Safely handle user data to avoid "undefined undefined" errors
       let userName = 'Unknown User';
       let userEmail = 'Unknown Email';
       
@@ -8563,73 +8576,197 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
       } else if (log.username) {
         userName = log.username;
       }
-
-      // Fix empty names
-      if (!userName || userName === ' ' || userName === 'undefined undefined') {
+      
+      // If we still have an empty name after all checks
+      if (!userName || userName === ' ') {
         userName = 'Unknown User';
       }
 
       return {
-        id: log._id.toString(),
+        id: log._id,
         timestamp: log.createdAt,
         user: {
-          id: log.user?._id?.toString() || 'unknown',
-          name: userName, // REAL user name
+          id: log.user?._id || log.user || 'unknown',
+          name: userName,
           email: userEmail
         },
         action: log.action,
-        description: `${userName} ${getActionText(log.action)}`,
-        ipAddress: log.ipAddress || 'Unknown', // REAL IP address
+        description: getActivityDescription(log.action, log.metadata),
+        ipAddress: log.ipAddress || 'Unknown',
         status: log.status || 'success',
-        type: 'user_activity'
+        type: 'user_activity',
+        metadata: log.metadata || {}
       };
     });
 
-    // Get total count
-    const totalActivities = await UserLog.countDocuments();
-    const totalPages = Math.ceil(totalActivities / parseInt(limit));
-
-    // Return EXACT structure
     res.status(200).json({
       status: 'success',
       data: {
         activities: activities,
         pagination: {
           currentPage: parseInt(page),
-          totalPages: totalPages,
+          totalPages: Math.ceil(totalActivities / parseInt(limit)),
           totalItems: totalActivities,
           itemsPerPage: parseInt(limit),
-          hasNextPage: parseInt(page) < totalPages,
+          hasNextPage: parseInt(page) < Math.ceil(totalActivities / parseInt(limit)),
           hasPrevPage: parseInt(page) > 1
         }
       }
     });
 
   } catch (err) {
-    console.error('Admin activity error:', err);
+    console.error('Admin activity fetch error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch activities'
+      message: 'An error occurred while fetching activity data'
     });
   }
 });
 
-// Simple helper for action descriptions
-function getActionText(action) {
-  const actions = {
-    'signup': 'signed up',
-    'login': 'logged in', 
-    'logout': 'logged out',
-    'deposit': 'made a deposit',
-    'withdrawal': 'requested withdrawal',
-    'investment': 'created investment',
-    'investment_matured': 'investment matured',
-    'kyc_submission': 'submitted KYC',
-    'profile_update': 'updated profile'
+// Helper function to generate proper activity descriptions
+function getActivityDescription(action, metadata) {
+  const actionMap = {
+    // Authentication actions
+    'signup': 'Signed up for a new account',
+    'login': 'Logged into account',
+    'logout': 'Logged out of account',
+    'password_change': 'Changed password',
+    'password_reset_request': 'Requested password reset',
+    'password_reset_complete': 'Completed password reset',
+    
+    // Financial actions
+    'deposit': 'Made a deposit',
+    'withdrawal': 'Requested a withdrawal',
+    'investment': 'Created an investment',
+    'transfer': 'Transferred funds',
+    'interest_payout': 'Received interest payout',
+    
+    // Account actions
+    'profile_update': 'Updated profile information',
+    'kyc_submission': 'Submitted KYC documents',
+    'settings_change': 'Changed account settings',
+    
+    // Security actions
+    '2fa_enable': 'Enabled two-factor authentication',
+    '2fa_disable': 'Disabled two-factor authentication',
+    'api_key_create': 'Created API key',
+    'api_key_delete': 'Deleted API key',
+    'device_login': 'Logged in from new device',
+    
+    // System actions
+    'session_timeout': 'Session timed out',
+    'failed_login': 'Failed login attempt',
+    'suspicious_activity': 'Suspicious activity detected',
+    
+    // Investment actions
+    'investment_created': 'Created new investment',
+    'investment_matured': 'Investment matured',
+    'investment_completed': 'Investment completed',
+    'investment_cancelled': 'Investment cancelled'
   };
-  
-  return actions[action] || `performed ${action}`;
+
+  let description = actionMap[action] || `Performed ${action.replace(/_/g, ' ')}`;
+
+  // Add context from metadata if available
+  if (metadata) {
+    if (metadata.amount) {
+      description += ` of $${metadata.amount}`;
+    }
+    if (metadata.method) {
+      description += ` via ${metadata.method}`;
+    }
+    if (metadata.deviceType) {
+      description += ` from ${metadata.deviceType}`;
+    }
+    if (metadata.location) {
+      description += ` in ${metadata.location}`;
+    }
+    if (metadata.planName) {
+      description += ` for ${metadata.planName}`;
+    }
+  }
+
+  return description;
 }
+
+// Enhanced function to log user activities (add this to your existing logUserActivity function)
+const logUserActivity = async (user, action, status = 'success', metadata = {}, ipAddress = 'Unknown', userAgent = 'Unknown') => {
+  try {
+    // Get device and location info
+    let location = 'Unknown';
+    try {
+      if (ipAddress && ipAddress !== 'Unknown' && !ipAddress.startsWith('::ffff:127.0.0.1') && ipAddress !== '127.0.0.1') {
+        const response = await axios.get(`https://ipinfo.io/${ipAddress}?token=${process.env.IPINFO_TOKEN || 'b56ce6e91d732d'}`);
+        location = `${response.data.city}, ${response.data.region}, ${response.data.country}`;
+      }
+    } catch (err) {
+      console.error('Error getting location info:', err);
+    }
+
+    // Get device type from user agent
+    const getDeviceType = (userAgent) => {
+      if (!userAgent) return 'desktop';
+      if (/mobile/i.test(userAgent)) return 'mobile';
+      if (/tablet/i.test(userAgent)) return 'tablet';
+      if (/iPad|Android|Touch/i.test(userAgent)) return 'tablet';
+      return 'desktop';
+    };
+
+    // Create the activity log
+    await UserLog.create({
+      user: user._id,
+      username: user.email,
+      email: user.email,
+      action: action,
+      ipAddress: ipAddress,
+      userAgent: userAgent,
+      deviceInfo: {
+        type: getDeviceType(userAgent),
+        os: getOSFromUserAgent(userAgent),
+        browser: getBrowserFromUserAgent(userAgent)
+      },
+      location: {
+        country: location.split(', ')[2] || 'Unknown',
+        region: location.split(', ')[1] || 'Unknown',
+        city: location.split(', ')[0] || 'Unknown',
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      },
+      status: status,
+      metadata: metadata
+    });
+
+  } catch (err) {
+    console.error('Error logging user activity:', err);
+  }
+};
+
+// Helper functions for user agent parsing
+const getOSFromUserAgent = (userAgent) => {
+  if (!userAgent) return 'Unknown';
+  if (/windows/i.test(userAgent)) return 'Windows';
+  if (/macintosh|mac os x/i.test(userAgent)) return 'MacOS';
+  if (/linux/i.test(userAgent)) return 'Linux';
+  if (/android/i.test(userAgent)) return 'Android';
+  if (/iphone|ipad|ipod/i.test(userAgent)) return 'iOS';
+  return 'Unknown';
+};
+
+const getBrowserFromUserAgent = (userAgent) => {
+  if (!userAgent) return 'Unknown';
+  if (/edg/i.test(userAgent)) return 'Edge';
+  if (/chrome/i.test(userAgent)) return 'Chrome';
+  if (/safari/i.test(userAgent)) return 'Safari';
+  if (/firefox/i.test(userAgent)) return 'Firefox';
+  if (/opera|opr/i.test(userAgent)) return 'Opera';
+  return 'Unknown';
+};
+
+
+
+
+
+
+
 
 
 
@@ -8768,6 +8905,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
