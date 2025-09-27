@@ -8539,64 +8539,253 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-
-// Admin Activity Endpoint - FIXED VERSION
+// Admin Activity Endpoint - COMPLETE FIX
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
   try {
     const { page = 1, limit = 10 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Get total count for pagination
-    const totalActivities = await UserLog.countDocuments();
-    const totalPages = Math.ceil(totalActivities / parseInt(limit));
-
-    // Get user logs with proper population and error handling
-    const userLogs = await UserLog.find({})
-      .populate('user', 'firstName lastName email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
-
-    // Transform activities with proper error handling for undefined users
-    const activities = userLogs.map(log => {
-      // Safely handle user data to avoid "undefined undefined" errors
-      let userName = 'Unknown User';
-      let userEmail = 'Unknown Email';
+    // Get activities from multiple sources and combine them
+    const [
+      userLogs,
+      systemLogs,
+      transactions,
+      investments,
+      kycSubmissions,
+      loginHistory
+    ] = await Promise.all([
+      // UserLog activities
+      UserLog.find({})
+        .populate('user', 'firstName lastName email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
       
-      if (log.user) {
-        userName = `${log.user.firstName || ''} ${log.user.lastName || ''}`.trim();
-        userEmail = log.user.email || 'Unknown Email';
-      } else if (log.username) {
-        userName = log.username;
-      }
+      // SystemLog activities
+      SystemLog.find({})
+        .populate('performedBy', 'firstName lastName email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
       
-      // If we still have an empty name after all checks
-      if (!userName || userName === ' ') {
-        userName = 'Unknown User';
-      }
+      // Transaction activities
+      Transaction.find({})
+        .populate('user', 'firstName lastName email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      
+      // Investment activities
+      Investment.find({})
+        .populate('user', 'firstName lastName email')
+        .populate('plan', 'name')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      
+      // KYC activities
+      KYC.find({})
+        .populate('user', 'firstName lastName email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      
+      // Login history from users
+      User.aggregate([
+        { $unwind: '$loginHistory' },
+        { $sort: { 'loginHistory.timestamp': -1 } },
+        { $skip: skip },
+        { $limit: parseInt(limit) },
+        { $project: {
+            'firstName': 1,
+            'lastName': 1,
+            'email': 1,
+            'ip': '$loginHistory.ip',
+            'device': '$loginHistory.device',
+            'location': '$loginHistory.location',
+            'timestamp': '$loginHistory.timestamp',
+            'action': 'login'
+          }
+        }
+      ])
+    ]);
 
-      return {
-        id: log._id,
-        timestamp: log.createdAt,
+    // Transform all activities into the exact format frontend expects
+    const allActivities = [];
+
+    // Process UserLog activities
+    userLogs.forEach(log => {
+      const userName = log.user ? 
+        `${log.user.firstName || ''} ${log.user.lastName || ''}`.trim() : 
+        (log.username || 'Unknown User');
+      
+      const userEmail = log.user?.email || log.email || 'Unknown Email';
+
+      allActivities.push({
+        id: log._id?.toString() || `userlog-${Date.now()}`,
+        timestamp: log.createdAt || new Date(),
         user: {
-          id: log.user?._id || log.user || 'unknown',
+          id: log.user?._id?.toString() || 'unknown',
           name: userName,
           email: userEmail
         },
-        action: log.action,
-        description: getActionDescription(log.action, log.metadata),
+        action: log.action || 'unknown_action',
+        description: getActivityDescription(log),
         ipAddress: log.ipAddress || 'Unknown',
         status: log.status || 'success',
-        type: 'user_activity',
-        metadata: log.metadata || {}
-      };
+        type: 'user_activity'
+      });
     });
 
+    // Process SystemLog activities
+    systemLogs.forEach(log => {
+      let userName = 'System';
+      let userEmail = 'system@bithash.com';
+      
+      if (log.performedBy) {
+        userName = `${log.performedBy.firstName || ''} ${log.performedBy.lastName || ''}`.trim();
+        userEmail = log.performedBy.email || 'Unknown Email';
+      }
+
+      allActivities.push({
+        id: log._id?.toString() || `systemlog-${Date.now()}`,
+        timestamp: log.createdAt || new Date(),
+        user: {
+          id: log.performedBy?._id?.toString() || 'system',
+          name: userName,
+          email: userEmail
+        },
+        action: log.action || 'system_action',
+        description: getSystemActivityDescription(log),
+        ipAddress: log.ip || 'Unknown',
+        status: 'success',
+        type: 'system_activity'
+      });
+    });
+
+    // Process Transaction activities
+    transactions.forEach(transaction => {
+      const userName = transaction.user ? 
+        `${transaction.user.firstName || ''} ${transaction.user.lastName || ''}`.trim() : 
+        'Unknown User';
+      
+      const userEmail = transaction.user?.email || 'Unknown Email';
+
+      allActivities.push({
+        id: transaction._id?.toString() || `transaction-${Date.now()}`,
+        timestamp: transaction.createdAt || new Date(),
+        user: {
+          id: transaction.user?._id?.toString() || 'unknown',
+          name: userName,
+          email: userEmail
+        },
+        action: transaction.type || 'transaction',
+        description: getTransactionDescription(transaction),
+        ipAddress: 'Unknown', // Transactions don't store IP
+        status: transaction.status || 'completed',
+        type: 'financial_activity'
+      });
+    });
+
+    // Process Investment activities
+    investments.forEach(investment => {
+      const userName = investment.user ? 
+        `${investment.user.firstName || ''} ${investment.user.lastName || ''}`.trim() : 
+        'Unknown User';
+      
+      const userEmail = investment.user?.email || 'Unknown Email';
+
+      allActivities.push({
+        id: investment._id?.toString() || `investment-${Date.now()}`,
+        timestamp: investment.createdAt || new Date(),
+        user: {
+          id: investment.user?._id?.toString() || 'unknown',
+          name: userName,
+          email: userEmail
+        },
+        action: 'investment_created',
+        description: getInvestmentDescription(investment),
+        ipAddress: investment.ipAddress || 'Unknown',
+        status: investment.status || 'active',
+        type: 'investment_activity'
+      });
+    });
+
+    // Process KYC activities
+    kycSubmissions.forEach(kyc => {
+      const userName = kyc.user ? 
+        `${kyc.user.firstName || ''} ${kyc.user.lastName || ''}`.trim() : 
+        'Unknown User';
+      
+      const userEmail = kyc.user?.email || 'Unknown Email';
+
+      allActivities.push({
+        id: kyc._id?.toString() || `kyc-${Date.now()}`,
+        timestamp: kyc.createdAt || new Date(),
+        user: {
+          id: kyc.user?._id?.toString() || 'unknown',
+          name: userName,
+          email: userEmail
+        },
+        action: 'kyc_submission',
+        description: getKYCDescription(kyc),
+        ipAddress: 'Unknown',
+        status: kyc.status || 'pending',
+        type: 'verification_activity'
+      });
+    });
+
+    // Process Login History
+    loginHistory.forEach(login => {
+      allActivities.push({
+        id: `login-${Date.now()}-${Math.random()}`,
+        timestamp: login.timestamp || new Date(),
+        user: {
+          id: login._id?.toString() || 'unknown',
+          name: `${login.firstName || ''} ${login.lastName || ''}`.trim() || 'Unknown User',
+          email: login.email || 'Unknown Email'
+        },
+        action: 'login',
+        description: `User logged in from ${login.device || 'unknown device'} in ${login.location || 'unknown location'}`,
+        ipAddress: login.ip || 'Unknown',
+        status: 'success',
+        type: 'authentication_activity'
+      });
+    });
+
+    // Sort all activities by timestamp (newest first)
+    allActivities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    // Apply pagination to the combined results
+    const paginatedActivities = allActivities.slice(skip, skip + parseInt(limit));
+
+    // Get total count from all sources
+    const totalCounts = await Promise.all([
+      UserLog.countDocuments(),
+      SystemLog.countDocuments(),
+      Transaction.countDocuments(),
+      Investment.countDocuments(),
+      KYC.countDocuments(),
+      User.aggregate([{ $unwind: '$loginHistory' }, { $count: 'count' }])
+    ]);
+
+    const totalActivities = totalCounts.reduce((sum, count) => {
+      if (Array.isArray(count)) return sum + (count[0]?.count || 0);
+      return sum + (count || 0);
+    }, 0);
+
+    const totalPages = Math.ceil(totalActivities / parseInt(limit));
+
+    // Return the EXACT structure that frontend expects
     res.status(200).json({
       status: 'success',
       data: {
-        activities: activities,
+        activities: paginatedActivities,
         pagination: {
           currentPage: parseInt(page),
           totalPages: totalPages,
@@ -8617,61 +8806,56 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
   }
 });
 
-// Enhanced action description helper
-function getActionDescription(action, metadata) {
+// Helper functions to generate proper descriptions
+function getActivityDescription(log) {
   const actionMap = {
-    // Authentication actions
     'signup': 'Signed up for a new account',
     'login': 'Logged into account',
     'logout': 'Logged out of account',
     'password_change': 'Changed password',
     'password_reset_request': 'Requested password reset',
     'password_reset_complete': 'Completed password reset',
-    
-    // Financial actions
-    'deposit': 'Made a deposit',
-    'withdrawal': 'Requested a withdrawal',
-    'investment': 'Created an investment',
+    'deposit': `Made a deposit of $${log.metadata?.amount || 'unknown amount'}`,
+    'withdrawal': `Requested withdrawal of $${log.metadata?.amount || 'unknown amount'}`,
+    'investment': `Created investment of $${log.metadata?.amount || 'unknown amount'}`,
     'transfer': 'Transferred funds',
-    
-    // Account actions
     'profile_update': 'Updated profile information',
     'kyc_submission': 'Submitted KYC documents',
     'settings_change': 'Changed account settings',
-    
-    // Security actions
     '2fa_enable': 'Enabled two-factor authentication',
     '2fa_disable': 'Disabled two-factor authentication',
     'api_key_create': 'Created API key',
     'api_key_delete': 'Deleted API key',
-    'device_login': 'Logged in from new device',
-    
-    // System actions
+    'device_login': `Logged in from ${log.deviceInfo?.type || 'new device'}`,
     'session_timeout': 'Session timed out',
     'failed_login': 'Failed login attempt',
     'suspicious_activity': 'Suspicious activity detected'
   };
 
-  let description = actionMap[action] || `Performed ${action.replace('_', ' ')}`;
-
-  // Add context from metadata if available
-  if (metadata) {
-    if (metadata.amount) {
-      description += ` of $${metadata.amount}`;
-    }
-    if (metadata.method) {
-      description += ` via ${metadata.method}`;
-    }
-    if (metadata.deviceType) {
-      description += ` from ${metadata.deviceType}`;
-    }
-    if (metadata.location) {
-      description += ` in ${metadata.location}`;
-    }
-  }
-
-  return description;
+  return actionMap[log.action] || `Performed ${log.action?.replace('_', ' ') || 'unknown action'}`;
 }
+
+function getSystemActivityDescription(log) {
+  return `${log.action || 'System action'} on ${log.entity || 'unknown entity'}`;
+}
+
+function getTransactionDescription(transaction) {
+  return `${transaction.type?.charAt(0).toUpperCase() + transaction.type?.slice(1) || 'Transaction'} of $${transaction.amount?.toFixed(2) || '0.00'} ${transaction.currency || 'USD'}`;
+}
+
+function getInvestmentDescription(investment) {
+  return `Created ${investment.plan?.name || 'investment'} with $${investment.amount?.toFixed(2) || '0.00'} for ${investment.duration || 'unknown'} days`;
+}
+
+function getKYCDescription(kyc) {
+  return `Submitted ${kyc.type || 'KYC'} documents with status: ${kyc.status || 'pending'}`;
+}
+
+
+
+
+
+
 
 
 
@@ -8806,6 +8990,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
