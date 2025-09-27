@@ -8538,64 +8538,192 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-
-// Admin Activity Endpoint - FIXED & ENHANCED VERSION
+// ADMIN ACTIVITY ENDPOINT - COMPLETE & ACCURATE VERSION
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
         const { page = 1, limit = 10 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        // Get total count for pagination
-        const totalActivities = await UserLog.countDocuments();
-        const totalPages = Math.ceil(totalActivities / parseInt(limit));
-
-        // Get user logs with proper population and error handling
-        const userLogs = await UserLog.find({})
-            .populate('user', 'firstName lastName email')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
-
-        // Transform activities with proper error handling for undefined users
-        const activities = userLogs.map(log => {
-            // Safely handle user data to avoid "undefined undefined" errors
-            let userName = 'Unknown User';
-            let userEmail = 'Unknown Email';
+        // Get activities from ALL relevant collections
+        const [
+            userLogs,
+            transactions,
+            investments,
+            kycSubmissions,
+            systemLogs
+        ] = await Promise.all([
+            // UserLog activities
+            UserLog.find({})
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean(),
             
-            if (log.user) {
-                userName = `${log.user.firstName || ''} ${log.user.lastName || ''}`.trim();
-                userEmail = log.user.email || 'Unknown Email';
-            } else if (log.username) {
-                userName = log.username;
-            }
+            // Transaction activities
+            Transaction.find({})
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean(),
             
-            // If we still have an empty name after all checks
-            if (!userName || userName === ' ') {
-                userName = 'Unknown User';
-            }
+            // Investment activities  
+            Investment.find({})
+                .populate('user', 'firstName lastName email')
+                .populate('plan', 'name')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean(),
+            
+            // KYC activities
+            KYC.find({})
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean(),
+            
+            // SystemLog activities
+            SystemLog.find({ performedByModel: 'User' })
+                .populate('performedBy', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean()
+        ]);
 
-            return {
+        // Transform ALL activities into the EXACT frontend format
+        const allActivities = [];
+
+        // 1. Process UserLog activities
+        userLogs.forEach(log => {
+            const activity = {
                 id: log._id,
                 timestamp: log.createdAt,
                 user: {
-                    id: log.user?._id || log.user || 'unknown',
-                    name: userName,
-                    email: userEmail
+                    id: log.user?._id || 'unknown',
+                    name: log.user ? `${log.user.firstName || ''} ${log.user.lastName || ''}`.trim() : (log.username || 'Unknown User'),
+                    email: log.user?.email || log.email || 'Unknown Email'
                 },
                 action: log.action,
-                description: getActionDescription(log.action, log.metadata),
+                description: getUserLogDescription(log),
                 ipAddress: log.ipAddress || 'Unknown',
                 status: log.status || 'success',
                 type: 'user_activity',
                 metadata: log.metadata || {}
             };
+            allActivities.push(activity);
         });
 
+        // 2. Process Transaction activities
+        transactions.forEach(transaction => {
+            const activity = {
+                id: transaction._id,
+                timestamp: transaction.createdAt,
+                user: {
+                    id: transaction.user?._id || 'unknown',
+                    name: transaction.user ? `${transaction.user.firstName || ''} ${transaction.user.lastName || ''}`.trim() : 'Unknown User',
+                    email: transaction.user?.email || 'Unknown Email'
+                },
+                action: transaction.type,
+                description: getTransactionDescription(transaction),
+                ipAddress: 'N/A',
+                status: transaction.status,
+                type: 'financial_activity',
+                metadata: {
+                    amount: transaction.amount,
+                    currency: transaction.currency,
+                    method: transaction.method,
+                    reference: transaction.reference
+                }
+            };
+            allActivities.push(activity);
+        });
+
+        // 3. Process Investment activities
+        investments.forEach(investment => {
+            const activity = {
+                id: investment._id,
+                timestamp: investment.createdAt,
+                user: {
+                    id: investment.user?._id || 'unknown',
+                    name: investment.user ? `${investment.user.firstName || ''} ${investment.user.lastName || ''}`.trim() : 'Unknown User',
+                    email: investment.user?.email || 'Unknown Email'
+                },
+                action: `investment_${investment.status}`,
+                description: getInvestmentDescription(investment),
+                ipAddress: investment.ipAddress || 'N/A',
+                status: investment.status === 'active' ? 'success' : investment.status,
+                type: 'investment_activity',
+                metadata: {
+                    amount: investment.amount,
+                    plan: investment.plan?.name || 'Unknown Plan',
+                    expectedReturn: investment.expectedReturn,
+                    status: investment.status
+                }
+            };
+            allActivities.push(activity);
+        });
+
+        // 4. Process KYC activities
+        kycSubmissions.forEach(kyc => {
+            const activity = {
+                id: kyc._id,
+                timestamp: kyc.createdAt,
+                user: {
+                    id: kyc.user?._id || 'unknown',
+                    name: kyc.user ? `${kyc.user.firstName || ''} ${kyc.user.lastName || ''}`.trim() : 'Unknown User',
+                    email: kyc.user?.email || 'Unknown Email'
+                },
+                action: `kyc_${kyc.type}_submission`,
+                description: getKYCDescription(kyc),
+                ipAddress: 'N/A',
+                status: kyc.status,
+                type: 'verification_activity',
+                metadata: {
+                    type: kyc.type,
+                    status: kyc.status,
+                    reviewedBy: kyc.reviewedBy
+                }
+            };
+            allActivities.push(activity);
+        });
+
+        // 5. Process SystemLog activities
+        systemLogs.forEach(log => {
+            const activity = {
+                id: log._id,
+                timestamp: log.createdAt,
+                user: {
+                    id: log.performedBy?._id || 'unknown',
+                    name: log.performedBy ? `${log.performedBy.firstName || ''} ${log.performedBy.lastName || ''}`.trim() : 'System',
+                    email: log.performedBy?.email || 'system@bithash.com'
+                },
+                action: log.action,
+                description: getSystemLogDescription(log),
+                ipAddress: log.ip || 'N/A',
+                status: 'success',
+                type: 'system_activity',
+                metadata: log.changes || {}
+            };
+            allActivities.push(activity);
+        });
+
+        // Sort all activities by timestamp (newest first)
+        allActivities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+        // Apply pagination to the combined results
+        const paginatedActivities = allActivities.slice(skip, skip + parseInt(limit));
+        const totalActivities = allActivities.length;
+        const totalPages = Math.ceil(totalActivities / parseInt(limit));
+
+        // Return EXACT format expected by frontend
         res.status(200).json({
             status: 'success',
             data: {
-                activities: activities,
+                activities: paginatedActivities,
                 pagination: {
                     currentPage: parseInt(page),
                     totalPages: totalPages,
@@ -8616,81 +8744,67 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
     }
 });
 
-// Enhanced action description helper
-function getActionDescription(action, metadata) {
+// Description helper functions
+function getUserLogDescription(log) {
     const actionMap = {
-        // Authentication actions
         'signup': 'Signed up for a new account',
         'login': 'Logged into account',
         'logout': 'Logged out of account',
         'password_change': 'Changed password',
-        'password_reset_request': 'Requested password reset',
-        'password_reset_complete': 'Completed password reset',
-        
-        // Financial actions
         'deposit': 'Made a deposit',
         'withdrawal': 'Requested a withdrawal',
         'investment': 'Created an investment',
-        'investment_matured': 'Investment matured',
-        'transfer': 'Transferred funds',
-        
-        // Account actions
-        'profile_update': 'Updated profile information',
-        'kyc_submission': 'Submitted KYC documents',
-        'settings_change': 'Changed account settings',
-        
-        // Security actions
-        '2fa_enable': 'Enabled two-factor authentication',
-        '2fa_disable': 'Disabled two-factor authentication',
-        'api_key_create': 'Created API key',
-        'api_key_delete': 'Deleted API key',
-        'device_login': 'Logged in from new device',
-        
-        // System actions
-        'session_timeout': 'Session timed out',
-        'failed_login': 'Failed login attempt',
-        'suspicious_activity': 'Suspicious activity detected',
-        
-        // Investment specific actions
-        'investment_created': 'Created a new investment',
-        'investment_completed': 'Investment completed successfully',
-        'investment_cancelled': 'Investment was cancelled',
-        
-        // Page visit actions
-        'page_visit': 'Visited a page',
-        'dashboard_view': 'Viewed dashboard',
-        'investment_view': 'Viewed investments page',
-        'profile_view': 'Viewed profile page'
+        'profile_update': 'Updated profile',
+        'kyc_submission': 'Submitted KYC documents'
     };
-
-    let description = actionMap[action] || `Performed ${action.replace(/_/g, ' ')}`;
-
-    // Add context from metadata if available
-    if (metadata) {
-        if (metadata.amount) {
-            description += ` of $${metadata.amount}`;
-        }
-        if (metadata.method) {
-            description += ` via ${metadata.method}`;
-        }
-        if (metadata.deviceType) {
-            description += ` from ${metadata.deviceType}`;
-        }
-        if (metadata.location) {
-            description += ` in ${metadata.location}`;
-        }
-        if (metadata.page) {
-            description += ` - ${metadata.page}`;
-        }
-        if (metadata.plan) {
-            description += ` - Plan: ${metadata.plan}`;
-        }
+    
+    let description = actionMap[log.action] || `Performed ${log.action.replace(/_/g, ' ')}`;
+    
+    if (log.metadata?.amount) {
+        description += ` of $${log.metadata.amount}`;
     }
-
+    if (log.metadata?.method) {
+        description += ` via ${log.metadata.method}`;
+    }
+    
     return description;
 }
 
+function getTransactionDescription(transaction) {
+    const typeMap = {
+        'deposit': 'Deposit',
+        'withdrawal': 'Withdrawal', 
+        'investment': 'Investment',
+        'transfer': 'Transfer',
+        'interest': 'Interest earned'
+    };
+    
+    return `${typeMap[transaction.type] || transaction.type} of $${transaction.amount} ${transaction.currency} - ${transaction.status}`;
+}
 
+function getInvestmentDescription(investment) {
+    const statusMap = {
+        'active': 'Started new investment',
+        'completed': 'Investment matured',
+        'cancelled': 'Investment cancelled'
+    };
+    
+    return `${statusMap[investment.status] || `Investment ${investment.status}`} of $${investment.amount} in ${investment.plan?.name || 'Unknown Plan'}`;
+}
+
+function getKYCDescription(kyc) {
+    const typeMap = {
+        'identity': 'Identity verification',
+        'address': 'Address verification', 
+        'facial': 'Facial verification'
+    };
+    
+    return `Submitted ${typeMap[kyc.type] || kyc.type} documents - Status: ${kyc.status}`;
+}
+
+function getSystemLogDescription(log) {
+    return `System activity: ${log.action} on ${log.entity}`;
+}
 
 
 
@@ -8829,6 +8943,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
