@@ -8535,18 +8535,81 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// ADMIN ACTIVITY ENDPOINT - FIXED USER MAPPING
+
+
+// DEBUG ENDPOINT - Check what's actually in the database
+app.get('/api/admin/debug-activities', adminProtect, async (req, res) => {
+    try {
+        console.log('=== DEBUG: Checking database contents ===');
+        
+        // Check UserLog collection
+        const userLogs = await UserLog.find({}).populate('user').limit(5).lean();
+        console.log('UserLogs found:', userLogs.length);
+        userLogs.forEach((log, index) => {
+            console.log(`Log ${index}:`, {
+                id: log._id,
+                action: log.action,
+                user: log.user,
+                username: log.username,
+                email: log.email,
+                hasUserObject: !!log.user,
+                userFirstName: log.user?.firstName,
+                userLastName: log.user?.lastName
+            });
+        });
+
+        // Check User collection
+        const users = await User.find({}).select('firstName lastName email').limit(5).lean();
+        console.log('Users found:', users.length);
+        users.forEach((user, index) => {
+            console.log(`User ${index}:`, {
+                id: user._id,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                email: user.email
+            });
+        });
+
+        res.json({ 
+            userLogs: userLogs.map(log => ({
+                id: log._id,
+                action: log.action,
+                user: log.user ? {
+                    id: log.user._id,
+                    firstName: log.user.firstName,
+                    lastName: log.user.lastName,
+                    email: log.user.email
+                } : null,
+                username: log.username,
+                email: log.email,
+                createdAt: log.createdAt,
+                ipAddress: log.ipAddress,
+                status: log.status
+            })),
+            users: users
+        });
+
+    } catch (err) {
+        console.error('Debug error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// MAIN ACTIVITY ENDPOINT - 100% ACCURATE VERSION
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
         const { page = 1, limit = 10 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        // Get total count for pagination
-        const totalActivities = await UserLog.countDocuments();
-        const totalPages = Math.ceil(totalActivities / parseInt(limit));
+        console.log('=== FETCHING ACTIVITIES ===');
+        console.log('Page:', page, 'Limit:', limit, 'Skip:', skip);
 
-        // Get user logs with PROPER population
-        const userLogs = await UserLog.find({})
+        // Get total count
+        const totalActivities = await UserLog.countDocuments();
+        console.log('Total activities in DB:', totalActivities);
+
+        // Fetch activities with PROPER population
+        const activities = await UserLog.find({})
             .populate({
                 path: 'user',
                 select: 'firstName lastName email',
@@ -8557,68 +8620,79 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
             .limit(parseInt(limit))
             .lean();
 
-        console.log('Fetched user logs:', userLogs.length); // Debug log
+        console.log('Activities fetched:', activities.length);
 
-        // Transform activities with GUARANTEED user data
-        const activities = userLogs.map(log => {
-            console.log('Processing log:', log._id, 'User:', log.user); // Debug log
-            
-            // SAFELY get user information - 100% ACCURATE
-            let userId = 'unknown';
-            let userName = 'Unknown User';
-            let userEmail = 'Unknown Email';
+        // TRANSFORM DATA - 100% ACCURATE to frontend needs
+        const transformedActivities = activities.map(activity => {
+            console.log('Processing activity:', activity._id);
+            console.log('Raw activity data:', {
+                action: activity.action,
+                user: activity.user,
+                username: activity.username,
+                email: activity.email
+            });
 
-            if (log.user && log.user._id) {
-                userId = log.user._id;
-                userName = `${log.user.firstName || ''} ${log.user.lastName || ''}`.trim();
-                userEmail = log.user.email || 'Unknown Email';
-                
-                // If name is still empty, use username or email
-                if (!userName || userName === ' ') {
-                    userName = log.username || log.user.email || 'Unknown User';
-                }
-            } else if (log.username) {
-                userName = log.username;
-                userEmail = log.email || 'Unknown Email';
-            } else if (log.email) {
-                userName = log.email;
-                userEmail = log.email;
-            }
-
-            // Ensure we never have "undefined undefined"
-            if (userName === 'undefined undefined' || !userName) {
-                userName = 'Unknown User';
-            }
-
-            const activity = {
-                id: log._id.toString(),
-                timestamp: log.createdAt,
-                user: {
-                    id: userId,
-                    name: userName,
-                    email: userEmail
-                },
-                action: log.action,
-                description: getActionDescription(log.action, log.metadata),
-                ipAddress: log.ipAddress || 'Unknown',
-                status: log.status || 'success',
-                type: 'user_activity',
-                metadata: log.metadata || {}
+            // GUARANTEED user data extraction
+            let userData = {
+                id: 'unknown',
+                name: 'Unknown User',
+                email: 'Unknown Email'
             };
 
-            console.log('Processed activity:', activity); // Debug log
-            return activity;
+            // Method 1: Use populated user object
+            if (activity.user && activity.user._id) {
+                userData = {
+                    id: activity.user._id,
+                    name: `${activity.user.firstName || ''} ${activity.user.lastName || ''}`.trim(),
+                    email: activity.user.email || 'Unknown Email'
+                };
+                console.log('Using populated user data:', userData);
+            }
+            // Method 2: Use username/email from activity itself
+            else if (activity.username || activity.email) {
+                userData = {
+                    id: activity.userId || 'unknown',
+                    name: activity.username || activity.email || 'Unknown User',
+                    email: activity.email || 'Unknown Email'
+                };
+                console.log('Using activity user data:', userData);
+            }
+
+            // FINAL validation - prevent "undefined undefined"
+            if (userData.name === 'undefined undefined' || !userData.name || userData.name.includes('undefined')) {
+                userData.name = 'Unknown User';
+            }
+
+            // Create the EXACT structure frontend expects
+            const transformed = {
+                id: activity._id.toString(),
+                timestamp: activity.createdAt,
+                user: userData,
+                action: activity.action,
+                description: getActivityDescription(activity),
+                ipAddress: activity.ipAddress || 'Unknown',
+                status: activity.status || 'success',
+                type: 'user_activity',
+                metadata: activity.metadata || {}
+            };
+
+            console.log('Transformed activity:', transformed);
+            return transformed;
         });
 
-        // Filter out any invalid activities
-        const validActivities = activities.filter(activity => 
+        // Filter out any invalid entries
+        const validActivities = transformedActivities.filter(activity => 
             activity.user.name !== 'undefined undefined' && 
             activity.user.name !== 'Unknown User'
         );
 
-        console.log('Valid activities:', validActivities.length); // Debug log
+        console.log('Valid activities after filtering:', validActivities.length);
 
-        res.status(200).json({
+        // Calculate pagination
+        const totalPages = Math.ceil(totalActivities / parseInt(limit));
+
+        // RETURN EXACT STRUCTURE frontend expects
+        const response = {
             status: 'success',
             data: {
                 activities: validActivities,
@@ -8631,10 +8705,14 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                     hasPrevPage: parseInt(page) > 1
                 }
             }
-        });
+        };
+
+        console.log('Final response structure:', JSON.stringify(response, null, 2));
+
+        res.status(200).json(response);
 
     } catch (err) {
-        console.error('Admin activity fetch error:', err);
+        console.error('Activity endpoint error:', err);
         res.status(500).json({
             status: 'error',
             message: 'An error occurred while fetching activity data'
@@ -8642,163 +8720,96 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
     }
 });
 
-// ENHANCED action description helper
-function getActionDescription(action, metadata) {
-    const actionMap = {
-        // Authentication
+// SIMPLE description helper
+function getActivityDescription(activity) {
+    const descriptions = {
         'signup': 'Signed up for a new account',
         'login': 'Logged into account',
         'logout': 'Logged out of account',
-        'google-login': 'Logged in with Google',
-        
-        // Financial
         'deposit': 'Made a deposit',
         'withdrawal': 'Requested a withdrawal',
         'investment': 'Created an investment',
         'complete_investment': 'Investment completed',
         'interest': 'Received interest payment',
-        'transfer': 'Transferred funds',
-        
-        // Account Management
-        'profile_update': 'Updated profile information',
-        'password_change': 'Changed password',
-        'kyc_submission': 'Submitted KYC documents',
         'view-referrals': 'Viewed referral page',
-        
-        // Security
-        '2fa_enable': 'Enabled two-factor authentication',
-        '2fa_disable': 'Disabled two-factor authentication',
-        
-        // System
-        'session_timeout': 'Session timed out',
-        'failed_login': 'Failed login attempt'
+        'google-login': 'Logged in with Google',
+        'profile_update': 'Updated profile information'
     };
 
-    let description = actionMap[action] || action.split('_').map(word => 
-        word.charAt(0).toUpperCase() + word.slice(1)
-    ).join(' ');
-
-    // Add metadata context
-    if (metadata) {
-        if (metadata.amount) {
-            description += ` of $${metadata.amount}`;
-        }
-        if (metadata.method) {
-            description += ` via ${metadata.method}`;
-        }
-        if (metadata.plan) {
-            description += ` in ${metadata.plan}`;
-        }
-    }
-
-    return description;
+    return descriptions[activity.action] || 
+           activity.action.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 }
 
-// ADDITIONAL ENDPOINT: Get comprehensive activities from ALL sources
-app.get('/api/admin/all-activities', adminProtect, async (req, res) => {
+// FALLBACK ENDPOINT - Direct database query if above doesn't work
+app.get('/api/admin/activities-direct', adminProtect, async (req, res) => {
     try {
         const { page = 1, limit = 10 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        // Get activities from MULTIPLE sources
-        const [userLogs, transactions, investments] = await Promise.all([
-            // UserLog activities
-            UserLog.find({})
-                .populate({
-                    path: 'user',
-                    select: 'firstName lastName email',
-                    model: 'User'
-                })
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean(),
-
-            // Transaction activities
-            Transaction.find({})
-                .populate({
-                    path: 'user',
-                    select: 'firstName lastName email',
-                    model: 'User'
-                })
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean(),
-
-            // Investment activities
-            Investment.find({})
-                .populate({
-                    path: 'user',
-                    select: 'firstName lastName email',
-                    model: 'User'
-                })
-                .populate('plan', 'name')
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean()
+        // Direct aggregation query to ensure data is correct
+        const activities = await UserLog.aggregate([
+            {
+                $lookup: {
+                    from: 'users', // Make sure this matches your actual collection name
+                    localField: 'user',
+                    foreignField: '_id',
+                    as: 'userData'
+                }
+            },
+            {
+                $unwind: {
+                    path: '$userData',
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    action: 1,
+                    createdAt: 1,
+                    ipAddress: 1,
+                    status: 1,
+                    metadata: 1,
+                    username: 1,
+                    email: 1,
+                    user: {
+                        id: '$userData._id',
+                        firstName: '$userData.firstName',
+                        lastName: '$userData.lastName',
+                        email: '$userData.email'
+                    }
+                }
+            },
+            { $sort: { createdAt: -1 } },
+            { $skip: skip },
+            { $limit: parseInt(limit) }
         ]);
 
-        // Combine and transform ALL activities
-        const allActivities = [];
+        // Transform to exact frontend format
+        const transformed = activities.map(activity => ({
+            id: activity._id.toString(),
+            timestamp: activity.createdAt,
+            user: {
+                id: activity.user?.id || 'unknown',
+                name: activity.user ? 
+                    `${activity.user.firstName || ''} ${activity.user.lastName || ''}`.trim() : 
+                    (activity.username || activity.email || 'Unknown User'),
+                email: activity.user?.email || activity.email || 'Unknown Email'
+            },
+            action: activity.action,
+            description: getActivityDescription(activity),
+            ipAddress: activity.ipAddress || 'Unknown',
+            status: activity.status || 'success',
+            type: 'user_activity',
+            metadata: activity.metadata || {}
+        }));
 
-        // Process UserLogs
-        userLogs.forEach(log => {
-            const userInfo = getUserInfo(log.user, log.username, log.email);
-            allActivities.push({
-                id: `log_${log._id}`,
-                timestamp: log.createdAt,
-                user: userInfo,
-                action: log.action,
-                description: getActionDescription(log.action, log.metadata),
-                ipAddress: log.ipAddress || 'Unknown',
-                status: log.status || 'success',
-                type: 'user_activity'
-            });
-        });
+        const total = await UserLog.countDocuments();
 
-        // Process Transactions
-        transactions.forEach(tx => {
-            const userInfo = getUserInfo(tx.user);
-            allActivities.push({
-                id: `tx_${tx._id}`,
-                timestamp: tx.createdAt,
-                user: userInfo,
-                action: tx.type,
-                description: `${tx.type.charAt(0).toUpperCase() + tx.type.slice(1)} of $${tx.amount}`,
-                ipAddress: 'N/A',
-                status: tx.status,
-                type: 'financial_activity'
-            });
-        });
-
-        // Process Investments
-        investments.forEach(inv => {
-            const userInfo = getUserInfo(inv.user);
-            allActivities.push({
-                id: `inv_${inv._id}`,
-                timestamp: inv.createdAt,
-                user: userInfo,
-                action: `investment_${inv.status}`,
-                description: `Investment ${inv.status} - $${inv.amount} in ${inv.plan?.name || 'Unknown Plan'}`,
-                ipAddress: inv.ipAddress || 'N/A',
-                status: inv.status === 'active' ? 'success' : inv.status,
-                type: 'investment_activity'
-            });
-        });
-
-        // Sort by timestamp
-        allActivities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-        // Paginate results
-        const paginated = allActivities.slice(0, parseInt(limit));
-        const total = allActivities.length;
-
-        res.status(200).json({
+        res.json({
             status: 'success',
             data: {
-                activities: paginated,
+                activities: transformed,
                 pagination: {
                     currentPage: parseInt(page),
                     totalPages: Math.ceil(total / parseInt(limit)),
@@ -8811,51 +8822,10 @@ app.get('/api/admin/all-activities', adminProtect, async (req, res) => {
         });
 
     } catch (err) {
-        console.error('All activities fetch error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch activities'
-        });
+        console.error('Direct activities error:', err);
+        res.status(500).json({ error: err.message });
     }
 });
-
-// GUARANTEED user info function
-function getUserInfo(user, username, email) {
-    let userId = 'unknown';
-    let userName = 'Unknown User';
-    let userEmail = 'Unknown Email';
-
-    if (user && user._id) {
-        userId = user._id;
-        userName = `${user.firstName || ''} ${user.lastName || ''}`.trim();
-        userEmail = user.email || email || 'Unknown Email';
-        
-        if (!userName || userName === ' ') {
-            userName = username || user.email || 'Unknown User';
-        }
-    } else if (username) {
-        userName = username;
-        userEmail = email || 'Unknown Email';
-    } else if (email) {
-        userName = email;
-        userEmail = email;
-    }
-
-    // FINAL validation to prevent "undefined undefined"
-    if (userName.includes('undefined') || !userName.trim()) {
-        userName = 'Unknown User';
-    }
-
-    return {
-        id: userId,
-        name: userName,
-        email: userEmail
-    };
-}
-
-
-
-
 
 
 
@@ -8989,6 +8959,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
