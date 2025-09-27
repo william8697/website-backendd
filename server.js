@@ -8537,62 +8537,121 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
+app.post('/api/login', [
+  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
+  body('password').notEmpty().withMessage('Password is required'),
+  body('rememberMe').optional().isBoolean().withMessage('Remember me must be a boolean')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    // Track failed validation
+    await logUserActivity(req, 'login_attempt', 'failed', {
+      error: 'Validation failed',
+      fields: errors.array().map(err => err.param)
+    });
+    
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
 
-// Update the existing logActivity function to also log to UserLog
-const logActivity = async (action, entity, entityId, performedBy, performedByModel, req, changes = {}) => {
-    try {
-        const deviceInfo = await getUserDeviceInfo(req);
-        
-        // Log to SystemLog (existing functionality)
-        await SystemLog.create({
-            action,
-            entity,
-            entityId,
-            performedBy,
-            performedByModel,
-            ip: deviceInfo.ip,
-            device: deviceInfo.device,
-            location: deviceInfo.location,
-            changes
-        });
+  try {
+    const { email, password, rememberMe } = req.body;
 
-        // Also log to UserLog if it's a user activity
-        if (performedByModel === 'User') {
-            const user = await User.findById(performedBy);
-            if (user) {
-                await UserLog.create({
-                    user: performedBy,
-                    username: `${user.firstName} ${user.lastName}`,
-                    email: user.email,
-                    action: action,
-                    ipAddress: deviceInfo.ip,
-                    userAgent: req.headers['user-agent'],
-                    deviceInfo: {
-                        type: getDeviceType(req),
-                        os: getOSFromUserAgent(req.headers['user-agent']),
-                        browser: getBrowserFromUserAgent(req.headers['user-agent'])
-                    },
-                    location: {
-                        country: deviceInfo.location.split(', ')[2] || 'Unknown',
-                        region: deviceInfo.location.split(', ')[1] || 'Unknown',
-                        city: deviceInfo.location.split(', ')[0] || 'Unknown',
-                        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
-                    },
-                    status: 'success',
-                    metadata: { entity, entityId, ...changes }
-                });
-            }
-        }
+    // Track login attempt
+    await logUserActivity(req, 'login_attempt', 'pending', {
+      email,
+      rememberMe: !!rememberMe
+    });
 
-    } catch (err) {
-        console.error('Error logging activity:', err);
+    const user = await User.findOne({ email }).select('+password +twoFactorAuth.secret');
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      // Track failed login
+      await logUserActivity(req, 'login_attempt', 'failed', {
+        error: 'Invalid credentials',
+        email
+      });
+      
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Incorrect email or password'
+      });
     }
-};
 
+    if (user.status !== 'active') {
+      // Track login to suspended account
+      await logUserActivity(req, 'login_attempt', 'failed', {
+        error: 'Account suspended',
+        userId: user._id,
+        status: user.status
+      });
+      
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Your account has been suspended. Please contact support.'
+      });
+    }
 
+    const token = generateJWT(user._id);
 
+    // Update last login
+    user.lastLogin = new Date();
+    const deviceInfo = await getUserDeviceInfo(req);
+    user.loginHistory.push(deviceInfo);
+    await user.save();
 
+    // Track successful login
+    await logUserActivity(req, 'login', 'success', {
+      userId: user._id,
+      rememberMe: !!rememberMe,
+      deviceType: getDeviceType(req),
+      location: deviceInfo.location
+    }, user);
 
+    // Set cookie
+    res.cookie('jwt', token, {
+      expires: rememberMe ? new Date(Date.now() + JWT_COOKIE_EXPIRES * 24 * 60 * 60 * 1000) : undefined,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict'
+    });
+
+    const responseData = {
+      status: 'success',
+      token,
+      data: {
+        user: {
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email
+        }
+      }
+    };
+
+    // Check if 2FA is enabled
+    if (user.twoFactorAuth.enabled) {
+      responseData.twoFactorRequired = true;
+      responseData.message = 'Two-factor authentication required';
+    }
+
+    res.status(200).json(responseData);
+
+  } catch (err) {
+    console.error('Login error:', err);
+    
+    // Track login error
+    await logUserActivity(req, 'login_error', 'failed', {
+      error: err.message
+    });
+
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred during login'
+    });
+  }
+});
 
 
 
@@ -8729,6 +8788,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
