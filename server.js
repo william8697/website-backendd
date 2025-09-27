@@ -8536,188 +8536,84 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Admin Activity Log Endpoint - Add this to your server.js in the Admin Routes section
-app.get('/api/admin/activity', adminProtect, async (req, res) => {
-    try {
-        const { page = 1, limit = 10, action, status, userId, startDate, endDate } = req.query;
-        const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        // Build query filter
-        const filter = {};
-        
-        if (action) filter.action = action;
-        if (status) filter.status = status;
-        if (userId) filter.user = userId;
-        
-        // Date range filter
-        if (startDate || endDate) {
-            filter.createdAt = {};
-            if (startDate) filter.createdAt.$gte = new Date(startDate);
-            if (endDate) filter.createdAt.$lte = new Date(endDate);
-        }
 
-        // Get activity logs with user population
-        const activities = await UserLog.find(filter)
-            .populate('user', 'firstName lastName email')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
 
-        // Get total count for pagination
-        const total = await UserLog.countDocuments(filter);
 
-        // Format the response to match frontend expectations
-        const formattedActivities = activities.map(activity => ({
-            id: activity._id,
-            timestamp: activity.createdAt,
-            user: activity.user ? {
-                id: activity.user._id,
-                firstName: activity.user.firstName,
-                lastName: activity.user.lastName,
-                email: activity.user.email
-            } : null,
-            action: activity.action,
-            ipAddress: activity.ipAddress,
-            status: activity.status,
-            deviceInfo: activity.deviceInfo,
-            location: activity.location,
-            metadata: activity.metadata
-        }));
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                activities: formattedActivities,
-                total,
-                page: parseInt(page),
-                pages: Math.ceil(total / parseInt(limit))
-            }
-        });
-
-    } catch (err) {
-        console.error('Admin activity fetch error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch activity logs'
-        });
+// Enhanced activity logging function
+const logUserActivity = async (req, action, status, metadata = {}, user = null) => {
+  try {
+    const deviceInfo = await getUserDeviceInfo(req);
+    const userAgent = req.headers['user-agent'];
+    
+    let userId = user ? user._id : (req.user ? req.user._id : null);
+    let username = 'Unknown';
+    let email = 'Unknown';
+    
+    if (user) {
+      username = `${user.firstName} ${user.lastName}`;
+      email = user.email;
+    } else if (req.user) {
+      username = `${req.user.firstName} ${req.user.lastName}`;
+      email = req.user.email;
     }
-});
+    
+    // Create user log entry
+    await UserLog.create({
+      user: userId,
+      username: username,
+      email: email,
+      action: action,
+      ipAddress: deviceInfo.ip,
+      userAgent: userAgent,
+      deviceInfo: {
+        type: getDeviceType(req),
+        os: getOSFromUserAgent(userAgent),
+        browser: getBrowserFromUserAgent(userAgent)
+      },
+      location: {
+        country: deviceInfo.location.split(', ')[2] || 'Unknown',
+        region: deviceInfo.location.split(', ')[1] || 'Unknown',
+        city: deviceInfo.location.split(', ')[0] || 'Unknown'
+      },
+      status: status,
+      metadata: metadata
+    });
+    
+  } catch (err) {
+    console.error('Error logging user activity:', err);
+  }
+};
 
-// Additional endpoint to get activity statistics for dashboard
-app.get('/api/admin/activity/stats', adminProtect, async (req, res) => {
-    try {
-        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+// Helper functions for device detection
+const getDeviceType = (req) => {
+  const userAgent = req.headers['user-agent'].toLowerCase();
+  if (userAgent.includes('mobile')) return 'mobile';
+  if (userAgent.includes('tablet')) return 'tablet';
+  if (userAgent.includes('desktop')) return 'desktop';
+  return 'unknown';
+};
 
-        // Get counts for different time periods
-        const [last24Hours, last7Days, total] = await Promise.all([
-            UserLog.countDocuments({ createdAt: { $gte: twentyFourHoursAgo } }),
-            UserLog.countDocuments({ createdAt: { $gte: sevenDaysAgo } }),
-            UserLog.countDocuments()
-        ]);
+const getOSFromUserAgent = (userAgent) => {
+  if (userAgent.includes('Windows')) return 'Windows';
+  if (userAgent.includes('Mac')) return 'macOS';
+  if (userAgent.includes('Linux')) return 'Linux';
+  if (userAgent.includes('Android')) return 'Android';
+  if (userAgent.includes('iOS')) return 'iOS';
+  return 'Unknown';
+};
 
-        // Get activity by type
-        const activityByType = await UserLog.aggregate([
-            {
-                $group: {
-                    _id: '$action',
-                    count: { $sum: 1 }
-                }
-            },
-            { $sort: { count: -1 } },
-            { $limit: 10 }
-        ]);
+const getBrowserFromUserAgent = (userAgent) => {
+  if (userAgent.includes('Chrome')) return 'Chrome';
+  if (userAgent.includes('Firefox')) return 'Firefox';
+  if (userAgent.includes('Safari')) return 'Safari';
+  if (userAgent.includes('Edge')) return 'Edge';
+  return 'Unknown';
+};
 
-        // Get success vs failure rates
-        const statusStats = await UserLog.aggregate([
-            {
-                $group: {
-                    _id: '$status',
-                    count: { $sum: 1 }
-                }
-            }
-        ]);
 
-        res.status(200).json({
-            status: 'success',
-            data: {
-                last24Hours,
-                last7Days,
-                total,
-                activityByType,
-                statusStats
-            }
-        });
 
-    } catch (err) {
-        console.error('Admin activity stats error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch activity statistics'
-        });
-    }
-});
 
-// Endpoint to get user-specific activity
-app.get('/api/admin/activity/user/:userId', adminProtect, async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const { page = 1, limit = 20 } = req.query;
-        const skip = (parseInt(page) - 1) * parseInt(limit);
-
-        // Verify user exists
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'User not found'
-            });
-        }
-
-        const activities = await UserLog.find({ user: userId })
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
-
-        const total = await UserLog.countDocuments({ user: userId });
-
-        const formattedActivities = activities.map(activity => ({
-            id: activity._id,
-            timestamp: activity.createdAt,
-            action: activity.action,
-            ipAddress: activity.ipAddress,
-            status: activity.status,
-            deviceInfo: activity.deviceInfo,
-            location: activity.location,
-            metadata: activity.metadata
-        }));
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                activities: formattedActivities,
-                total,
-                page: parseInt(page),
-                pages: Math.ceil(total / parseInt(limit)),
-                user: {
-                    id: user._id,
-                    firstName: user.firstName,
-                    lastName: user.lastName,
-                    email: user.email
-                }
-            }
-        });
-
-    } catch (err) {
-        console.error('User activity fetch error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch user activity logs'
-        });
-    }
-});
 
 
 
@@ -8850,6 +8746,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
