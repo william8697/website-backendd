@@ -8540,216 +8540,67 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Admin Activity Endpoint - Comprehensive User Activity Tracking
+// Admin Activity Endpoint - FIXED VERSION
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
   try {
-    const { page = 1, limit = 10, userId, action, startDate, endDate } = req.query;
+    const { page = 1, limit = 10 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Build query based on filters
-    let query = {};
-    
-    if (userId) {
-      query.user = userId;
-    }
-    
-    if (action) {
-      query.action = action;
-    }
-    
-    if (startDate || endDate) {
-      query.createdAt = {};
-      if (startDate) query.createdAt.$gte = new Date(startDate);
-      if (endDate) query.createdAt.$lte = new Date(endDate);
-    }
+    // Get total count for pagination
+    const totalActivities = await UserLog.countDocuments();
+    const totalPages = Math.ceil(totalActivities / parseInt(limit));
 
-    // Get user logs with user information
-    const userLogs = await UserLog.find(query)
+    // Get user logs with proper population and error handling
+    const userLogs = await UserLog.find({})
       .populate('user', 'firstName lastName email')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
       .lean();
 
-    // Get system logs for additional admin actions
-    const systemLogs = await SystemLog.find({
-      performedByModel: 'Admin',
-      ...query
-    })
-      .populate('performedBy', 'name email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
+    // Transform activities with proper error handling for undefined users
+    const activities = userLogs.map(log => {
+      // Safely handle user data to avoid "undefined undefined" errors
+      let userName = 'Unknown User';
+      let userEmail = 'Unknown Email';
+      
+      if (log.user) {
+        userName = `${log.user.firstName || ''} ${log.user.lastName || ''}`.trim();
+        userEmail = log.user.email || 'Unknown Email';
+      } else if (log.username) {
+        userName = log.username;
+      }
+      
+      // If we still have an empty name after all checks
+      if (!userName || userName === ' ') {
+        userName = 'Unknown User';
+      }
 
-    // Get investment activities
-    const investmentActivities = await Investment.find({
-      ...(userId && { user: userId })
-    })
-      .populate('user', 'firstName lastName email')
-      .populate('plan', 'name percentage')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
-
-    // Get transaction activities
-    const transactionActivities = await Transaction.find({
-      ...(userId && { user: userId })
-    })
-      .populate('user', 'firstName lastName email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
-
-    // Get KYC activities
-    const kycActivities = await KYC.find({
-      ...(userId && { user: userId })
-    })
-      .populate('user', 'firstName lastName email')
-      .populate('reviewedBy', 'name email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
-
-    // Transform all activities into a unified format
-    const allActivities = [];
-
-    // Process UserLogs
-    userLogs.forEach(log => {
-      allActivities.push({
+      return {
         id: log._id,
         timestamp: log.createdAt,
-        user: log.user ? {
-          id: log.user._id,
-          name: `${log.user.firstName} ${log.user.lastName}`,
-          email: log.user.email
-        } : { id: 'system', name: 'System', email: 'system' },
+        user: {
+          id: log.user?._id || log.user || 'unknown',
+          name: userName,
+          email: userEmail
+        },
         action: log.action,
-        description: getUserLogDescription(log),
-        ipAddress: log.ipAddress,
-        status: log.status,
+        description: getActionDescription(log.action, log.metadata),
+        ipAddress: log.ipAddress || 'Unknown',
+        status: log.status || 'success',
         type: 'user_activity',
         metadata: log.metadata || {}
-      });
+      };
     });
-
-    // Process SystemLogs (Admin actions)
-    systemLogs.forEach(log => {
-      allActivities.push({
-        id: log._id,
-        timestamp: log.createdAt,
-        user: log.performedBy ? {
-          id: log.performedBy._id,
-          name: log.performedBy.name,
-          email: log.performedBy.email
-        } : { id: 'system', name: 'System Admin', email: 'admin@system' },
-        action: log.action,
-        description: getSystemLogDescription(log),
-        ipAddress: log.ip,
-        status: 'success',
-        type: 'admin_activity',
-        metadata: log.changes || {}
-      });
-    });
-
-    // Process Investment activities
-    investmentActivities.forEach(investment => {
-      allActivities.push({
-        id: investment._id,
-        timestamp: investment.createdAt,
-        user: investment.user ? {
-          id: investment.user._id,
-          name: `${investment.user.firstName} ${investment.user.lastName}`,
-          email: investment.user.email
-        } : { id: 'unknown', name: 'Unknown User', email: 'unknown' },
-        action: 'investment_' + investment.status,
-        description: getInvestmentDescription(investment),
-        ipAddress: investment.ipAddress || 'N/A',
-        status: investment.status === 'active' ? 'success' : investment.status,
-        type: 'investment',
-        metadata: {
-          amount: investment.amount,
-          plan: investment.plan?.name,
-          status: investment.status
-        }
-      });
-    });
-
-    // Process Transaction activities
-    transactionActivities.forEach(transaction => {
-      allActivities.push({
-        id: transaction._id,
-        timestamp: transaction.createdAt,
-        user: transaction.user ? {
-          id: transaction.user._id,
-          name: `${transaction.user.firstName} ${transaction.user.lastName}`,
-          email: transaction.user.email
-        } : { id: 'unknown', name: 'Unknown User', email: 'unknown' },
-        action: 'transaction_' + transaction.type,
-        description: getTransactionDescription(transaction),
-        ipAddress: 'N/A',
-        status: transaction.status,
-        type: 'transaction',
-        metadata: {
-          amount: transaction.amount,
-          type: transaction.type,
-          status: transaction.status,
-          method: transaction.method
-        }
-      });
-    });
-
-    // Process KYC activities
-    kycActivities.forEach(kyc => {
-      allActivities.push({
-        id: kyc._id,
-        timestamp: kyc.createdAt,
-        user: kyc.user ? {
-          id: kyc.user._id,
-          name: `${kyc.user.firstName} ${kyc.user.lastName}`,
-          email: kyc.user.email
-        } : { id: 'unknown', name: 'Unknown User', email: 'unknown' },
-        action: 'kyc_' + kyc.status,
-        description: getKYCDescription(kyc),
-        ipAddress: 'N/A',
-        status: kyc.status,
-        type: 'kyc',
-        metadata: {
-          type: kyc.type,
-          status: kyc.status,
-          reviewedBy: kyc.reviewedBy?.name
-        }
-      });
-    });
-
-    // Sort all activities by timestamp (newest first)
-    allActivities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-    // Paginate the combined results
-    const startIndex = skip;
-    const endIndex = startIndex + parseInt(limit);
-    const paginatedActivities = allActivities.slice(startIndex, endIndex);
-
-    // Get total count for pagination
-    const totalCount = await UserLog.countDocuments(query) + 
-                      await SystemLog.countDocuments({ ...query, performedByModel: 'Admin' }) +
-                      await Investment.countDocuments(userId ? { user: userId } : {}) +
-                      await Transaction.countDocuments(userId ? { user: userId } : {}) +
-                      await KYC.countDocuments(userId ? { user: userId } : {});
-
-    const totalPages = Math.ceil(totalCount / parseInt(limit));
 
     res.status(200).json({
       status: 'success',
       data: {
-        activities: paginatedActivities,
+        activities: activities,
         pagination: {
           currentPage: parseInt(page),
           totalPages: totalPages,
-          totalItems: totalCount,
+          totalItems: totalActivities,
           itemsPerPage: parseInt(limit),
           hasNextPage: parseInt(page) < totalPages,
           hasPrevPage: parseInt(page) > 1
@@ -8766,58 +8617,61 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
   }
 });
 
-// Helper functions for activity descriptions
-function getUserLogDescription(log) {
+// Enhanced action description helper
+function getActionDescription(action, metadata) {
   const actionMap = {
+    // Authentication actions
     'signup': 'Signed up for a new account',
     'login': 'Logged into account',
     'logout': 'Logged out of account',
-    'profile_update': 'Updated profile information',
     'password_change': 'Changed password',
+    'password_reset_request': 'Requested password reset',
+    'password_reset_complete': 'Completed password reset',
+    
+    // Financial actions
     'deposit': 'Made a deposit',
     'withdrawal': 'Requested a withdrawal',
     'investment': 'Created an investment',
+    'transfer': 'Transferred funds',
+    
+    // Account actions
+    'profile_update': 'Updated profile information',
     'kyc_submission': 'Submitted KYC documents',
+    'settings_change': 'Changed account settings',
+    
+    // Security actions
     '2fa_enable': 'Enabled two-factor authentication',
-    '2fa_disable': 'Disabled two-factor authentication'
+    '2fa_disable': 'Disabled two-factor authentication',
+    'api_key_create': 'Created API key',
+    'api_key_delete': 'Deleted API key',
+    'device_login': 'Logged in from new device',
+    
+    // System actions
+    'session_timeout': 'Session timed out',
+    'failed_login': 'Failed login attempt',
+    'suspicious_activity': 'Suspicious activity detected'
   };
 
-  let description = actionMap[log.action] || `Performed ${log.action.replace('_', ' ')}`;
+  let description = actionMap[action] || `Performed ${action.replace('_', ' ')}`;
 
-  if (log.metadata) {
-    if (log.metadata.amount) {
-      description += ` of $${log.metadata.amount}`;
+  // Add context from metadata if available
+  if (metadata) {
+    if (metadata.amount) {
+      description += ` of $${metadata.amount}`;
     }
-    if (log.metadata.method) {
-      description += ` via ${log.metadata.method}`;
+    if (metadata.method) {
+      description += ` via ${metadata.method}`;
     }
-    if (log.metadata.deviceType) {
-      description += ` from ${log.metadata.deviceType}`;
+    if (metadata.deviceType) {
+      description += ` from ${metadata.deviceType}`;
+    }
+    if (metadata.location) {
+      description += ` in ${metadata.location}`;
     }
   }
 
   return description;
 }
-
-function getSystemLogDescription(log) {
-  return `Admin action: ${log.action} on ${log.entity}`;
-}
-
-function getInvestmentDescription(investment) {
-  return `Investment in ${investment.plan?.name || 'Unknown Plan'} for $${investment.amount} - Status: ${investment.status}`;
-}
-
-function getTransactionDescription(transaction) {
-  return `${transaction.type.charAt(0).toUpperCase() + transaction.type.slice(1)} of $${transaction.amount} via ${transaction.method} - Status: ${transaction.status}`;
-}
-
-function getKYCDescription(kyc) {
-  return `${kyc.type.charAt(0).toUpperCase() + kyc.type.slice(1)} verification ${kyc.status}`;
-}
-
-
-
-
 
 
 
@@ -8952,6 +8806,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
