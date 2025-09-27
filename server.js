@@ -8536,6 +8536,170 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
+// Admin Activity Log Endpoint - ADD THIS TO YOUR server.js
+app.get('/api/admin/activity', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        // Get filter parameters
+        const { 
+            userId, 
+            action, 
+            status, 
+            startDate, 
+            endDate,
+            ipAddress,
+            userAgent 
+        } = req.query;
+
+        // Build query
+        const query = {};
+        
+        if (userId) {
+            query.user = userId;
+        }
+        
+        if (action) {
+            query.action = action;
+        }
+        
+        if (status) {
+            query.status = status;
+        }
+        
+        if (ipAddress) {
+            query.ipAddress = { $regex: ipAddress, $options: 'i' };
+        }
+        
+        if (userAgent) {
+            query.userAgent = { $regex: userAgent, $options: 'i' };
+        }
+        
+        // Date range filter
+        if (startDate || endDate) {
+            query.createdAt = {};
+            if (startDate) {
+                query.createdAt.$gte = new Date(startDate);
+            }
+            if (endDate) {
+                query.createdAt.$lte = new Date(endDate);
+            }
+        }
+
+        // Get activities with user population
+        const activities = await UserLog.find(query)
+            .populate('user', 'firstName lastName email')
+            .populate('relatedEntity')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+
+        // Get total count for pagination
+        const total = await UserLog.countDocuments(query);
+
+        // Format response data
+        const formattedActivities = activities.map(activity => ({
+            id: activity._id,
+            timestamp: activity.createdAt,
+            user: activity.user ? {
+                id: activity.user._id,
+                name: `${activity.user.firstName} ${activity.user.lastName}`,
+                email: activity.user.email
+            } : null,
+            action: activity.action,
+            description: getActivityDescription(activity),
+            ipAddress: activity.ipAddress,
+            userAgent: activity.userAgent,
+            deviceInfo: activity.deviceInfo,
+            location: activity.location,
+            status: activity.status,
+            metadata: activity.metadata,
+            relatedEntity: activity.relatedEntity ? {
+                id: activity.relatedEntity._id,
+                type: activity.relatedEntityModel
+            } : null
+        }));
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                activities: formattedActivities,
+                pagination: {
+                    currentPage: page,
+                    totalPages: Math.ceil(total / limit),
+                    totalItems: total,
+                    itemsPerPage: limit
+                }
+            }
+        });
+
+    } catch (err) {
+        console.error('Admin activity log error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching activity logs'
+        });
+    }
+});
+
+// Helper function to generate descriptive activity messages
+function getActivityDescription(activity) {
+    const user = activity.user ? `${activity.user.firstName} ${activity.user.lastName}` : 'User';
+    
+    switch (activity.action) {
+        case 'signup':
+            return `${user} signed up for an account`;
+        case 'login':
+            return `${user} logged into their account`;
+        case 'logout':
+            return `${user} logged out of their account`;
+        case 'profile_update':
+            return `${user} updated their profile information`;
+        case 'password_change':
+            return `${user} changed their password`;
+        case '2fa_enable':
+            return `${user} enabled two-factor authentication`;
+        case '2fa_disable':
+            return `${user} disabled two-factor authentication`;
+        case 'deposit':
+            return `${user} made a deposit of $${activity.metadata?.amount || 'unknown'}`;
+        case 'withdrawal':
+            return `${user} requested a withdrawal of $${activity.metadata?.amount || 'unknown'}`;
+        case 'investment':
+            return `${user} created a new investment of $${activity.metadata?.amount || 'unknown'}`;
+        case 'transfer':
+            return `${user} transferred funds between accounts`;
+        case 'kyc_submission':
+            return `${user} submitted KYC documents for verification`;
+        case 'settings_change':
+            return `${user} updated their account settings`;
+        case 'api_key_create':
+            return `${user} created a new API key`;
+        case 'api_key_delete':
+            return `${user} deleted an API key`;
+        case 'device_login':
+            return `${user} logged in from a new device`;
+        case 'password_reset_request':
+            return `${user} requested a password reset`;
+        case 'password_reset_complete':
+            return `${user} successfully reset their password`;
+        case 'email_verification':
+            return `${user} verified their email address`;
+        case 'account_deletion':
+            return `${user} deleted their account`;
+        case 'session_timeout':
+            return `${user}'s session timed out`;
+        case 'failed_login':
+            return `Failed login attempt for ${user}`;
+        case 'suspicious_activity':
+            return `Suspicious activity detected for ${user}`;
+        default:
+            return `${user} performed action: ${activity.action}`;
+    }
+}
 
 
 
@@ -8669,3 +8833,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
