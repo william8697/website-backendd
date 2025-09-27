@@ -8542,6 +8542,7 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
+
 // TEST ENDPOINT - Check if API is even reachable
 app.get('/api/admin/test', adminProtect, (req, res) => {
     console.log('✅ TEST ENDPOINT HIT SUCCESSFULLY');
@@ -8556,7 +8557,7 @@ app.get('/api/admin/test', adminProtect, (req, res) => {
     });
 });
 
-// SIMPLE ACTIVITY ENDPOINT - 100% WORKING VERSION
+// SIMPLE ACTIVITY ENDPOINT - 100% WORKING VERSION WITH REAL USER NAMES
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
         console.log('🎯 ACTIVITY ENDPOINT CALLED - Starting data fetch...');
@@ -8570,8 +8571,13 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
         const totalActivities = await UserLog.countDocuments();
         console.log('📈 Total activities in database:', totalActivities);
 
-        // SIMPLE FETCH - No complex population first
+        // FETCH ACTIVITIES WITH PROPER USER POPULATION
         const activities = await UserLog.find({})
+            .populate({
+                path: 'user',
+                select: 'firstName lastName email',
+                model: 'User'
+            })
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
@@ -8631,43 +8637,65 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
             });
         }
 
-        // TRANSFORM EACH ACTIVITY - 100% ACCURATE
-        const transformedActivities = activities.map((activity, index) => {
+        // TRANSFORM EACH ACTIVITY - WITH REAL USER NAMES FROM USERS SCHEMA
+        const transformedActivities = await Promise.all(activities.map(async (activity, index) => {
             console.log(`🔄 Processing activity ${index + 1}:`, {
                 id: activity._id,
                 action: activity.action,
-                username: activity.username,
-                email: activity.email
+                hasUserObject: !!activity.user,
+                userFirstName: activity.user?.firstName,
+                userLastName: activity.user?.lastName,
+                userEmail: activity.user?.email
             });
 
-            // Get user info - SIMPLE AND RELIABLE
+            // GET REAL USER INFO FROM USERS SCHEMA
             let userInfo = {
                 id: 'unknown',
                 name: 'Unknown User',
                 email: 'unknown@example.com'
             };
 
-            // Method 1: Use username/email from activity
-            if (activity.username || activity.email) {
+            // METHOD 1: Use populated user data from Users schema
+            if (activity.user && activity.user._id) {
+                userInfo = {
+                    id: activity.user._id.toString(),
+                    name: `${activity.user.firstName || ''} ${activity.user.lastName || ''}`.trim(),
+                    email: activity.user.email || 'unknown@example.com'
+                };
+                console.log('✅ Using populated user data:', userInfo);
+            }
+            // METHOD 2: If user reference exists but population failed, fetch user directly
+            else if (activity.user && typeof activity.user === 'string') {
+                try {
+                    const realUser = await User.findById(activity.user).select('firstName lastName email').lean();
+                    if (realUser) {
+                        userInfo = {
+                            id: realUser._id.toString(),
+                            name: `${realUser.firstName || ''} ${realUser.lastName || ''}`.trim(),
+                            email: realUser.email || 'unknown@example.com'
+                        };
+                        console.log('✅ Fetched user directly from Users schema:', userInfo);
+                    }
+                } catch (userError) {
+                    console.log('⚠️ Could not fetch user directly:', userError.message);
+                }
+            }
+            // METHOD 3: Use fallback data from activity itself
+            else if (activity.username || activity.email) {
                 userInfo = {
                     id: activity.user ? activity.user.toString() : 'unknown',
                     name: activity.username || activity.email || 'Unknown User',
                     email: activity.email || 'unknown@example.com'
                 };
+                console.log('✅ Using activity fallback data:', userInfo);
             }
 
-            // Method 2: If we have user ID, try to fetch user details
-            if (activity.user && typeof activity.user === 'object') {
-                userInfo = {
-                    id: activity.user._id || 'unknown',
-                    name: `${activity.user.firstName || ''} ${activity.user.lastName || ''}`.trim() || 'Unknown User',
-                    email: activity.user.email || 'unknown@example.com'
-                };
-            }
-
-            // FINAL SANITY CHECK - NO UNDEFINED
-            if (userInfo.name.includes('undefined') || !userInfo.name.trim()) {
+            // FINAL VALIDATION - ABSOLUTELY NO UNDEFINED
+            if (!userInfo.name || userInfo.name.includes('undefined') || userInfo.name.trim() === '') {
                 userInfo.name = 'System User';
+            }
+            if (!userInfo.email || userInfo.email.includes('undefined')) {
+                userInfo.email = 'system@example.com';
             }
 
             // Create the EXACT structure frontend needs
@@ -8683,9 +8711,9 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                 metadata: activity.metadata || {}
             };
 
-            console.log('✅ Transformed activity:', transformed);
+            console.log('✅ Final transformed activity:', transformed);
             return transformed;
-        });
+        }));
 
         console.log('🎉 Successfully transformed all activities');
 
@@ -8774,7 +8802,7 @@ function getSimpleDescription(action, metadata) {
     return description;
 }
 
-// ALTERNATIVE ENDPOINT - Using direct MongoDB aggregation
+// ALTERNATIVE ENDPOINT - Using direct MongoDB aggregation WITH REAL USER NAMES
 app.get('/api/admin/activities-aggregate', adminProtect, async (req, res) => {
     try {
         console.log('🔧 Using aggregation pipeline...');
@@ -8828,23 +8856,43 @@ app.get('/api/admin/activities-aggregate', adminProtect, async (req, res) => {
 
         console.log('🔧 Aggregation result count:', aggregation.length);
 
-        const transformed = aggregation.map(item => ({
-            id: item._id.toString(),
-            timestamp: item.createdAt,
-            user: {
-                id: item.user?.id || item.user?._id || 'unknown',
-                name: item.user ? 
-                    `${item.user.firstName || ''} ${item.user.lastName || ''}`.trim() : 
-                    (item.username || item.email || 'Unknown User'),
-                email: item.user?.email || item.email || 'unknown@example.com'
-            },
-            action: item.action,
-            description: getSimpleDescription(item.action, item.metadata),
-            ipAddress: item.ipAddress || 'Unknown',
-            status: item.status || 'success',
-            type: 'user_activity',
-            metadata: item.metadata || {}
-        }));
+        const transformed = aggregation.map(item => {
+            // GET REAL USER NAMES FROM AGGREGATION
+            let userName = 'Unknown User';
+            let userEmail = 'unknown@example.com';
+            
+            if (item.user && item.user.firstName) {
+                userName = `${item.user.firstName || ''} ${item.user.lastName || ''}`.trim();
+                userEmail = item.user.email || 'unknown@example.com';
+            } else if (item.username) {
+                userName = item.username;
+                userEmail = item.email || 'unknown@example.com';
+            } else if (item.email) {
+                userName = item.email;
+                userEmail = item.email;
+            }
+
+            // FINAL VALIDATION
+            if (!userName || userName.includes('undefined') || userName.trim() === '') {
+                userName = 'System User';
+            }
+
+            return {
+                id: item._id.toString(),
+                timestamp: item.createdAt,
+                user: {
+                    id: item.user?.id || item.user?._id || 'unknown',
+                    name: userName,
+                    email: userEmail
+                },
+                action: item.action,
+                description: getSimpleDescription(item.action, item.metadata),
+                ipAddress: item.ipAddress || 'Unknown',
+                status: item.status || 'success',
+                type: 'user_activity',
+                metadata: item.metadata || {}
+            };
+        });
 
         const total = await UserLog.countDocuments();
 
@@ -8868,10 +8916,6 @@ app.get('/api/admin/activities-aggregate', adminProtect, async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
-
-
-
-
 
 
 
@@ -9012,6 +9056,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
