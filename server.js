@@ -8539,142 +8539,156 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-
-
-// Admin Activity Log Endpoint - FIXED & SIMPLIFIED VERSION
+// Admin Activity Endpoint - FIXED & ENHANCED VERSION
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
-  try {
-    const { page = 1, limit = 10 } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    try {
+        const { page = 1, limit = 10 } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Get total count for pagination
-    const totalActivities = await UserLog.countDocuments();
-    const totalPages = Math.ceil(totalActivities / parseInt(limit));
+        // Get total count for pagination
+        const totalActivities = await UserLog.countDocuments();
+        const totalPages = Math.ceil(totalActivities / parseInt(limit));
 
-    // Get user logs with proper population and error handling
-    const userLogs = await UserLog.find({})
-      .populate('user', 'firstName lastName email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
+        // Get user logs with proper population and error handling
+        const userLogs = await UserLog.find({})
+            .populate('user', 'firstName lastName email')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
 
-    // Transform activities with proper error handling for undefined users
-    const activities = userLogs.map(log => {
-      // Safely handle user data to avoid "undefined undefined" errors
-      let userName = 'Unknown User';
-      let userEmail = 'Unknown Email';
-      
-      if (log.user) {
-        userName = `${log.user.firstName || ''} ${log.user.lastName || ''}`.trim();
-        userEmail = log.user.email || 'Unknown Email';
-      } else if (log.username) {
-        userName = log.username;
-      }
-      
-      // If we still have an empty name after all checks
-      if (!userName || userName === ' ') {
-        userName = 'Unknown User';
-      }
+        // Transform activities with proper error handling for undefined users
+        const activities = userLogs.map(log => {
+            // Safely handle user data to avoid "undefined undefined" errors
+            let userName = 'Unknown User';
+            let userEmail = 'Unknown Email';
+            
+            if (log.user) {
+                userName = `${log.user.firstName || ''} ${log.user.lastName || ''}`.trim();
+                userEmail = log.user.email || 'Unknown Email';
+            } else if (log.username) {
+                userName = log.username;
+            }
+            
+            // If we still have an empty name after all checks
+            if (!userName || userName === ' ') {
+                userName = 'Unknown User';
+            }
 
-      return {
-        id: log._id,
-        timestamp: log.createdAt,
-        user: {
-          id: log.user?._id || log.user || 'unknown',
-          name: userName,
-          email: userEmail
-        },
-        action: log.action,
-        description: getActionDescription(log.action, log.metadata),
-        ipAddress: log.ipAddress || 'Unknown',
-        status: log.status || 'success',
-        type: 'user_activity',
-        metadata: log.metadata || {}
-      };
-    });
+            return {
+                id: log._id,
+                timestamp: log.createdAt,
+                user: {
+                    id: log.user?._id || log.user || 'unknown',
+                    name: userName,
+                    email: userEmail
+                },
+                action: log.action,
+                description: getActionDescription(log.action, log.metadata),
+                ipAddress: log.ipAddress || 'Unknown',
+                status: log.status || 'success',
+                type: 'user_activity',
+                metadata: log.metadata || {}
+            };
+        });
 
-    res.status(200).json({
-      status: 'success',
-      data: {
-        activities: activities,
-        pagination: {
-          currentPage: parseInt(page),
-          totalPages: totalPages,
-          totalItems: totalActivities,
-          itemsPerPage: parseInt(limit),
-          hasNextPage: parseInt(page) < totalPages,
-          hasPrevPage: parseInt(page) > 1
-        }
-      }
-    });
+        res.status(200).json({
+            status: 'success',
+            data: {
+                activities: activities,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: totalPages,
+                    totalItems: totalActivities,
+                    itemsPerPage: parseInt(limit),
+                    hasNextPage: parseInt(page) < totalPages,
+                    hasPrevPage: parseInt(page) > 1
+                }
+            }
+        });
 
-  } catch (err) {
-    console.error('Admin activity fetch error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching activity data'
-    });
-  }
+    } catch (err) {
+        console.error('Admin activity fetch error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while fetching activity data'
+        });
+    }
 });
 
 // Enhanced action description helper
 function getActionDescription(action, metadata) {
-  const actionMap = {
-    // Authentication actions
-    'signup': 'Signed up for a new account',
-    'login': 'Logged into account',
-    'logout': 'Logged out of account',
-    'password_change': 'Changed password',
-    'password_reset_request': 'Requested password reset',
-    'password_reset_complete': 'Completed password reset',
-    
-    // Financial actions
-    'deposit': 'Made a deposit',
-    'withdrawal': 'Requested a withdrawal',
-    'investment': 'Created an investment',
-    'transfer': 'Transferred funds',
-    
-    // Account actions
-    'profile_update': 'Updated profile information',
-    'kyc_submission': 'Submitted KYC documents',
-    'settings_change': 'Changed account settings',
-    
-    // Security actions
-    '2fa_enable': 'Enabled two-factor authentication',
-    '2fa_disable': 'Disabled two-factor authentication',
-    'api_key_create': 'Created API key',
-    'api_key_delete': 'Deleted API key',
-    'device_login': 'Logged in from new device',
-    
-    // System actions
-    'session_timeout': 'Session timed out',
-    'failed_login': 'Failed login attempt',
-    'suspicious_activity': 'Suspicious activity detected'
-  };
+    const actionMap = {
+        // Authentication actions
+        'signup': 'Signed up for a new account',
+        'login': 'Logged into account',
+        'logout': 'Logged out of account',
+        'password_change': 'Changed password',
+        'password_reset_request': 'Requested password reset',
+        'password_reset_complete': 'Completed password reset',
+        
+        // Financial actions
+        'deposit': 'Made a deposit',
+        'withdrawal': 'Requested a withdrawal',
+        'investment': 'Created an investment',
+        'investment_matured': 'Investment matured',
+        'transfer': 'Transferred funds',
+        
+        // Account actions
+        'profile_update': 'Updated profile information',
+        'kyc_submission': 'Submitted KYC documents',
+        'settings_change': 'Changed account settings',
+        
+        // Security actions
+        '2fa_enable': 'Enabled two-factor authentication',
+        '2fa_disable': 'Disabled two-factor authentication',
+        'api_key_create': 'Created API key',
+        'api_key_delete': 'Deleted API key',
+        'device_login': 'Logged in from new device',
+        
+        // System actions
+        'session_timeout': 'Session timed out',
+        'failed_login': 'Failed login attempt',
+        'suspicious_activity': 'Suspicious activity detected',
+        
+        // Investment specific actions
+        'investment_created': 'Created a new investment',
+        'investment_completed': 'Investment completed successfully',
+        'investment_cancelled': 'Investment was cancelled',
+        
+        // Page visit actions
+        'page_visit': 'Visited a page',
+        'dashboard_view': 'Viewed dashboard',
+        'investment_view': 'Viewed investments page',
+        'profile_view': 'Viewed profile page'
+    };
 
-  let description = actionMap[action] || `Performed ${action.replace('_', ' ')}`;
+    let description = actionMap[action] || `Performed ${action.replace(/_/g, ' ')}`;
 
-  // Add context from metadata if available
-  if (metadata) {
-    if (metadata.amount) {
-      description += ` of $${metadata.amount}`;
+    // Add context from metadata if available
+    if (metadata) {
+        if (metadata.amount) {
+            description += ` of $${metadata.amount}`;
+        }
+        if (metadata.method) {
+            description += ` via ${metadata.method}`;
+        }
+        if (metadata.deviceType) {
+            description += ` from ${metadata.deviceType}`;
+        }
+        if (metadata.location) {
+            description += ` in ${metadata.location}`;
+        }
+        if (metadata.page) {
+            description += ` - ${metadata.page}`;
+        }
+        if (metadata.plan) {
+            description += ` - Plan: ${metadata.plan}`;
+        }
     }
-    if (metadata.method) {
-      description += ` via ${metadata.method}`;
-    }
-    if (metadata.deviceType) {
-      description += ` from ${metadata.deviceType}`;
-    }
-    if (metadata.location) {
-      description += ` in ${metadata.location}`;
-    }
-  }
 
-  return description;
+    return description;
 }
-
-
 
 
 
@@ -8815,6 +8829,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
