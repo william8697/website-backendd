@@ -8537,82 +8537,350 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-
-// Admin Activity Tracking Endpoint
+// Admin Activity Tracking Endpoint - COMPREHENSIVE VERSION
 app.get('/api/admin/activity', adminProtect, restrictTo('super', 'support'), async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
-        // Get filter parameters
-        const { userId, action, status, startDate, endDate } = req.query;
+        // Fetch data from ALL relevant schemas
+        const [
+            userLogs,
+            systemLogs,
+            investments,
+            transactions,
+            kycSubmissions,
+            supportTickets,
+            chatMessages,
+            loginHistory
+        ] = await Promise.all([
+            // UserLogs - direct user activities
+            UserLog.find({})
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
 
-        // Build query
-        const query = {};
-        
-        if (userId) {
-            query.user = userId;
-        }
-        
-        if (action) {
-            query.action = action;
-        }
-        
-        if (status) {
-            query.status = status;
-        }
-        
-        if (startDate || endDate) {
-            query.createdAt = {};
-            if (startDate) {
-                query.createdAt.$gte = new Date(startDate);
+            // SystemLogs - system-level activities
+            SystemLog.find({})
+                .populate('performedBy', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+
+            // Investments - investment activities
+            Investment.find({})
+                .populate('user', 'firstName lastName email')
+                .populate('plan', 'name percentage duration')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+
+            // Transactions - financial activities
+            Transaction.find({})
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+
+            // KYC submissions
+            KYC.find({})
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+
+            // Support tickets
+            SupportTicket.find({})
+                .populate('user', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+
+            // Chat messages
+            ChatMessage.find({})
+                .populate('conversation')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+
+            // Login history from users
+            User.aggregate([
+                { $unwind: '$loginHistory' },
+                { $sort: { 'loginHistory.timestamp': -1 } },
+                { $skip: skip },
+                { $limit: limit },
+                {
+                    $project: {
+                        _id: 0,
+                        timestamp: '$loginHistory.timestamp',
+                        user: {
+                            id: '$_id',
+                            firstName: '$firstName',
+                            lastName: '$lastName',
+                            email: '$email'
+                        },
+                        ipAddress: '$loginHistory.ip',
+                        device: '$loginHistory.device',
+                        location: '$loginHistory.location',
+                        action: 'login',
+                        status: 'success'
+                    }
+                }
+            ])
+        ]);
+
+        // Combine and format all activities
+        const allActivities = [];
+
+        // 1. Process UserLogs
+        userLogs.forEach(log => {
+            allActivities.push({
+                id: log._id,
+                timestamp: log.createdAt,
+                user: log.user ? {
+                    id: log.user._id,
+                    name: `${log.user.firstName} ${log.user.lastName}`,
+                    email: log.user.email
+                } : {
+                    id: null,
+                    name: 'System',
+                    email: 'system'
+                },
+                action: log.action,
+                description: getUserLogDescription(log),
+                ipAddress: log.ipAddress,
+                location: log.location,
+                device: log.deviceInfo,
+                status: log.status,
+                type: 'user_activity',
+                metadata: log.metadata || {}
+            });
+        });
+
+        // 2. Process SystemLogs
+        systemLogs.forEach(log => {
+            allActivities.push({
+                id: log._id,
+                timestamp: log.createdAt,
+                user: log.performedBy ? {
+                    id: log.performedBy._id,
+                    name: `${log.performedBy.firstName} ${log.performedBy.lastName}`,
+                    email: log.performedBy.email
+                } : {
+                    id: null,
+                    name: 'System',
+                    email: 'system'
+                },
+                action: log.action,
+                description: getSystemLogDescription(log),
+                ipAddress: log.ip,
+                location: log.location,
+                device: log.device,
+                status: 'success',
+                type: 'system_activity',
+                metadata: log.changes || {}
+            });
+        });
+
+        // 3. Process Investments
+        investments.forEach(investment => {
+            allActivities.push({
+                id: investment._id,
+                timestamp: investment.createdAt,
+                user: investment.user ? {
+                    id: investment.user._id,
+                    name: `${investment.user.firstName} ${investment.user.lastName}`,
+                    email: investment.user.email
+                } : null,
+                action: 'investment_created',
+                description: getInvestmentDescription(investment),
+                ipAddress: investment.ipAddress,
+                device: investment.deviceInfo,
+                status: investment.status,
+                type: 'investment',
+                metadata: {
+                    amount: investment.amount,
+                    plan: investment.plan?.name,
+                    status: investment.status,
+                    expectedReturn: investment.expectedReturn
+                }
+            });
+
+            // Add status changes
+            if (investment.statusHistory && investment.statusHistory.length > 0) {
+                investment.statusHistory.forEach(history => {
+                    allActivities.push({
+                        id: `${investment._id}_${history.changedAt}`,
+                        timestamp: history.changedAt,
+                        user: investment.user ? {
+                            id: investment.user._id,
+                            name: `${investment.user.firstName} ${investment.user.lastName}`,
+                            email: investment.user.email
+                        } : null,
+                        action: 'investment_status_change',
+                        description: `Investment status changed to ${history.status}${history.reason ? ` - ${history.reason}` : ''}`,
+                        status: 'success',
+                        type: 'investment',
+                        metadata: {
+                            previousStatus: history.previousStatus,
+                            newStatus: history.status,
+                            reason: history.reason
+                        }
+                    });
+                });
             }
-            if (endDate) {
-                query.createdAt.$lte = new Date(endDate);
-            }
-        }
+        });
 
-        // Fetch activities with pagination
-        const activities = await UserLog.find(query)
-            .populate('user', 'firstName lastName email')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .lean();
+        // 4. Process Transactions
+        transactions.forEach(transaction => {
+            allActivities.push({
+                id: transaction._id,
+                timestamp: transaction.createdAt,
+                user: transaction.user ? {
+                    id: transaction.user._id,
+                    name: `${transaction.user.firstName} ${transaction.user.lastName}`,
+                    email: transaction.user.email
+                } : null,
+                action: `transaction_${transaction.type}`,
+                description: getTransactionDescription(transaction),
+                status: transaction.status,
+                type: 'transaction',
+                metadata: {
+                    amount: transaction.amount,
+                    currency: transaction.currency,
+                    method: transaction.method,
+                    reference: transaction.reference
+                }
+            });
+        });
 
-        // Get total count for pagination
-        const total = await UserLog.countDocuments(query);
+        // 5. Process KYC Submissions
+        kycSubmissions.forEach(kyc => {
+            allActivities.push({
+                id: kyc._id,
+                timestamp: kyc.createdAt,
+                user: kyc.user ? {
+                    id: kyc.user._id,
+                    name: `${kyc.user.firstName} ${kyc.user.lastName}`,
+                    email: kyc.user.email
+                } : null,
+                action: 'kyc_submission',
+                description: `${kyc.user.firstName} submitted ${kyc.type} verification`,
+                status: kyc.status,
+                type: 'kyc',
+                metadata: {
+                    kycType: kyc.type,
+                    status: kyc.status,
+                    reviewedBy: kyc.reviewedBy,
+                    rejectionReason: kyc.rejectionReason
+                }
+            });
+        });
 
-        // Format response data
-        const formattedActivities = activities.map(activity => ({
-            id: activity._id,
-            timestamp: activity.createdAt,
-            user: activity.user ? {
-                id: activity.user._id,
-                name: `${activity.user.firstName} ${activity.user.lastName}`,
-                email: activity.user.email
-            } : null,
-            action: activity.action,
-            description: getActivityDescription(activity),
-            ipAddress: activity.ipAddress,
-            location: activity.location,
-            device: activity.deviceInfo,
-            status: activity.status,
-            metadata: activity.metadata
-        }));
+        // 6. Process Support Tickets
+        supportTickets.forEach(ticket => {
+            allActivities.push({
+                id: ticket._id,
+                timestamp: ticket.createdAt,
+                user: ticket.user ? {
+                    id: ticket.user._id,
+                    name: `${ticket.user.firstName} ${ticket.user.lastName}`,
+                    email: ticket.user.email
+                } : null,
+                action: 'support_ticket_created',
+                description: `Support ticket created: ${ticket.subject}`,
+                status: ticket.status,
+                type: 'support',
+                metadata: {
+                    subject: ticket.subject,
+                    priority: ticket.priority,
+                    status: ticket.status
+                }
+            });
+        });
 
-        res.status(200).json({
+        // 7. Process Chat Messages
+        chatMessages.forEach(message => {
+            allActivities.push({
+                id: message._id,
+                timestamp: message.createdAt,
+                user: {
+                    id: message.senderId,
+                    name: message.sender === 'user' ? 'User' : 'Admin',
+                    email: message.sender === 'user' ? 'user' : 'admin'
+                },
+                action: 'chat_message',
+                description: `${message.sender === 'user' ? 'User' : 'Admin'} sent a message`,
+                status: 'success',
+                type: 'chat',
+                metadata: {
+                    message: message.message.substring(0, 100) + (message.message.length > 100 ? '...' : ''),
+                    conversationId: message.conversation?._id,
+                    read: message.read
+                }
+            });
+        });
+
+        // 8. Process Login History
+        loginHistory.forEach(login => {
+            allActivities.push({
+                id: `login_${login.timestamp}`,
+                timestamp: login.timestamp,
+                user: login.user,
+                action: 'login',
+                description: `${login.user.name} logged in`,
+                ipAddress: login.ipAddress,
+                location: login.location,
+                device: login.device,
+                status: 'success',
+                type: 'authentication',
+                metadata: {}
+            });
+        });
+
+        // Sort all activities by timestamp (newest first)
+        allActivities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+        // Get total count from all collections
+        const totalCounts = await Promise.all([
+            UserLog.countDocuments(),
+            SystemLog.countDocuments(),
+            Investment.countDocuments(),
+            Transaction.countDocuments(),
+            KYC.countDocuments(),
+            SupportTicket.countDocuments(),
+            ChatMessage.countDocuments(),
+            User.aggregate([
+                { $unwind: '$loginHistory' },
+                { $count: 'count' }
+            ])
+        ]);
+
+        const total = totalCounts.reduce((sum, count) => sum + (Array.isArray(count) ? count[0]?.count || 0 : count), 0);
+
+        // Format response exactly as frontend expects
+        const response = {
             status: 'success',
             data: {
-                activities: formattedActivities,
+                activities: allActivities.slice(0, limit), // Return only requested limit
                 pagination: {
                     current: page,
                     pages: Math.ceil(total / limit),
                     total: total
                 }
             }
-        });
+        };
+
+        res.status(200).json(response);
 
     } catch (err) {
         console.error('Admin activity fetch error:', err);
@@ -8623,129 +8891,103 @@ app.get('/api/admin/activity', adminProtect, restrictTo('super', 'support'), asy
     }
 });
 
-// Helper function to generate descriptive activity messages
-function getActivityDescription(activity) {
-    const user = activity.user ? `${activity.user.firstName} ${activity.user.lastName}` : 'User';
+// Helper functions for descriptions
+function getUserLogDescription(log) {
+    const userName = log.user ? `${log.user.firstName} ${log.user.lastName}` : 'User';
     
-    switch (activity.action) {
-        case 'signup':
-            return `${user} signed up for an account`;
-        case 'login':
-            return `${user} logged into their account`;
-        case 'logout':
-            return `${user} logged out of their account`;
-        case 'profile_update':
-            return `${user} updated their profile information`;
-        case 'password_change':
-            return `${user} changed their password`;
-        case '2fa_enable':
-            return `${user} enabled two-factor authentication`;
-        case '2fa_disable':
-            return `${user} disabled two-factor authentication`;
-        case 'deposit':
-            return `${user} made a deposit of $${activity.metadata?.amount || 'unknown amount'}`;
-        case 'withdrawal':
-            return `${user} requested a withdrawal of $${activity.metadata?.amount || 'unknown amount'}`;
-        case 'investment':
-            if (activity.metadata?.type === 'created') {
-                return `${user} created a new investment of $${activity.metadata.amount}`;
-            } else if (activity.metadata?.type === 'matured') {
-                return `${user}'s investment matured with $${activity.metadata.profit} profit`;
-            } else if (activity.metadata?.type === 'completed') {
-                return `${user} completed an investment`;
-            }
-            return `${user} performed an investment action`;
-        case 'transfer':
-            return `${user} transferred funds between accounts`;
-        case 'kyc_submission':
-            return `${user} submitted KYC documents for verification`;
-        case 'settings_change':
-            return `${user} changed their account settings`;
-        case 'api_key_create':
-            return `${user} created a new API key`;
-        case 'api_key_delete':
-            return `${user} deleted an API key`;
-        case 'device_login':
-            return `${user} logged in from a new device`;
-        case 'password_reset_request':
-            return `${user} requested a password reset`;
-        case 'password_reset_complete':
-            return `${user} successfully reset their password`;
-        case 'email_verification':
-            return `${user} verified their email address`;
-        case 'account_deletion':
-            return `${user} deleted their account`;
-        case 'session_timeout':
-            return `${user}'s session timed out`;
-        case 'failed_login':
-            return `Failed login attempt for ${user}`;
-        case 'suspicious_activity':
-            return `Suspicious activity detected for ${user}`;
-        default:
-            return `${user} performed action: ${activity.action}`;
-    }
+    const descriptions = {
+        'signup': `${userName} signed up for an account`,
+        'login': `${userName} logged in successfully`,
+        'logout': `${userName} logged out`,
+        'profile_update': `${userName} updated their profile`,
+        'password_change': `${userName} changed their password`,
+        '2fa_enable': `${userName} enabled two-factor authentication`,
+        '2fa_disable': `${userName} disabled two-factor authentication`,
+        'deposit': `${userName} made a deposit of $${log.metadata?.amount || 'unknown'}`,
+        'withdrawal': `${userName} requested a withdrawal of $${log.metadata?.amount || 'unknown'}`,
+        'investment': `${userName} created an investment`,
+        'transfer': `${userName} transferred funds`,
+        'kyc_submission': `${userName} submitted KYC documents`,
+        'settings_change': `${userName} changed settings`,
+        'failed_login': `Failed login attempt for ${userName}`
+    };
+
+    return descriptions[log.action] || `${userName} performed ${log.action}`;
 }
 
-// Enhanced logging function for user activities
-const logUserActivity = async (req, action, status, metadata = {}, user = null) => {
+function getSystemLogDescription(log) {
+    const userName = log.performedBy ? `${log.performedBy.firstName} ${log.performedBy.lastName}` : 'System';
+    return `${userName} performed system action: ${log.action}`;
+}
+
+function getInvestmentDescription(investment) {
+    const userName = investment.user ? `${investment.user.firstName} ${investment.user.lastName}` : 'User';
+    return `${userName} invested $${investment.amount} in ${investment.plan?.name} plan`;
+}
+
+function getTransactionDescription(transaction) {
+    const userName = transaction.user ? `${transaction.user.firstName} ${transaction.user.lastName}` : 'User';
+    
+    const descriptions = {
+        'deposit': `${userName} deposited $${transaction.amount}`,
+        'withdrawal': `${userName} withdrew $${transaction.amount}`,
+        'investment': `${userName} invested $${transaction.amount}`,
+        'interest': `${userName} earned $${transaction.amount} interest`,
+        'referral': `${userName} earned $${transaction.amount} referral bonus`,
+        'transfer': `${userName} transferred $${transaction.amount}`
+    };
+
+    return descriptions[transaction.type] || `${userName} performed ${transaction.type} transaction`;
+}
+
+// Additional endpoint for filtered activity search
+app.get('/api/admin/activity/search', adminProtect, restrictTo('super', 'support'), async (req, res) => {
     try {
-        const deviceInfo = await getUserDeviceInfo(req);
-        
-        const activityData = {
-            user: user ? user._id : (req.user ? req.user._id : null),
-            username: user ? `${user.firstName} ${user.lastName}` : 'Unknown User',
-            email: user ? user.email : 'unknown@example.com',
-            action: action,
-            ipAddress: deviceInfo.ip,
-            userAgent: req.headers['user-agent'],
-            deviceInfo: {
-                type: getDeviceType(req),
-                os: getOSFromUserAgent(req.headers['user-agent']),
-                browser: getBrowserFromUserAgent(req.headers['user-agent'])
-            },
-            location: deviceInfo.location,
-            status: status,
-            metadata: metadata
-        };
+        const { query, type, startDate, endDate, userId } = req.query;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
 
-        await UserLog.create(activityData);
-        
+        // Build search query
+        const searchQuery = {};
+
+        if (userId) {
+            searchQuery['user._id'] = userId;
+        }
+
+        if (type) {
+            searchQuery.type = type;
+        }
+
+        if (startDate || endDate) {
+            searchQuery.timestamp = {};
+            if (startDate) searchQuery.timestamp.$gte = new Date(startDate);
+            if (endDate) searchQuery.timestamp.$lte = new Date(endDate);
+        }
+
+        // This would require a more complex search implementation
+        // For now, return a message indicating search capability
+        res.status(200).json({
+            status: 'success',
+            data: {
+                activities: [],
+                pagination: {
+                    current: page,
+                    pages: 0,
+                    total: 0
+                },
+                message: 'Search functionality will be implemented in the next version'
+            }
+        });
+
     } catch (err) {
-        console.error('Error logging user activity:', err);
+        console.error('Activity search error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Search functionality temporarily unavailable'
+        });
     }
-};
-
-// Helper functions for device detection
-function getDeviceType(req) {
-    const userAgent = req.headers['user-agent'] || '';
-    if (/mobile/i.test(userAgent)) {
-        return 'mobile';
-    } else if (/tablet/i.test(userAgent)) {
-        return 'tablet';
-    } else {
-        return 'desktop';
-    }
-}
-
-function getOSFromUserAgent(userAgent) {
-    if (/windows/i.test(userAgent)) return 'Windows';
-    if (/macintosh|mac os x/i.test(userAgent)) return 'macOS';
-    if (/linux/i.test(userAgent)) return 'Linux';
-    if (/android/i.test(userAgent)) return 'Android';
-    if (/ios|iphone|ipad|ipod/i.test(userAgent)) return 'iOS';
-    return 'Unknown';
-}
-
-function getBrowserFromUserAgent(userAgent) {
-    if (/chrome/i.test(userAgent)) return 'Chrome';
-    if (/firefox/i.test(userAgent)) return 'Firefox';
-    if (/safari/i.test(userAgent)) return 'Safari';
-    if (/edge/i.test(userAgent)) return 'Edge';
-    if (/opera/i.test(userAgent)) return 'Opera';
-    return 'Unknown';
-}
-
-
+});
 
 
 
@@ -8879,5 +9121,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
