@@ -8534,236 +8534,74 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Admin Activity Log Endpoint - FIXED VERSION
+
+
+
+
+
+
+
+// Admin Activity Log Endpoint - FIXED & SIMPLIFIED VERSION
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
   try {
-    const { page = 1, limit = 10, userId, action, startDate, endDate } = req.query;
+    const { page = 1, limit = 10 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Build query based on filters
-    let query = {};
-    
-    if (userId) {
-      query.user = userId;
-    }
-    
-    if (action) {
-      query.action = action;
-    }
-    
-    if (startDate || endDate) {
-      query.createdAt = {};
-      if (startDate) query.createdAt.$gte = new Date(startDate);
-      if (endDate) query.createdAt.$lte = new Date(endDate);
-    }
+    // Get total count for pagination
+    const totalActivities = await UserLog.countDocuments();
+    const totalPages = Math.ceil(totalActivities / parseInt(limit));
 
-    // Get user logs (login, logout, profile updates, etc.)
-    const userLogs = await UserLog.find(query)
+    // Get user logs with proper population and error handling
+    const userLogs = await UserLog.find({})
       .populate('user', 'firstName lastName email')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
       .lean();
 
-    // Get investments data (created, matured)
-    const investmentActivities = await Investment.find({
-      ...(userId && { user: userId })
-    })
-      .populate('user', 'firstName lastName email')
-      .populate('plan', 'name')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
+    // Transform activities with proper error handling for undefined users
+    const activities = userLogs.map(log => {
+      // Safely handle user data to avoid "undefined undefined" errors
+      let userName = 'Unknown User';
+      let userEmail = 'Unknown Email';
+      
+      if (log.user) {
+        userName = `${log.user.firstName || ''} ${log.user.lastName || ''}`.trim();
+        userEmail = log.user.email || 'Unknown Email';
+      } else if (log.username) {
+        userName = log.username;
+      }
+      
+      // If we still have an empty name after all checks
+      if (!userName || userName === ' ') {
+        userName = 'Unknown User';
+      }
 
-    // Get transactions data (deposits, withdrawals)
-    const transactionActivities = await Transaction.find({
-      ...(userId && { user: userId })
-    })
-      .populate('user', 'firstName lastName email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
-
-    // Get KYC submissions
-    const kycActivities = await KYC.find({
-      ...(userId && { user: userId })
-    })
-      .populate('user', 'firstName lastName email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
-
-    // Get support ticket activities
-    const supportActivities = await SupportTicket.find({
-      ...(userId && { user: userId })
-    })
-      .populate('user', 'firstName lastName email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
-
-    // Transform all activities into a unified format
-    const allActivities = [];
-
-    // Process UserLogs
-    userLogs.forEach(log => {
-      allActivities.push({
+      return {
         id: log._id,
         timestamp: log.createdAt,
         user: {
-          id: log.user?._id,
-          name: log.user ? `${log.user.firstName} ${log.user.lastName}` : log.username,
-          email: log.user?.email || log.email
+          id: log.user?._id || log.user || 'unknown',
+          name: userName,
+          email: userEmail
         },
         action: log.action,
         description: getActionDescription(log.action, log.metadata),
-        ipAddress: log.ipAddress,
-        status: log.status,
+        ipAddress: log.ipAddress || 'Unknown',
+        status: log.status || 'success',
         type: 'user_activity',
-        metadata: log.metadata
-      });
+        metadata: log.metadata || {}
+      };
     });
-
-    // Process Investments
-    investmentActivities.forEach(investment => {
-      allActivities.push({
-        id: investment._id,
-        timestamp: investment.createdAt,
-        user: {
-          id: investment.user?._id,
-          name: investment.user ? `${investment.user.firstName} ${investment.user.lastName}` : 'Unknown User',
-          email: investment.user?.email
-        },
-        action: 'investment_created',
-        description: `Created investment in ${investment.plan?.name} plan with $${investment.amount}`,
-        ipAddress: investment.ipAddress,
-        status: investment.status,
-        type: 'investment',
-        metadata: {
-          planName: investment.plan?.name,
-          amount: investment.amount,
-          status: investment.status
-        }
-      });
-
-      // Add investment maturity activity if applicable
-      if (investment.status === 'completed' && investment.completionDate) {
-        allActivities.push({
-          id: investment._id + '_matured',
-          timestamp: investment.completionDate,
-          user: {
-            id: investment.user?._id,
-            name: investment.user ? `${investment.user.firstName} ${investment.user.lastName}` : 'Unknown User',
-            email: investment.user?.email
-          },
-          action: 'investment_matured',
-          description: `Investment matured with total return of $${investment.expectedReturn}`,
-          ipAddress: investment.ipAddress,
-          status: 'completed',
-          type: 'investment',
-          metadata: {
-            planName: investment.plan?.name,
-            amount: investment.amount,
-            return: investment.expectedReturn
-          }
-        });
-      }
-    });
-
-    // Process Transactions
-    transactionActivities.forEach(transaction => {
-      allActivities.push({
-        id: transaction._id,
-        timestamp: transaction.createdAt,
-        user: {
-          id: transaction.user?._id,
-          name: transaction.user ? `${transaction.user.firstName} ${transaction.user.lastName}` : 'Unknown User',
-          email: transaction.user?.email
-        },
-        action: `transaction_${transaction.type}`,
-        description: `${transaction.type.charAt(0).toUpperCase() + transaction.type.slice(1)} of $${transaction.amount} via ${transaction.method}`,
-        ipAddress: transaction.ipAddress,
-        status: transaction.status,
-        type: 'transaction',
-        metadata: {
-          type: transaction.type,
-          amount: transaction.amount,
-          method: transaction.method,
-          status: transaction.status
-        }
-      });
-    });
-
-    // Process KYC submissions
-    kycActivities.forEach(kyc => {
-      allActivities.push({
-        id: kyc._id,
-        timestamp: kyc.createdAt,
-        user: {
-          id: kyc.user?._id,
-          name: kyc.user ? `${kyc.user.firstName} ${kyc.user.lastName}` : 'Unknown User',
-          email: kyc.user?.email
-        },
-        action: 'kyc_submission',
-        description: `Submitted ${kyc.type} verification - Status: ${kyc.status}`,
-        ipAddress: kyc.ipAddress,
-        status: kyc.status,
-        type: 'kyc',
-        metadata: {
-          kycType: kyc.type,
-          status: kyc.status,
-          reviewedBy: kyc.reviewedBy
-        }
-      });
-    });
-
-    // Process Support Tickets
-    supportActivities.forEach(ticket => {
-      allActivities.push({
-        id: ticket._id,
-        timestamp: ticket.createdAt,
-        user: {
-          id: ticket.user?._id,
-          name: ticket.user ? `${ticket.user.firstName} ${ticket.user.lastName}` : 'Unknown User',
-          email: ticket.user?.email
-        },
-        action: 'support_ticket',
-        description: `Created support ticket: ${ticket.subject}`,
-        ipAddress: ticket.ipAddress,
-        status: ticket.status,
-        type: 'support',
-        metadata: {
-          subject: ticket.subject,
-          priority: ticket.priority,
-          status: ticket.status
-        }
-      });
-    });
-
-    // Sort all activities by timestamp (newest first)
-    allActivities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-    // Paginate results
-    const startIndex = skip;
-    const endIndex = startIndex + parseInt(limit);
-    const paginatedActivities = allActivities.slice(startIndex, endIndex);
-
-    // Get total count for pagination
-    const totalCount = allActivities.length;
-    const totalPages = Math.ceil(totalCount / parseInt(limit));
 
     res.status(200).json({
       status: 'success',
       data: {
-        activities: paginatedActivities,
+        activities: activities,
         pagination: {
           currentPage: parseInt(page),
           totalPages: totalPages,
-          totalItems: totalCount,
+          totalItems: totalActivities,
           itemsPerPage: parseInt(limit),
           hasNextPage: parseInt(page) < totalPages,
           hasPrevPage: parseInt(page) > 1
@@ -8780,38 +8618,51 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
   }
 });
 
-// Helper function to generate action descriptions
+// Enhanced action description helper
 function getActionDescription(action, metadata) {
-  const descriptions = {
-    'signup': 'User signed up for an account',
-    'login': 'User logged into their account',
-    'logout': 'User logged out of their account',
-    'profile_update': 'User updated their profile information',
-    'password_change': 'User changed their password',
-    '2fa_enable': 'User enabled two-factor authentication',
-    '2fa_disable': 'User disabled two-factor authentication',
-    'deposit': 'User made a deposit',
-    'withdrawal': 'User requested a withdrawal',
-    'investment': 'User created an investment',
-    'transfer': 'User transferred funds between accounts',
-    'kyc_submission': 'User submitted KYC documents',
-    'settings_change': 'User changed their settings',
-    'api_key_create': 'User created an API key',
-    'api_key_delete': 'User deleted an API key',
-    'device_login': 'User logged in from a new device',
-    'password_reset_request': 'User requested a password reset',
-    'password_reset_complete': 'User completed password reset',
-    'email_verification': 'User verified their email address',
-    'account_deletion': 'User deleted their account',
-    'session_timeout': 'User session timed out',
+  const actionMap = {
+    // Authentication actions
+    'signup': 'Signed up for a new account',
+    'login': 'Logged into account',
+    'logout': 'Logged out of account',
+    'password_change': 'Changed password',
+    'password_reset_request': 'Requested password reset',
+    'password_reset_complete': 'Completed password reset',
+    
+    // Financial actions
+    'deposit': 'Made a deposit',
+    'withdrawal': 'Requested a withdrawal',
+    'investment': 'Created an investment',
+    'transfer': 'Transferred funds',
+    
+    // Account actions
+    'profile_update': 'Updated profile information',
+    'kyc_submission': 'Submitted KYC documents',
+    'settings_change': 'Changed account settings',
+    
+    // Security actions
+    '2fa_enable': 'Enabled two-factor authentication',
+    '2fa_disable': 'Disabled two-factor authentication',
+    'api_key_create': 'Created API key',
+    'api_key_delete': 'Deleted API key',
+    'device_login': 'Logged in from new device',
+    
+    // System actions
+    'session_timeout': 'Session timed out',
     'failed_login': 'Failed login attempt',
     'suspicious_activity': 'Suspicious activity detected'
   };
 
-  let description = descriptions[action] || `User performed action: ${action}`;
-  
-  // Add metadata to description if available
+  let description = actionMap[action] || `Performed ${action.replace('_', ' ')}`;
+
+  // Add context from metadata if available
   if (metadata) {
+    if (metadata.amount) {
+      description += ` of $${metadata.amount}`;
+    }
+    if (metadata.method) {
+      description += ` via ${metadata.method}`;
+    }
     if (metadata.deviceType) {
       description += ` from ${metadata.deviceType}`;
     }
@@ -8822,6 +8673,12 @@ function getActionDescription(action, metadata) {
 
   return description;
 }
+
+
+
+
+
+
 
 
 
@@ -8958,6 +8815,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
