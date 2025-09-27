@@ -8540,246 +8540,280 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-
-
-// TEST ENDPOINT - Check if API is even reachable
-app.get('/api/admin/test', adminProtect, (req, res) => {
-    console.log('✅ TEST ENDPOINT HIT SUCCESSFULLY');
-    res.json({
-        status: 'success',
-        message: 'API endpoint is working!',
-        timestamp: new Date().toISOString(),
-        data: {
-            test: true,
-            message: 'This proves the endpoint is reachable'
-        }
-    });
-});
-
-// BULLETPROOF ACTIVITY ENDPOINT - GUARANTEED TO WORK
+// Admin Activity Endpoint - Comprehensive User Activity Tracking
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
-    try {
-        console.log('🎯 ACTIVITY ENDPOINT CALLED - Starting data fetch...');
-        
-        const { page = 1, limit = 5 } = req.query;
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+  try {
+    const { page = 1, limit = 10, userId, action, startDate, endDate } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        console.log('📊 Fetching parameters:', { page, limit, skip });
-
-        // STEP 1: Get all user logs
-        const activities = await UserLog.find({})
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
-
-        console.log('📥 Raw activities fetched:', activities.length);
-
-        if (activities.length === 0) {
-            console.log('⚠️ No activities found in database');
-            return res.json({
-                status: 'success',
-                data: {
-                    activities: [],
-                    pagination: {
-                        currentPage: 1,
-                        totalPages: 1,
-                        totalItems: 0,
-                        itemsPerPage: 5,
-                        hasNextPage: false,
-                        hasPrevPage: false
-                    }
-                }
-            });
-        }
-
-        // STEP 2: Extract ALL unique user IDs from activities
-        const userIds = [];
-        activities.forEach(activity => {
-            if (activity.user && !userIds.includes(activity.user.toString())) {
-                userIds.push(activity.user.toString());
-            }
-        });
-
-        console.log('👥 Unique user IDs found:', userIds);
-
-        // STEP 3: Fetch ALL users in one query
-        let usersMap = new Map();
-        if (userIds.length > 0) {
-            const users = await User.find({ _id: { $in: userIds } })
-                .select('firstName lastName email')
-                .lean();
-            
-            // Create a map for quick lookup
-            users.forEach(user => {
-                usersMap.set(user._id.toString(), user);
-            });
-            console.log('✅ Users fetched from database:', usersMap.size);
-        }
-
-        // STEP 4: Transform activities with GUARANTEED user data
-        const transformedActivities = activities.map((activity, index) => {
-            console.log(`🔄 Processing activity ${index + 1}:`, {
-                activityId: activity._id,
-                userId: activity.user,
-                action: activity.action
-            });
-
-            let userInfo = {
-                id: 'unknown',
-                name: 'Unknown User',
-                email: 'unknown@example.com'
-            };
-
-            // METHOD 1: Get user from pre-fetched users map
-            if (activity.user && usersMap.has(activity.user.toString())) {
-                const user = usersMap.get(activity.user.toString());
-                userInfo = {
-                    id: user._id.toString(),
-                    name: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
-                    email: user.email || 'unknown@example.com'
-                };
-                console.log('✅ Found user in map:', userInfo);
-            }
-            // METHOD 2: Use activity's own username/email
-            else if (activity.username || activity.email) {
-                userInfo = {
-                    id: activity.user ? activity.user.toString() : 'unknown',
-                    name: activity.username || activity.email || 'Unknown User',
-                    email: activity.email || 'unknown@example.com'
-                };
-                console.log('✅ Using activity data:', userInfo);
-            }
-            // METHOD 3: Final fallback
-            else {
-                console.log('⚠️ Using fallback user data');
-            }
-
-            // ABSOLUTE GUARANTEE: No undefined names
-            if (!userInfo.name || userInfo.name.includes('undefined')) {
-                userInfo.name = 'System User';
-            }
-            if (!userInfo.email || userInfo.email.includes('undefined')) {
-                userInfo.email = 'system@example.com';
-            }
-
-            // Create the EXACT structure
-            const transformed = {
-                id: activity._id.toString(),
-                timestamp: activity.createdAt,
-                user: userInfo,
-                action: activity.action,
-                description: getSimpleDescription(activity.action, activity.metadata),
-                ipAddress: activity.ipAddress || 'Unknown',
-                status: activity.status || 'success',
-                type: 'user_activity',
-                metadata: activity.metadata || {}
-            };
-
-            console.log('✅ Final activity:', transformed.user);
-            return transformed;
-        });
-
-        // STEP 5: Get total count for pagination
-        const totalActivities = await UserLog.countDocuments();
-        const totalPages = Math.ceil(totalActivities / parseInt(limit));
-
-        // FINAL RESPONSE
-        const response = {
-            status: 'success',
-            data: {
-                activities: transformedActivities,
-                pagination: {
-                    currentPage: parseInt(page),
-                    totalPages: totalPages,
-                    totalItems: totalActivities,
-                    itemsPerPage: parseInt(limit),
-                    hasNextPage: parseInt(page) < totalPages,
-                    hasPrevPage: parseInt(page) > 1
-                }
-            }
-        };
-
-        console.log('📤 Sending response with', transformedActivities.length, 'activities');
-        res.json(response);
-
-    } catch (error) {
-        console.error('❌ ACTIVITY ENDPOINT ERROR:', error);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch activities'
-        });
+    // Build query based on filters
+    let query = {};
+    
+    if (userId) {
+      query.user = userId;
     }
+    
+    if (action) {
+      query.action = action;
+    }
+    
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(endDate);
+    }
+
+    // Get user logs with user information
+    const userLogs = await UserLog.find(query)
+      .populate('user', 'firstName lastName email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Get system logs for additional admin actions
+    const systemLogs = await SystemLog.find({
+      performedByModel: 'Admin',
+      ...query
+    })
+      .populate('performedBy', 'name email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Get investment activities
+    const investmentActivities = await Investment.find({
+      ...(userId && { user: userId })
+    })
+      .populate('user', 'firstName lastName email')
+      .populate('plan', 'name percentage')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Get transaction activities
+    const transactionActivities = await Transaction.find({
+      ...(userId && { user: userId })
+    })
+      .populate('user', 'firstName lastName email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Get KYC activities
+    const kycActivities = await KYC.find({
+      ...(userId && { user: userId })
+    })
+      .populate('user', 'firstName lastName email')
+      .populate('reviewedBy', 'name email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Transform all activities into a unified format
+    const allActivities = [];
+
+    // Process UserLogs
+    userLogs.forEach(log => {
+      allActivities.push({
+        id: log._id,
+        timestamp: log.createdAt,
+        user: log.user ? {
+          id: log.user._id,
+          name: `${log.user.firstName} ${log.user.lastName}`,
+          email: log.user.email
+        } : { id: 'system', name: 'System', email: 'system' },
+        action: log.action,
+        description: getUserLogDescription(log),
+        ipAddress: log.ipAddress,
+        status: log.status,
+        type: 'user_activity',
+        metadata: log.metadata || {}
+      });
+    });
+
+    // Process SystemLogs (Admin actions)
+    systemLogs.forEach(log => {
+      allActivities.push({
+        id: log._id,
+        timestamp: log.createdAt,
+        user: log.performedBy ? {
+          id: log.performedBy._id,
+          name: log.performedBy.name,
+          email: log.performedBy.email
+        } : { id: 'system', name: 'System Admin', email: 'admin@system' },
+        action: log.action,
+        description: getSystemLogDescription(log),
+        ipAddress: log.ip,
+        status: 'success',
+        type: 'admin_activity',
+        metadata: log.changes || {}
+      });
+    });
+
+    // Process Investment activities
+    investmentActivities.forEach(investment => {
+      allActivities.push({
+        id: investment._id,
+        timestamp: investment.createdAt,
+        user: investment.user ? {
+          id: investment.user._id,
+          name: `${investment.user.firstName} ${investment.user.lastName}`,
+          email: investment.user.email
+        } : { id: 'unknown', name: 'Unknown User', email: 'unknown' },
+        action: 'investment_' + investment.status,
+        description: getInvestmentDescription(investment),
+        ipAddress: investment.ipAddress || 'N/A',
+        status: investment.status === 'active' ? 'success' : investment.status,
+        type: 'investment',
+        metadata: {
+          amount: investment.amount,
+          plan: investment.plan?.name,
+          status: investment.status
+        }
+      });
+    });
+
+    // Process Transaction activities
+    transactionActivities.forEach(transaction => {
+      allActivities.push({
+        id: transaction._id,
+        timestamp: transaction.createdAt,
+        user: transaction.user ? {
+          id: transaction.user._id,
+          name: `${transaction.user.firstName} ${transaction.user.lastName}`,
+          email: transaction.user.email
+        } : { id: 'unknown', name: 'Unknown User', email: 'unknown' },
+        action: 'transaction_' + transaction.type,
+        description: getTransactionDescription(transaction),
+        ipAddress: 'N/A',
+        status: transaction.status,
+        type: 'transaction',
+        metadata: {
+          amount: transaction.amount,
+          type: transaction.type,
+          status: transaction.status,
+          method: transaction.method
+        }
+      });
+    });
+
+    // Process KYC activities
+    kycActivities.forEach(kyc => {
+      allActivities.push({
+        id: kyc._id,
+        timestamp: kyc.createdAt,
+        user: kyc.user ? {
+          id: kyc.user._id,
+          name: `${kyc.user.firstName} ${kyc.user.lastName}`,
+          email: kyc.user.email
+        } : { id: 'unknown', name: 'Unknown User', email: 'unknown' },
+        action: 'kyc_' + kyc.status,
+        description: getKYCDescription(kyc),
+        ipAddress: 'N/A',
+        status: kyc.status,
+        type: 'kyc',
+        metadata: {
+          type: kyc.type,
+          status: kyc.status,
+          reviewedBy: kyc.reviewedBy?.name
+        }
+      });
+    });
+
+    // Sort all activities by timestamp (newest first)
+    allActivities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    // Paginate the combined results
+    const startIndex = skip;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedActivities = allActivities.slice(startIndex, endIndex);
+
+    // Get total count for pagination
+    const totalCount = await UserLog.countDocuments(query) + 
+                      await SystemLog.countDocuments({ ...query, performedByModel: 'Admin' }) +
+                      await Investment.countDocuments(userId ? { user: userId } : {}) +
+                      await Transaction.countDocuments(userId ? { user: userId } : {}) +
+                      await KYC.countDocuments(userId ? { user: userId } : {});
+
+    const totalPages = Math.ceil(totalCount / parseInt(limit));
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        activities: paginatedActivities,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: totalPages,
+          totalItems: totalCount,
+          itemsPerPage: parseInt(limit),
+          hasNextPage: parseInt(page) < totalPages,
+          hasPrevPage: parseInt(page) > 1
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error('Admin activity fetch error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching activity data'
+    });
+  }
 });
 
-// SIMPLE DESCRIPTION HELPER
-function getSimpleDescription(action, metadata) {
-    const actionMap = {
-        'login': 'User logged into account',
-        'logout': 'User logged out of account',
-        'signup': 'New user signed up',
-        'deposit': 'User made a deposit',
-        'withdrawal': 'User requested a withdrawal',
-        'investment': 'User created an investment',
-        'complete_investment': 'Investment completed successfully',
-        'view-referrals': 'User viewed referrals page',
-        'google-login': 'User logged in with Google',
-        'profile_update': 'User updated profile information',
-        'password_change': 'User changed password',
-        'kyc_submission': 'User submitted KYC documents'
-    };
+// Helper functions for activity descriptions
+function getUserLogDescription(log) {
+  const actionMap = {
+    'signup': 'Signed up for a new account',
+    'login': 'Logged into account',
+    'logout': 'Logged out of account',
+    'profile_update': 'Updated profile information',
+    'password_change': 'Changed password',
+    'deposit': 'Made a deposit',
+    'withdrawal': 'Requested a withdrawal',
+    'investment': 'Created an investment',
+    'kyc_submission': 'Submitted KYC documents',
+    '2fa_enable': 'Enabled two-factor authentication',
+    '2fa_disable': 'Disabled two-factor authentication'
+  };
 
-    let description = actionMap[action] || `User performed ${action.replace(/_/g, ' ')}`;
+  let description = actionMap[log.action] || `Performed ${log.action.replace('_', ' ')}`;
 
-    if (metadata && metadata.amount) {
-        description += ` of $${metadata.amount}`;
+  if (log.metadata) {
+    if (log.metadata.amount) {
+      description += ` of $${log.metadata.amount}`;
     }
+    if (log.metadata.method) {
+      description += ` via ${log.metadata.method}`;
+    }
+    if (log.metadata.deviceType) {
+      description += ` from ${log.metadata.deviceType}`;
+    }
+  }
 
-    return description;
+  return description;
 }
 
-// DEBUG ENDPOINT - Check what's really in your database
-app.get('/api/admin/debug-users', adminProtect, async (req, res) => {
-    try {
-        console.log('🔍 DEBUG: Checking users in database...');
-        
-        // Check recent activities
-        const recentActivities = await UserLog.find({})
-            .sort({ createdAt: -1 })
-            .limit(5)
-            .lean();
+function getSystemLogDescription(log) {
+  return `Admin action: ${log.action} on ${log.entity}`;
+}
 
-        // Check users collection
-        const allUsers = await User.find({})
-            .select('firstName lastName email createdAt')
-            .sort({ createdAt: -1 })
-            .limit(10)
-            .lean();
+function getInvestmentDescription(investment) {
+  return `Investment in ${investment.plan?.name || 'Unknown Plan'} for $${investment.amount} - Status: ${investment.status}`;
+}
 
-        res.json({
-            activities: recentActivities.map(a => ({
-                id: a._id,
-                action: a.action,
-                userId: a.user,
-                username: a.username,
-                email: a.email,
-                createdAt: a.createdAt
-            })),
-            users: allUsers.map(u => ({
-                id: u._id,
-                firstName: u.firstName,
-                lastName: u.lastName,
-                email: u.email,
-                createdAt: u.createdAt
-            })),
-            message: `Found ${recentActivities.length} activities and ${allUsers.length} users`
-        });
+function getTransactionDescription(transaction) {
+  return `${transaction.type.charAt(0).toUpperCase() + transaction.type.slice(1)} of $${transaction.amount} via ${transaction.method} - Status: ${transaction.status}`;
+}
 
-    } catch (error) {
-        console.error('Debug error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
+function getKYCDescription(kyc) {
+  return `${kyc.type.charAt(0).toUpperCase() + kyc.type.slice(1)} verification ${kyc.status}`;
+}
 
 
 
@@ -8918,6 +8952,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
