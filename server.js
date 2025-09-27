@@ -8536,126 +8536,188 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
+// Admin Activity Log Endpoint - Add this to your server.js in the Admin Routes section
+app.get('/api/admin/activity', adminProtect, async (req, res) => {
+    try {
+        const { page = 1, limit = 10, action, status, userId, startDate, endDate } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
 
-app.post('/api/login', [
-  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
-  body('password').notEmpty().withMessage('Password is required'),
-  body('rememberMe').optional().isBoolean().withMessage('Remember me must be a boolean')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    // Track failed validation
-    await logUserActivity(req, 'login_attempt', 'failed', {
-      error: 'Validation failed',
-      fields: errors.array().map(err => err.param)
-    });
-    
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { email, password, rememberMe } = req.body;
-
-    // Track login attempt
-    await logUserActivity(req, 'login_attempt', 'pending', {
-      email,
-      rememberMe: !!rememberMe
-    });
-
-    const user = await User.findOne({ email }).select('+password +twoFactorAuth.secret');
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      // Track failed login
-      await logUserActivity(req, 'login_attempt', 'failed', {
-        error: 'Invalid credentials',
-        email
-      });
-      
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Incorrect email or password'
-      });
-    }
-
-    if (user.status !== 'active') {
-      // Track login to suspended account
-      await logUserActivity(req, 'login_attempt', 'failed', {
-        error: 'Account suspended',
-        userId: user._id,
-        status: user.status
-      });
-      
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Your account has been suspended. Please contact support.'
-      });
-    }
-
-    const token = generateJWT(user._id);
-
-    // Update last login
-    user.lastLogin = new Date();
-    const deviceInfo = await getUserDeviceInfo(req);
-    user.loginHistory.push(deviceInfo);
-    await user.save();
-
-    // Track successful login
-    await logUserActivity(req, 'login', 'success', {
-      userId: user._id,
-      rememberMe: !!rememberMe,
-      deviceType: getDeviceType(req),
-      location: deviceInfo.location
-    }, user);
-
-    // Set cookie
-    res.cookie('jwt', token, {
-      expires: rememberMe ? new Date(Date.now() + JWT_COOKIE_EXPIRES * 24 * 60 * 60 * 1000) : undefined,
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict'
-    });
-
-    const responseData = {
-      status: 'success',
-      token,
-      data: {
-        user: {
-          id: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email
+        // Build query filter
+        const filter = {};
+        
+        if (action) filter.action = action;
+        if (status) filter.status = status;
+        if (userId) filter.user = userId;
+        
+        // Date range filter
+        if (startDate || endDate) {
+            filter.createdAt = {};
+            if (startDate) filter.createdAt.$gte = new Date(startDate);
+            if (endDate) filter.createdAt.$lte = new Date(endDate);
         }
-      }
-    };
 
-    // Check if 2FA is enabled
-    if (user.twoFactorAuth.enabled) {
-      responseData.twoFactorRequired = true;
-      responseData.message = 'Two-factor authentication required';
+        // Get activity logs with user population
+        const activities = await UserLog.find(filter)
+            .populate('user', 'firstName lastName email')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+
+        // Get total count for pagination
+        const total = await UserLog.countDocuments(filter);
+
+        // Format the response to match frontend expectations
+        const formattedActivities = activities.map(activity => ({
+            id: activity._id,
+            timestamp: activity.createdAt,
+            user: activity.user ? {
+                id: activity.user._id,
+                firstName: activity.user.firstName,
+                lastName: activity.user.lastName,
+                email: activity.user.email
+            } : null,
+            action: activity.action,
+            ipAddress: activity.ipAddress,
+            status: activity.status,
+            deviceInfo: activity.deviceInfo,
+            location: activity.location,
+            metadata: activity.metadata
+        }));
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                activities: formattedActivities,
+                total,
+                page: parseInt(page),
+                pages: Math.ceil(total / parseInt(limit))
+            }
+        });
+
+    } catch (err) {
+        console.error('Admin activity fetch error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch activity logs'
+        });
     }
-
-    res.status(200).json(responseData);
-
-  } catch (err) {
-    console.error('Login error:', err);
-    
-    // Track login error
-    await logUserActivity(req, 'login_error', 'failed', {
-      error: err.message
-    });
-
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred during login'
-    });
-  }
 });
 
+// Additional endpoint to get activity statistics for dashboard
+app.get('/api/admin/activity/stats', adminProtect, async (req, res) => {
+    try {
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
+        // Get counts for different time periods
+        const [last24Hours, last7Days, total] = await Promise.all([
+            UserLog.countDocuments({ createdAt: { $gte: twentyFourHoursAgo } }),
+            UserLog.countDocuments({ createdAt: { $gte: sevenDaysAgo } }),
+            UserLog.countDocuments()
+        ]);
 
+        // Get activity by type
+        const activityByType = await UserLog.aggregate([
+            {
+                $group: {
+                    _id: '$action',
+                    count: { $sum: 1 }
+                }
+            },
+            { $sort: { count: -1 } },
+            { $limit: 10 }
+        ]);
 
+        // Get success vs failure rates
+        const statusStats = await UserLog.aggregate([
+            {
+                $group: {
+                    _id: '$status',
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                last24Hours,
+                last7Days,
+                total,
+                activityByType,
+                statusStats
+            }
+        });
+
+    } catch (err) {
+        console.error('Admin activity stats error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch activity statistics'
+        });
+    }
+});
+
+// Endpoint to get user-specific activity
+app.get('/api/admin/activity/user/:userId', adminProtect, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { page = 1, limit = 20 } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        // Verify user exists
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        const activities = await UserLog.find({ user: userId })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+
+        const total = await UserLog.countDocuments({ user: userId });
+
+        const formattedActivities = activities.map(activity => ({
+            id: activity._id,
+            timestamp: activity.createdAt,
+            action: activity.action,
+            ipAddress: activity.ipAddress,
+            status: activity.status,
+            deviceInfo: activity.deviceInfo,
+            location: activity.location,
+            metadata: activity.metadata
+        }));
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                activities: formattedActivities,
+                total,
+                page: parseInt(page),
+                pages: Math.ceil(total / parseInt(limit)),
+                user: {
+                    id: user._id,
+                    firstName: user.firstName,
+                    lastName: user.lastName,
+                    email: user.email
+                }
+            }
+        });
+
+    } catch (err) {
+        console.error('User activity fetch error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch user activity logs'
+        });
+    }
+});
 
 
 
@@ -8788,6 +8850,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
