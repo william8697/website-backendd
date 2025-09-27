@@ -8542,7 +8542,6 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-
 // TEST ENDPOINT - Check if API is even reachable
 app.get('/api/admin/test', adminProtect, (req, res) => {
     console.log('✅ TEST ENDPOINT HIT SUCCESSFULLY');
@@ -8557,7 +8556,7 @@ app.get('/api/admin/test', adminProtect, (req, res) => {
     });
 });
 
-// SIMPLE ACTIVITY ENDPOINT - 100% WORKING VERSION WITH REAL USER NAMES
+// BULLETPROOF ACTIVITY ENDPOINT - GUARANTEED TO WORK
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
     try {
         console.log('🎯 ACTIVITY ENDPOINT CALLED - Starting data fetch...');
@@ -8567,17 +8566,8 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
 
         console.log('📊 Fetching parameters:', { page, limit, skip });
 
-        // SIMPLE COUNT
-        const totalActivities = await UserLog.countDocuments();
-        console.log('📈 Total activities in database:', totalActivities);
-
-        // FETCH ACTIVITIES WITH PROPER USER POPULATION
+        // STEP 1: Get all user logs
         const activities = await UserLog.find({})
-            .populate({
-                path: 'user',
-                select: 'firstName lastName email',
-                model: 'User'
-            })
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
@@ -8587,48 +8577,14 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
 
         if (activities.length === 0) {
             console.log('⚠️ No activities found in database');
-            // Return sample data to test frontend display
-            const sampleActivities = [
-                {
-                    id: 'sample-1',
-                    timestamp: new Date(),
-                    user: {
-                        id: 'user-1',
-                        name: 'John Doe',
-                        email: 'john@example.com'
-                    },
-                    action: 'login',
-                    description: 'User logged into account',
-                    ipAddress: '192.168.1.1',
-                    status: 'success',
-                    type: 'user_activity',
-                    metadata: {}
-                },
-                {
-                    id: 'sample-2',
-                    timestamp: new Date(Date.now() - 3600000),
-                    user: {
-                        id: 'user-2',
-                        name: 'Jane Smith',
-                        email: 'jane@example.com'
-                    },
-                    action: 'deposit',
-                    description: 'Made a deposit of $100',
-                    ipAddress: '192.168.1.2',
-                    status: 'completed',
-                    type: 'financial_activity',
-                    metadata: { amount: 100 }
-                }
-            ];
-
             return res.json({
                 status: 'success',
                 data: {
-                    activities: sampleActivities,
+                    activities: [],
                     pagination: {
                         currentPage: 1,
                         totalPages: 1,
-                        totalItems: 2,
+                        totalItems: 0,
                         itemsPerPage: 5,
                         hasNextPage: false,
                         hasPrevPage: false
@@ -8637,68 +8593,77 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
             });
         }
 
-        // TRANSFORM EACH ACTIVITY - WITH REAL USER NAMES FROM USERS SCHEMA
-        const transformedActivities = await Promise.all(activities.map(async (activity, index) => {
+        // STEP 2: Extract ALL unique user IDs from activities
+        const userIds = [];
+        activities.forEach(activity => {
+            if (activity.user && !userIds.includes(activity.user.toString())) {
+                userIds.push(activity.user.toString());
+            }
+        });
+
+        console.log('👥 Unique user IDs found:', userIds);
+
+        // STEP 3: Fetch ALL users in one query
+        let usersMap = new Map();
+        if (userIds.length > 0) {
+            const users = await User.find({ _id: { $in: userIds } })
+                .select('firstName lastName email')
+                .lean();
+            
+            // Create a map for quick lookup
+            users.forEach(user => {
+                usersMap.set(user._id.toString(), user);
+            });
+            console.log('✅ Users fetched from database:', usersMap.size);
+        }
+
+        // STEP 4: Transform activities with GUARANTEED user data
+        const transformedActivities = activities.map((activity, index) => {
             console.log(`🔄 Processing activity ${index + 1}:`, {
-                id: activity._id,
-                action: activity.action,
-                hasUserObject: !!activity.user,
-                userFirstName: activity.user?.firstName,
-                userLastName: activity.user?.lastName,
-                userEmail: activity.user?.email
+                activityId: activity._id,
+                userId: activity.user,
+                action: activity.action
             });
 
-            // GET REAL USER INFO FROM USERS SCHEMA
             let userInfo = {
                 id: 'unknown',
                 name: 'Unknown User',
                 email: 'unknown@example.com'
             };
 
-            // METHOD 1: Use populated user data from Users schema
-            if (activity.user && activity.user._id) {
+            // METHOD 1: Get user from pre-fetched users map
+            if (activity.user && usersMap.has(activity.user.toString())) {
+                const user = usersMap.get(activity.user.toString());
                 userInfo = {
-                    id: activity.user._id.toString(),
-                    name: `${activity.user.firstName || ''} ${activity.user.lastName || ''}`.trim(),
-                    email: activity.user.email || 'unknown@example.com'
+                    id: user._id.toString(),
+                    name: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+                    email: user.email || 'unknown@example.com'
                 };
-                console.log('✅ Using populated user data:', userInfo);
+                console.log('✅ Found user in map:', userInfo);
             }
-            // METHOD 2: If user reference exists but population failed, fetch user directly
-            else if (activity.user && typeof activity.user === 'string') {
-                try {
-                    const realUser = await User.findById(activity.user).select('firstName lastName email').lean();
-                    if (realUser) {
-                        userInfo = {
-                            id: realUser._id.toString(),
-                            name: `${realUser.firstName || ''} ${realUser.lastName || ''}`.trim(),
-                            email: realUser.email || 'unknown@example.com'
-                        };
-                        console.log('✅ Fetched user directly from Users schema:', userInfo);
-                    }
-                } catch (userError) {
-                    console.log('⚠️ Could not fetch user directly:', userError.message);
-                }
-            }
-            // METHOD 3: Use fallback data from activity itself
+            // METHOD 2: Use activity's own username/email
             else if (activity.username || activity.email) {
                 userInfo = {
                     id: activity.user ? activity.user.toString() : 'unknown',
                     name: activity.username || activity.email || 'Unknown User',
                     email: activity.email || 'unknown@example.com'
                 };
-                console.log('✅ Using activity fallback data:', userInfo);
+                console.log('✅ Using activity data:', userInfo);
+            }
+            // METHOD 3: Final fallback
+            else {
+                console.log('⚠️ Using fallback user data');
             }
 
-            // FINAL VALIDATION - ABSOLUTELY NO UNDEFINED
-            if (!userInfo.name || userInfo.name.includes('undefined') || userInfo.name.trim() === '') {
+            // ABSOLUTE GUARANTEE: No undefined names
+            if (!userInfo.name || userInfo.name.includes('undefined')) {
                 userInfo.name = 'System User';
             }
             if (!userInfo.email || userInfo.email.includes('undefined')) {
                 userInfo.email = 'system@example.com';
             }
 
-            // Create the EXACT structure frontend needs
+            // Create the EXACT structure
             const transformed = {
                 id: activity._id.toString(),
                 timestamp: activity.createdAt,
@@ -8711,16 +8676,15 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
                 metadata: activity.metadata || {}
             };
 
-            console.log('✅ Final transformed activity:', transformed);
+            console.log('✅ Final activity:', transformed.user);
             return transformed;
-        }));
+        });
 
-        console.log('🎉 Successfully transformed all activities');
-
-        // Calculate pagination
+        // STEP 5: Get total count for pagination
+        const totalActivities = await UserLog.countDocuments();
         const totalPages = Math.ceil(totalActivities / parseInt(limit));
 
-        // FINAL RESPONSE - EXACT STRUCTURE
+        // FINAL RESPONSE
         const response = {
             status: 'success',
             data: {
@@ -8736,43 +8700,15 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
             }
         };
 
-        console.log('📤 Sending response to frontend');
-        console.log('Response structure:', JSON.stringify(response, null, 2));
-
+        console.log('📤 Sending response with', transformedActivities.length, 'activities');
         res.json(response);
 
     } catch (error) {
         console.error('❌ ACTIVITY ENDPOINT ERROR:', error);
-        
-        // Return sample data on error to ensure frontend displays something
-        const sampleData = {
-            status: 'success',
-            data: {
-                activities: [
-                    {
-                        id: 'error-sample-1',
-                        timestamp: new Date(),
-                        user: { id: 'user-1', name: 'Test User', email: 'test@example.com' },
-                        action: 'login',
-                        description: 'Sample activity for testing',
-                        ipAddress: '127.0.0.1',
-                        status: 'success',
-                        type: 'user_activity',
-                        metadata: {}
-                    }
-                ],
-                pagination: {
-                    currentPage: 1,
-                    totalPages: 1,
-                    totalItems: 1,
-                    itemsPerPage: 5,
-                    hasNextPage: false,
-                    hasPrevPage: false
-                }
-            }
-        };
-
-        res.json(sampleData);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch activities'
+        });
     }
 });
 
@@ -8802,122 +8738,48 @@ function getSimpleDescription(action, metadata) {
     return description;
 }
 
-// ALTERNATIVE ENDPOINT - Using direct MongoDB aggregation WITH REAL USER NAMES
-app.get('/api/admin/activities-aggregate', adminProtect, async (req, res) => {
+// DEBUG ENDPOINT - Check what's really in your database
+app.get('/api/admin/debug-users', adminProtect, async (req, res) => {
     try {
-        console.log('🔧 Using aggregation pipeline...');
+        console.log('🔍 DEBUG: Checking users in database...');
         
-        const { page = 1, limit = 5 } = req.query;
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        // Check recent activities
+        const recentActivities = await UserLog.find({})
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .lean();
 
-        const aggregation = await UserLog.aggregate([
-            {
-                $lookup: {
-                    from: 'users', // Your actual users collection name
-                    localField: 'user',
-                    foreignField: '_id',
-                    as: 'userInfo'
-                }
-            },
-            {
-                $unwind: {
-                    path: '$userInfo',
-                    preserveNullAndEmptyArrays: true
-                }
-            },
-            {
-                $project: {
-                    _id: 1,
-                    action: 1,
-                    createdAt: 1,
-                    ipAddress: 1,
-                    status: 1,
-                    metadata: 1,
-                    username: 1,
-                    email: 1,
-                    user: {
-                        $cond: {
-                            if: { $ne: ['$userInfo', null] },
-                            then: {
-                                id: '$userInfo._id',
-                                firstName: '$userInfo.firstName',
-                                lastName: '$userInfo.lastName',
-                                email: '$userInfo.email'
-                            },
-                            else: null
-                        }
-                    }
-                }
-            },
-            { $sort: { createdAt: -1 } },
-            { $skip: skip },
-            { $limit: parseInt(limit) }
-        ]);
-
-        console.log('🔧 Aggregation result count:', aggregation.length);
-
-        const transformed = aggregation.map(item => {
-            // GET REAL USER NAMES FROM AGGREGATION
-            let userName = 'Unknown User';
-            let userEmail = 'unknown@example.com';
-            
-            if (item.user && item.user.firstName) {
-                userName = `${item.user.firstName || ''} ${item.user.lastName || ''}`.trim();
-                userEmail = item.user.email || 'unknown@example.com';
-            } else if (item.username) {
-                userName = item.username;
-                userEmail = item.email || 'unknown@example.com';
-            } else if (item.email) {
-                userName = item.email;
-                userEmail = item.email;
-            }
-
-            // FINAL VALIDATION
-            if (!userName || userName.includes('undefined') || userName.trim() === '') {
-                userName = 'System User';
-            }
-
-            return {
-                id: item._id.toString(),
-                timestamp: item.createdAt,
-                user: {
-                    id: item.user?.id || item.user?._id || 'unknown',
-                    name: userName,
-                    email: userEmail
-                },
-                action: item.action,
-                description: getSimpleDescription(item.action, item.metadata),
-                ipAddress: item.ipAddress || 'Unknown',
-                status: item.status || 'success',
-                type: 'user_activity',
-                metadata: item.metadata || {}
-            };
-        });
-
-        const total = await UserLog.countDocuments();
+        // Check users collection
+        const allUsers = await User.find({})
+            .select('firstName lastName email createdAt')
+            .sort({ createdAt: -1 })
+            .limit(10)
+            .lean();
 
         res.json({
-            status: 'success',
-            data: {
-                activities: transformed,
-                pagination: {
-                    currentPage: parseInt(page),
-                    totalPages: Math.ceil(total / parseInt(limit)),
-                    totalItems: total,
-                    itemsPerPage: parseInt(limit),
-                    hasNextPage: parseInt(page) < Math.ceil(total / parseInt(limit)),
-                    hasPrevPage: parseInt(page) > 1
-                }
-            }
+            activities: recentActivities.map(a => ({
+                id: a._id,
+                action: a.action,
+                userId: a.user,
+                username: a.username,
+                email: a.email,
+                createdAt: a.createdAt
+            })),
+            users: allUsers.map(u => ({
+                id: u._id,
+                firstName: u.firstName,
+                lastName: u.lastName,
+                email: u.email,
+                createdAt: u.createdAt
+            })),
+            message: `Found ${recentActivities.length} activities and ${allUsers.length} users`
         });
 
     } catch (error) {
-        console.error('❌ Aggregation error:', error);
+        console.error('Debug error:', error);
         res.status(500).json({ error: error.message });
     }
 });
-
-
 
 
 
@@ -9056,6 +8918,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
