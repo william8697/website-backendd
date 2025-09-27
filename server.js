@@ -8536,7 +8536,9 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Admin Activity Log Endpoint - ADD THIS TO YOUR server.js
+
+
+// Admin Activity Tracking Endpoint
 app.get('/api/admin/activity', adminProtect, restrictTo('super', 'support'), async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
@@ -8544,15 +8546,7 @@ app.get('/api/admin/activity', adminProtect, restrictTo('super', 'support'), asy
         const skip = (page - 1) * limit;
 
         // Get filter parameters
-        const { 
-            userId, 
-            action, 
-            status, 
-            startDate, 
-            endDate,
-            ipAddress,
-            userAgent 
-        } = req.query;
+        const { userId, action, status, startDate, endDate } = req.query;
 
         // Build query
         const query = {};
@@ -8569,15 +8563,6 @@ app.get('/api/admin/activity', adminProtect, restrictTo('super', 'support'), asy
             query.status = status;
         }
         
-        if (ipAddress) {
-            query.ipAddress = { $regex: ipAddress, $options: 'i' };
-        }
-        
-        if (userAgent) {
-            query.userAgent = { $regex: userAgent, $options: 'i' };
-        }
-        
-        // Date range filter
         if (startDate || endDate) {
             query.createdAt = {};
             if (startDate) {
@@ -8588,10 +8573,9 @@ app.get('/api/admin/activity', adminProtect, restrictTo('super', 'support'), asy
             }
         }
 
-        // Get activities with user population
+        // Fetch activities with pagination
         const activities = await UserLog.find(query)
             .populate('user', 'firstName lastName email')
-            .populate('relatedEntity')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
@@ -8612,15 +8596,10 @@ app.get('/api/admin/activity', adminProtect, restrictTo('super', 'support'), asy
             action: activity.action,
             description: getActivityDescription(activity),
             ipAddress: activity.ipAddress,
-            userAgent: activity.userAgent,
-            deviceInfo: activity.deviceInfo,
             location: activity.location,
+            device: activity.deviceInfo,
             status: activity.status,
-            metadata: activity.metadata,
-            relatedEntity: activity.relatedEntity ? {
-                id: activity.relatedEntity._id,
-                type: activity.relatedEntityModel
-            } : null
+            metadata: activity.metadata
         }));
 
         res.status(200).json({
@@ -8628,19 +8607,18 @@ app.get('/api/admin/activity', adminProtect, restrictTo('super', 'support'), asy
             data: {
                 activities: formattedActivities,
                 pagination: {
-                    currentPage: page,
-                    totalPages: Math.ceil(total / limit),
-                    totalItems: total,
-                    itemsPerPage: limit
+                    current: page,
+                    pages: Math.ceil(total / limit),
+                    total: total
                 }
             }
         });
 
     } catch (err) {
-        console.error('Admin activity log error:', err);
+        console.error('Admin activity fetch error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'An error occurred while fetching activity logs'
+            message: 'An error occurred while fetching activity data'
         });
     }
 });
@@ -8665,17 +8643,24 @@ function getActivityDescription(activity) {
         case '2fa_disable':
             return `${user} disabled two-factor authentication`;
         case 'deposit':
-            return `${user} made a deposit of $${activity.metadata?.amount || 'unknown'}`;
+            return `${user} made a deposit of $${activity.metadata?.amount || 'unknown amount'}`;
         case 'withdrawal':
-            return `${user} requested a withdrawal of $${activity.metadata?.amount || 'unknown'}`;
+            return `${user} requested a withdrawal of $${activity.metadata?.amount || 'unknown amount'}`;
         case 'investment':
-            return `${user} created a new investment of $${activity.metadata?.amount || 'unknown'}`;
+            if (activity.metadata?.type === 'created') {
+                return `${user} created a new investment of $${activity.metadata.amount}`;
+            } else if (activity.metadata?.type === 'matured') {
+                return `${user}'s investment matured with $${activity.metadata.profit} profit`;
+            } else if (activity.metadata?.type === 'completed') {
+                return `${user} completed an investment`;
+            }
+            return `${user} performed an investment action`;
         case 'transfer':
             return `${user} transferred funds between accounts`;
         case 'kyc_submission':
             return `${user} submitted KYC documents for verification`;
         case 'settings_change':
-            return `${user} updated their account settings`;
+            return `${user} changed their account settings`;
         case 'api_key_create':
             return `${user} created a new API key`;
         case 'api_key_delete':
@@ -8700,6 +8685,67 @@ function getActivityDescription(activity) {
             return `${user} performed action: ${activity.action}`;
     }
 }
+
+// Enhanced logging function for user activities
+const logUserActivity = async (req, action, status, metadata = {}, user = null) => {
+    try {
+        const deviceInfo = await getUserDeviceInfo(req);
+        
+        const activityData = {
+            user: user ? user._id : (req.user ? req.user._id : null),
+            username: user ? `${user.firstName} ${user.lastName}` : 'Unknown User',
+            email: user ? user.email : 'unknown@example.com',
+            action: action,
+            ipAddress: deviceInfo.ip,
+            userAgent: req.headers['user-agent'],
+            deviceInfo: {
+                type: getDeviceType(req),
+                os: getOSFromUserAgent(req.headers['user-agent']),
+                browser: getBrowserFromUserAgent(req.headers['user-agent'])
+            },
+            location: deviceInfo.location,
+            status: status,
+            metadata: metadata
+        };
+
+        await UserLog.create(activityData);
+        
+    } catch (err) {
+        console.error('Error logging user activity:', err);
+    }
+};
+
+// Helper functions for device detection
+function getDeviceType(req) {
+    const userAgent = req.headers['user-agent'] || '';
+    if (/mobile/i.test(userAgent)) {
+        return 'mobile';
+    } else if (/tablet/i.test(userAgent)) {
+        return 'tablet';
+    } else {
+        return 'desktop';
+    }
+}
+
+function getOSFromUserAgent(userAgent) {
+    if (/windows/i.test(userAgent)) return 'Windows';
+    if (/macintosh|mac os x/i.test(userAgent)) return 'macOS';
+    if (/linux/i.test(userAgent)) return 'Linux';
+    if (/android/i.test(userAgent)) return 'Android';
+    if (/ios|iphone|ipad|ipod/i.test(userAgent)) return 'iOS';
+    return 'Unknown';
+}
+
+function getBrowserFromUserAgent(userAgent) {
+    if (/chrome/i.test(userAgent)) return 'Chrome';
+    if (/firefox/i.test(userAgent)) return 'Firefox';
+    if (/safari/i.test(userAgent)) return 'Safari';
+    if (/edge/i.test(userAgent)) return 'Edge';
+    if (/opera/i.test(userAgent)) return 'Opera';
+    return 'Unknown';
+}
+
+
 
 
 
@@ -8833,4 +8879,5 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
