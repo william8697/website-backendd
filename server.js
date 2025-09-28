@@ -1771,12 +1771,8 @@ module.exports = {
   Loan,
   KYC,
   SystemLog,
-  NewsletterSubscriber,
   Card,
-  SupportTicket,
-   ChatMessage,
  UserLog,
-  ChatConversation,
   setupWebSocketServer
 };
 
@@ -9065,6 +9061,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
