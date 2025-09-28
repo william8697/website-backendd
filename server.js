@@ -3877,44 +3877,35 @@ app.post('/api/investments', protect, [
 
 
 
-// Investment completion endpoint - moves funds from active to matured
 app.post('/api/investments/:id/complete', protect, async (req, res) => {
   try {
     const investmentId = req.params.id;
     const userId = req.user._id;
 
-    // Find the investment - removed status filter to handle already completed investments
+    // Find the investment with more comprehensive query
     const investment = await Investment.findOne({ 
       _id: investmentId, 
-      user: userId
+      user: userId,
+      status: 'active' 
     }).populate('plan');
     
     if (!investment) {
       return res.status(404).json({
         status: 'fail',
-        message: 'Investment not found'
+        message: 'Active investment not found'
       });
     }
 
-    // Check if investment is already completed
-    if (investment.status === 'completed') {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Investment has already been completed'
-      });
-    }
-
-    // Check if investment has actually matured (with a small buffer to avoid timing issues)
-    const currentDate = new Date();
-    const maturityBuffer = 5 * 60 * 1000; // 5 minute buffer
-    if (currentDate < new Date(investment.endDate.getTime() - maturityBuffer)) {
+    // Enhanced completion check - ensure investment has actually matured
+    const now = new Date();
+    if (now < investment.endDate) {
       return res.status(400).json({
         status: 'fail',
         message: 'Investment has not matured yet'
       });
     }
 
-    // Find the user
+    // Find the user with proper session handling
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
@@ -3923,7 +3914,10 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       });
     }
 
-    // Verify the investment amount exists in active balance
+    // Calculate total return (principal + profit) - based on amount after fee
+    const totalReturn = investment.expectedReturn;
+
+    // Enhanced balance transfer with validation
     if (user.balances.active < investment.amount) {
       return res.status(400).json({
         status: 'fail',
@@ -3931,64 +3925,78 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       });
     }
 
-    // Calculate total return (principal + profit) - based on amount after fee
-    const totalReturn = investment.expectedReturn;
+    // Use transaction to ensure atomic operation
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    // Transfer from active to matured balance with validation
-    user.balances.active = Number((user.balances.active - investment.amount).toFixed(2));
-    user.balances.matured = Number((user.balances.matured + totalReturn).toFixed(2));
-    
-    // Update investment status with comprehensive completion data
-    investment.status = 'completed';
-    investment.completionDate = new Date();
-    investment.actualReturn = totalReturn - investment.amount;
-    investment.isProcessed = true; // Additional flag to prevent reprocessing
+    try {
+      // Transfer from active to matured balance
+      user.balances.active -= investment.amount;
+      user.balances.matured += totalReturn;
+      
+      // Update investment status with completion details
+      investment.status = 'completed';
+      investment.completionDate = now;
+      investment.actualReturn = totalReturn - investment.amount;
+      investment.isProcessed = true; // Add flag to ensure it's processed
 
-    // Save changes with transaction for data consistency
-    await user.save();
-    await investment.save();
+      // Save changes with session
+      await user.save({ session });
+      await investment.save({ session });
 
-    // Create transaction record for the return
-    const transaction = await Transaction.create({
-      user: userId,
-      type: 'interest',
-      amount: totalReturn - investment.amount,
-      currency: 'USD',
-      status: 'completed',
-      method: 'internal',
-      reference: `RET-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      details: {
-        investmentId: investment._id,
-        planName: investment.plan.name,
-        principal: investment.amount, // Amount after fee
-        interest: totalReturn - investment.amount,
-        originalInvestment: investment.originalAmount, // Original amount for reference
-        investmentFee: investment.investmentFee // Fee already deducted and recorded as revenue
-      },
-      fee: 0,
-      netAmount: totalReturn - investment.amount
-    });
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        investment: {
-          id: investment._id,
-          status: investment.status,
-          completionDate: investment.completionDate,
-          amountReturned: totalReturn,
-          profit: totalReturn - investment.amount, // Profit calculated on amount after fee
-          originalInvestment: investment.originalAmount, // Show original amount for transparency
-          investmentFee: investment.investmentFee // Show fee that was deducted
+      // Create transaction record for the return
+      await Transaction.create([{
+        user: userId,
+        type: 'interest',
+        amount: totalReturn - investment.amount,
+        currency: 'USD',
+        status: 'completed',
+        method: 'internal',
+        reference: `RET-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        details: {
+          investmentId: investment._id,
+          planName: investment.plan.name,
+          principal: investment.amount,
+          interest: totalReturn - investment.amount,
+          originalInvestment: investment.originalAmount,
+          investmentFee: investment.investmentFee
         },
-        balances: {
-          active: user.balances.active,
-          matured: user.balances.matured
-        }
-      }
-    });
+        fee: 0,
+        netAmount: totalReturn - investment.amount
+      }], { session });
 
-    await logActivity('complete_investment', 'investment', investment._id, userId, 'User', req);
+      // Commit transaction
+      await session.commitTransaction();
+      
+      res.status(200).json({
+        status: 'success',
+        data: {
+          investment: {
+            id: investment._id,
+            status: investment.status,
+            completionDate: investment.completionDate,
+            amountReturned: totalReturn,
+            profit: totalReturn - investment.amount,
+            originalInvestment: investment.originalAmount,
+            investmentFee: investment.investmentFee
+          },
+          balances: {
+            active: user.balances.active,
+            matured: user.balances.matured
+          }
+        }
+      });
+
+      await logActivity('complete_investment', 'investment', investment._id, userId, 'User', req);
+
+    } catch (transactionError) {
+      // Rollback transaction on error
+      await session.abortTransaction();
+      throw transactionError;
+    } finally {
+      session.endSession();
+    }
+
   } catch (err) {
     console.error('Complete investment error:', err);
     res.status(500).json({
@@ -3997,7 +4005,6 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
     });
   }
 });
-
 
 
 
@@ -8686,6 +8693,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
