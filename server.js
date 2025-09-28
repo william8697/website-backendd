@@ -8673,110 +8673,69 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Admin Activity Endpoint - FIXED VERSION
+// Fixed Admin Activity Endpoint - Properly mapped user names and IP addresses
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
   try {
     const { page = 1, limit = 10, type = 'all' } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    let activities = [];
-    let totalCount = 0;
-
-    // Build query based on type
-    let query = {};
-    if (type !== 'all') {
-      query.action = type;
-    }
-
-    // Get user logs with proper population
-    const userLogs = await UserLog.find(query)
+    // Get user logs with proper population and data mapping
+    const userLogs = await UserLog.find({})
       .populate('user', 'firstName lastName email')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
       .lean();
 
-    totalCount = await UserLog.countDocuments(query);
+    const totalCount = await UserLog.countDocuments();
 
-    // Transform activities with proper error handling
-    activities = userLogs.map(log => {
-      // Safely handle user data to avoid "undefined undefined" errors
-      let userName = 'Unknown User';
-      let userEmail = 'Unknown Email';
-      
-      if (log.user) {
+    // Transform activities with proper user name and IP address mapping
+    const activities = userLogs.map(log => {
+      // Get user name - FIXED VERSION
+      let userName = 'System';
+      if (log.user && log.user._id) {
+        // User is populated properly
         userName = `${log.user.firstName || ''} ${log.user.lastName || ''}`.trim();
-        userEmail = log.user.email || 'Unknown Email';
-      } else if (log.username) {
-        userName = log.username;
       } else if (log.userFullName) {
+        // Use userFullName from log
         userName = log.userFullName;
+      } else if (log.username) {
+        // Use username from log
+        userName = log.username;
       }
-      
-      // If we still have an empty name after all checks
-      if (!userName || userName === ' ') {
-        userName = 'Unknown User';
+
+      // Get IP address - FIXED VERSION
+      let ipAddress = 'Unknown';
+      if (log.ipAddress) {
+        ipAddress = log.ipAddress;
+      } else if (log.location && log.location.ip) {
+        ipAddress = log.location.ip;
+      }
+
+      // Get user email
+      let userEmail = 'system';
+      if (log.user && log.user.email) {
+        userEmail = log.user.email;
+      } else if (log.email) {
+        userEmail = log.email;
       }
 
       return {
         id: log._id,
         timestamp: log.createdAt,
         user: {
-          id: log.user?._id || log.user || 'unknown',
+          id: log.user?._id || log.user || 'system',
           name: userName,
           email: userEmail
         },
         action: log.action,
         description: getActivityDescription(log.action, log.metadata),
-        ipAddress: log.ipAddress || 'Unknown',
+        ipAddress: ipAddress, // This maps to "IP Address" column
         status: log.status || 'success',
         type: 'user_activity',
         metadata: log.metadata || {}
       };
     });
-
-    // If no user logs found, get system logs as fallback
-    if (activities.length === 0) {
-      const systemLogs = await SystemLog.find({})
-        .populate('performedBy')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean();
-
-      totalCount = await SystemLog.countDocuments();
-
-      activities = systemLogs.map(log => {
-        let performerName = 'System';
-        let performerEmail = 'system';
-        
-        if (log.performedBy) {
-          if (log.performedByModel === 'User') {
-            performerName = `${log.performedBy.firstName || ''} ${log.performedBy.lastName || ''}`.trim();
-            performerEmail = log.performedBy.email || 'user@system';
-          } else if (log.performedByModel === 'Admin') {
-            performerName = log.performedBy.name || 'Admin';
-            performerEmail = log.performedBy.email || 'admin@system';
-          }
-        }
-
-        return {
-          id: log._id,
-          timestamp: log.createdAt,
-          user: {
-            id: log.performedBy?._id || 'system',
-            name: performerName,
-            email: performerEmail
-          },
-          action: log.action,
-          description: getActivityDescription(log.action, log.changes),
-          ipAddress: log.ip || 'Unknown',
-          status: 'success',
-          type: 'system_activity',
-          metadata: log.changes || {}
-        };
-      });
-    }
 
     res.status(200).json({
       status: 'success',
@@ -8858,7 +8817,8 @@ function getActivityDescription(action, metadata) {
     'approve-withdrawal': 'Approved withdrawal',
     'reject-withdrawal': 'Rejected withdrawal',
     'create-user': 'Created user account',
-    'update-user': 'Updated user account'
+    'update-user': 'Updated user account',
+    'verify-admin': 'Admin session verified'
   };
 
   let description = actionMap[action] || `Performed ${action.replace(/_/g, ' ')}`;
@@ -8884,50 +8844,6 @@ function getActivityDescription(action, metadata) {
 
   return description;
 }
-
-// Additional endpoint to get activity statistics (for badges)
-app.get('/api/admin/activity/stats', adminProtect, async (req, res) => {
-  try {
-    // Get counts for different activity types
-    const [
-      totalUsers,
-      pendingDeposits,
-      pendingWithdrawals,
-      newUsersToday,
-      totalActivities
-    ] = await Promise.all([
-      User.countDocuments(),
-      Transaction.countDocuments({ type: 'deposit', status: 'pending' }),
-      Transaction.countDocuments({ type: 'withdrawal', status: 'pending' }),
-      User.countDocuments({ 
-        createdAt: { 
-          $gte: new Date(new Date().setHours(0, 0, 0, 0)) 
-        } 
-      }),
-      UserLog.countDocuments()
-    ]);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        totalUsers,
-        pendingDeposits,
-        pendingWithdrawals,
-        newUsersToday,
-        totalActivities,
-        lastUpdated: new Date().toISOString()
-      }
-    });
-
-  } catch (err) {
-    console.error('Activity stats error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch activity statistics'
-    });
-  }
-});
-
 
 
 
@@ -9068,3 +8984,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
