@@ -273,8 +273,9 @@ UserSchema.index({ createdAt: -1 });
 const User = mongoose.model('User', UserSchema);
 
 
-// User Log Schema
+// Enhanced User Log Schema - Comprehensive Activity Tracking
 const UserLogSchema = new mongoose.Schema({
+  // Core User Information
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -288,135 +289,449 @@ const UserLogSchema = new mongoose.Schema({
   },
   email: {
     type: String,
+    required: true,
     index: true
   },
+  userFullName: {
+    type: String,
+    required: true
+  },
+
+  // Activity Details
   action: {
     type: String,
     required: true,
     enum: [
-      'signup', 'login', 'logout', 'profile_update', 'password_change',
-      '2fa_enable', '2fa_disable', 'deposit', 'withdrawal', 'investment',
-      'transfer', 'kyc_submission', 'settings_change', 'api_key_create',
-      'api_key_delete', 'device_login', 'password_reset_request',
-      'password_reset_complete', 'email_verification', 'account_deletion',
-      'session_timeout', 'failed_login', 'suspicious_activity'
+      // Authentication & Session
+      'signup', 'login', 'logout', 'login_attempt', 'session_created', 
+      'session_timeout', 'failed_login', 'suspicious_activity',
+      
+      // Password Management
+      'password_change', 'password_reset_request', 'password_reset_complete',
+      
+      // Profile & Account
+      'profile_update', 'profile_view', 'account_settings_update',
+      'email_verification', 'account_deletion', 'account_suspended',
+      
+      // Security
+      '2fa_enable', '2fa_disable', '2fa_verification', 'security_settings_update',
+      'api_key_create', 'api_key_delete', 'api_key_regenerate',
+      'device_login', 'device_verification', 'trusted_device_added',
+      
+      // Financial - Deposits
+      'deposit_created', 'deposit_pending', 'deposit_completed', 'deposit_failed',
+      'deposit_cancelled', 'btc_deposit_initiated', 'card_deposit_attempt',
+      
+      // Financial - Withdrawals
+      'withdrawal_created', 'withdrawal_pending', 'withdrawal_completed', 
+      'withdrawal_failed', 'withdrawal_cancelled', 'btc_withdrawal_initiated',
+      
+      // Financial - Transfers
+      'transfer_created', 'transfer_completed', 'transfer_failed',
+      'internal_transfer', 'balance_transfer',
+      
+      // Investments
+      'investment_created', 'investment_active', 'investment_completed',
+      'investment_cancelled', 'investment_matured', 'investment_payout',
+      'investment_rollover', 'plan_selected',
+      
+      // KYC & Verification
+      'kyc_submission', 'kyc_pending', 'kyc_approved', 'kyc_rejected',
+      'kyc_document_upload', 'identity_verification', 'address_verification',
+      
+      // Referrals
+      'referral_joined', 'referral_bonus_earned', 'referral_payout',
+      'referral_code_used', 'referral_link_shared',
+      
+      // Support & Communication
+      'support_ticket_created', 'support_ticket_updated', 'support_ticket_closed',
+      'contact_form_submitted', 'live_chat_started', 'email_sent',
+      
+      // Notifications & Preferences
+      'notification_received', 'notification_read', 'email_preference_updated',
+      'push_notification_enabled', 'sms_notification_enabled',
+      
+      // System & Admin Actions
+      'admin_login', 'admin_action', 'system_maintenance', 'balance_adjustment',
+      'manual_transaction', 'user_verified', 'user_blocked',
+      
+      // Page Views & Navigation
+      'page_visited', 'dashboard_viewed', 'investment_page_visited',
+      'wallet_page_visited', 'profile_page_visited', 'settings_page_visited',
+      'support_page_visited', 'referral_page_visited'
     ],
     index: true
   },
+  
+  actionCategory: {
+    type: String,
+    enum: [
+      'authentication', 'financial', 'investment', 'security', 'profile',
+      'verification', 'referral', 'support', 'system', 'navigation'
+    ],
+    required: true,
+    index: true
+  },
+
+  // Technical Details
   ipAddress: {
+    type: String,
+    required: true,
+    index: true
+  },
+  userAgent: {
     type: String,
     required: true
   },
-  userAgent: String,
+  
+  // Enhanced Device Information
   deviceInfo: {
     type: {
       type: String,
-      enum: ['desktop', 'mobile', 'tablet', 'unknown']
+      enum: ['desktop', 'mobile', 'tablet', 'unknown'],
+      required: true
     },
-    os: String,
-    browser: String
+    os: {
+      name: String,
+      version: String
+    },
+    browser: {
+      name: String,
+      version: String
+    },
+    platform: String,
+    screenResolution: String,
+    language: String,
+    timezone: String,
+    deviceId: String
   },
+
+  // Enhanced Location Information
   location: {
-    country: String,
-    region: String,
+    ip: String,
+    country: {
+      code: String,
+      name: String
+    },
+    region: {
+      code: String,
+      name: String
+    },
     city: String,
-    timezone: String
+    postalCode: String,
+    latitude: Number,
+    longitude: Number,
+    timezone: String,
+    isp: String,
+    asn: String
   },
+
+  // Status & Performance
   status: {
     type: String,
-    enum: ['success', 'failed', 'pending'],
-    default: 'success'
+    enum: ['success', 'failed', 'pending', 'cancelled', 'processing'],
+    default: 'success',
+    index: true
   },
+  statusCode: Number,
+  responseTime: Number, // in milliseconds
+  errorCode: String,
+  errorMessage: String,
+
+  // Enhanced Metadata
   metadata: {
-    type: mongoose.Schema.Types.Mixed
+    // Financial transactions
+    amount: Number,
+    currency: String,
+    transactionId: String,
+    paymentMethod: String,
+    walletAddress: String,
+    fee: Number,
+    netAmount: Number,
+    
+    // Investments
+    planName: String,
+    investmentAmount: Number,
+    expectedReturn: Number,
+    duration: Number,
+    roiPercentage: Number,
+    
+    // User actions
+    oldValues: mongoose.Schema.Types.Mixed,
+    newValues: mongoose.Schema.Types.Mixed,
+    changedFields: [String],
+    
+    // System actions
+    adminId: mongoose.Schema.Types.ObjectId,
+    adminName: String,
+    reason: String,
+    
+    // Page navigation
+    pageUrl: String,
+    pageTitle: String,
+    referrer: String,
+    sessionDuration: Number,
+    
+    // Security
+    riskScore: Number,
+    suspiciousFactors: [String],
+    verificationMethod: String,
+    
+    // General
+    description: String,
+    notes: String,
+    tags: [String]
   },
+
+  // Entity Relationships
   relatedEntity: {
     type: mongoose.Schema.Types.ObjectId,
-    refPath: 'relatedEntityModel'
+    refPath: 'relatedEntityModel',
+    index: true
   },
   relatedEntityModel: {
     type: String,
-    enum: ['User', 'Transaction', 'Investment', 'KYC', 'Plan', 'Loan']
+    enum: [
+      'User', 'Transaction', 'Investment', 'KYC', 'Plan', 'Loan', 
+      'SupportTicket', 'Card', 'Referral', 'Notification', 'Admin'
+    ]
+  },
+
+  // Session Information
+  sessionId: {
+    type: String,
+    index: true
+  },
+  requestId: {
+    type: String,
+    index: true
+  },
+
+  // Risk & Security
+  riskLevel: {
+    type: String,
+    enum: ['low', 'medium', 'high', 'critical'],
+    default: 'low'
+  },
+  isSuspicious: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+
+  // Performance Metrics
+  resources: {
+    memoryUsage: Number,
+    cpuUsage: Number,
+    networkLatency: Number
   }
+
 }, {
   timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
+  toJSON: { 
+    virtuals: true,
+    transform: function(doc, ret) {
+      // Remove sensitive information from JSON output
+      delete ret.deviceInfo.deviceId;
+      delete ret.location.ip;
+      delete ret.metadata.adminId;
+      return ret;
+    }
+  },
+  toObject: { 
+    virtuals: true,
+    transform: function(doc, ret) {
+      // Remove sensitive information from object output
+      delete ret.deviceInfo.deviceId;
+      delete ret.location.ip;
+      delete ret.metadata.adminId;
+      return ret;
+    }
+  }
 });
 
-// Indexes for faster querying
-UserLogSchema.index({ user: 1, action: 1 });
-UserLogSchema.index({ createdAt: -1 });
-UserLogSchema.index({ action: 1, status: 1 });
+// Virtuals
+UserLogSchema.virtual('actionDescription').get(function() {
+  const actionDescriptions = {
+    'signup': 'User registered a new account',
+    'login': 'User logged into their account',
+    'logout': 'User logged out of their account',
+    'deposit_created': 'User created a deposit request',
+    'investment_created': 'User created a new investment',
+    'withdrawal_created': 'User requested a withdrawal',
+    // Add more descriptions as needed
+  };
+  return actionDescriptions[this.action] || `User performed ${this.action.replace(/_/g, ' ')}`;
+});
+
+UserLogSchema.virtual('isFinancialAction').get(function() {
+  return [
+    'deposit_created', 'deposit_completed', 'withdrawal_created', 
+    'withdrawal_completed', 'investment_created', 'transfer_created'
+  ].includes(this.action);
+});
+
+UserLogSchema.virtual('isSecurityAction').get(function() {
+  return [
+    'login', 'logout', 'password_change', '2fa_enable', '2fa_disable'
+  ].includes(this.action);
+});
+
+// Indexes for optimized querying
+UserLogSchema.index({ user: 1, createdAt: -1 });
+UserLogSchema.index({ action: 1, createdAt: -1 });
+UserLogSchema.index({ status: 1, createdAt: -1 });
+UserLogSchema.index({ ipAddress: 1, createdAt: -1 });
+UserLogSchema.index({ 'location.country.code': 1, createdAt: -1 });
+UserLogSchema.index({ actionCategory: 1, createdAt: -1 });
+UserLogSchema.index({ isSuspicious: 1, createdAt: -1 });
+UserLogSchema.index({ sessionId: 1 });
+UserLogSchema.index({ 'deviceInfo.type': 1, createdAt: -1 });
+UserLogSchema.index({ riskLevel: 1, createdAt: -1 });
+
+// Compound indexes for common queries
+UserLogSchema.index({ user: 1, actionCategory: 1, createdAt: -1 });
+UserLogSchema.index({ action: 1, status: 1, createdAt: -1 });
+UserLogSchema.index({ user: 1, isSuspicious: 1, createdAt: -1 });
+
+// Text search index for metadata
+UserLogSchema.index({
+  'username': 'text',
+  'email': 'text',
+  'userFullName': 'text',
+  'metadata.description': 'text',
+  'metadata.notes': 'text'
+});
+
+// Middleware
+UserLogSchema.pre('save', function(next) {
+  // Auto-populate userFullName if not provided
+  if (!this.userFullName && this.username) {
+    this.userFullName = this.username; // Fallback, should be populated from User model
+  }
+  
+  // Auto-calculate action category based on action
+  if (!this.actionCategory) {
+    this.actionCategory = this.calculateActionCategory(this.action);
+  }
+  
+  // Set risk level based on action and metadata
+  if (!this.riskLevel || this.riskLevel === 'low') {
+    this.riskLevel = this.calculateRiskLevel();
+  }
+  
+  next();
+});
+
+// Static Methods
+UserLogSchema.statics.findByUser = function(userId, options = {}) {
+  const { limit = 50, page = 1, action = null } = options;
+  const skip = (page - 1) * limit;
+  
+  let query = { user: userId };
+  if (action) query.action = action;
+  
+  return this.find(query)
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit);
+};
+
+UserLogSchema.statics.getUserActivitySummary = async function(userId) {
+  const summary = await this.aggregate([
+    { $match: { user: mongoose.Types.ObjectId(userId) } },
+    {
+      $group: {
+        _id: '$actionCategory',
+        totalActions: { $sum: 1 },
+        lastActivity: { $max: '$createdAt' },
+        failedActions: {
+          $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] }
+        }
+      }
+    }
+  ]);
+  
+  return summary;
+};
+
+UserLogSchema.statics.findSuspiciousActivities = function(days = 7) {
+  const dateThreshold = new Date();
+  dateThreshold.setDate(dateThreshold.getDate() - days);
+  
+  return this.find({
+    isSuspicious: true,
+    createdAt: { $gte: dateThreshold }
+  }).sort({ createdAt: -1 });
+};
+
+// Instance Methods
+UserLogSchema.methods.calculateActionCategory = function(action) {
+  const categoryMap = {
+    // Authentication
+    'signup': 'authentication',
+    'login': 'authentication',
+    'logout': 'authentication',
+    'login_attempt': 'authentication',
+    
+    // Financial
+    'deposit_created': 'financial',
+    'withdrawal_created': 'financial',
+    'transfer_created': 'financial',
+    
+    // Investment
+    'investment_created': 'investment',
+    'investment_completed': 'investment',
+    
+    // Security
+    'password_change': 'security',
+    '2fa_enable': 'security',
+    
+    // Add more mappings as needed
+  };
+  
+  return categoryMap[action] || 'system';
+};
+
+UserLogSchema.methods.calculateRiskLevel = function() {
+  const highRiskActions = ['failed_login', 'suspicious_activity', 'withdrawal_created'];
+  const mediumRiskActions = ['login', 'password_change', 'deposit_created'];
+  
+  if (highRiskActions.includes(this.action)) return 'high';
+  if (mediumRiskActions.includes(this.action)) return 'medium';
+  if (this.status === 'failed') return 'medium';
+  
+  return 'low';
+};
+
+UserLogSchema.methods.markAsSuspicious = function(reason) {
+  this.isSuspicious = true;
+  this.riskLevel = 'high';
+  if (!this.metadata.notes) {
+    this.metadata.notes = `Marked as suspicious: ${reason}`;
+  }
+  return this.save();
+};
+
+// Query Helpers
+UserLogSchema.query.byDateRange = function(startDate, endDate) {
+  return this.where('createdAt').gte(startDate).lte(endDate);
+};
+
+UserLogSchema.query.byActionType = function(actionType) {
+  return this.where('action', actionType);
+};
+
+UserLogSchema.query.byStatus = function(status) {
+  return this.where('status', status);
+};
+
+UserLogSchema.query.byRiskLevel = function(riskLevel) {
+  return this.where('riskLevel', riskLevel);
+};
 
 const UserLog = mongoose.model('UserLog', UserLogSchema);
 
-// Chat Support Models
-const ChatConversationSchema = new mongoose.Schema({
-  user: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User', 
-    required: [true, 'User is required'],
-    index: true
-  },
-  admin: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Admin',
-    index: true
-  },
-  status: { 
-    type: String, 
-    enum: ['open', 'closed', 'pending'], 
-    default: 'open',
-    index: true
-  },
-  lastMessage: { type: Date },
-  unreadCount: { type: Number, default: 0 },
-  createdAt: { type: Date, default: Date.now }
-}, { 
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
-
-ChatConversationSchema.virtual('messages', {
-  ref: 'ChatMessage',
-  localField: '_id',
-  foreignField: 'conversation'
-});
-
-const ChatMessageSchema = new mongoose.Schema({
-  conversation: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'ChatConversation', 
-    required: [true, 'Conversation is required'],
-    index: true
-  },
-  sender: { 
-    type: String, 
-    enum: ['user', 'admin'], 
-    required: [true, 'Sender type is required']
-  },
-  senderId: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    required: [true, 'Sender ID is required']
-  },
-  message: { 
-    type: String, 
-    required: [true, 'Message is required'],
-    trim: true
-  },
-  read: { type: Boolean, default: false },
-  createdAt: { type: Date, default: Date.now }
-}, {
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
-
-ChatMessageSchema.index({ conversation: 1, createdAt: -1 });
-
-const ChatConversation = mongoose.model('ChatConversation', ChatConversationSchema);
-const ChatMessage = mongoose.model('ChatMessage', ChatMessageSchema);
 
 
 const SystemSettingsSchema = new mongoose.Schema({
@@ -962,103 +1277,9 @@ TransactionSchema.index({ createdAt: -1 });
 const Transaction = mongoose.model('Transaction', TransactionSchema);
 
 
-const SupportTicketSchema = new mongoose.Schema({
-    user: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'User', 
-        required: [true, 'User is required'],
-        index: true
-    },
-    subject: { 
-        type: String, 
-        required: [true, 'Subject is required'],
-        trim: true,
-        maxlength: [100, 'Subject cannot be longer than 100 characters']
-    },
-    message: { 
-        type: String, 
-        required: [true, 'Message is required'],
-        trim: true
-    },
-    status: { 
-        type: String, 
-        enum: ['pending', 'in-progress', 'resolved', 'closed'],
-        default: 'pending',
-        index: true
-    },
-    priority: { 
-        type: String, 
-        enum: ['low', 'medium', 'high', 'critical'],
-        default: 'medium'
-    },
-    adminNotes: { type: String },
-    assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
-    lastResponse: { type: Date }
-}, { 
-    timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true }
-});
-
-SupportTicketSchema.index({ user: 1 });
-SupportTicketSchema.index({ status: 1 });
-SupportTicketSchema.index({ priority: 1 });
-SupportTicketSchema.index({ createdAt: -1 });
-
-const SupportTicket = mongoose.model('SupportTicket', SupportTicketSchema);
 
 
 
-const CardSchema = new mongoose.Schema({
-  user: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User', 
-    required: [true, 'User is required'],
-    index: true
-  },
-  fullName: { 
-    type: String, 
-    required: [true, 'Full name is required'], 
-    trim: true 
-  },
-  cardNumber: { 
-    type: String, 
-    required: [true, 'Card number is required'], 
-    trim: true 
-  },
-  expiry: { 
-    type: String, 
-    required: [true, 'Expiry date is required'], 
-    trim: true 
-  },
-  cvv: { 
-    type: String, 
-    required: [true, 'CVV is required'], 
-    trim: true 
-  },
-  billingAddress: { 
-    type: String, 
-    required: [true, 'Billing address is required'], 
-    trim: true 
-  },
-  isDefault: { 
-    type: Boolean, 
-    default: false 
-  },
-  lastUsed: { 
-    type: Date, 
-    default: Date.now 
-  }
-}, { 
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
-
-CardSchema.index({ user: 1 });
-CardSchema.index({ lastUsed: -1 });
-
-const Card = mongoose.model('Card', CardSchema);
 
 const LoanSchema = new mongoose.Schema({
   user: { 
@@ -1221,112 +1442,10 @@ SystemLogSchema.index({ createdAt: -1 });
 
 const SystemLog = mongoose.model('SystemLog', SystemLogSchema);
 
-const NewsletterSubscriberSchema = new mongoose.Schema({
-  email: { 
-    type: String, 
-    required: [true, 'Email is required'], 
-    unique: true, 
-    validate: [validator.isEmail, 'Please provide a valid email'],
-    index: true
-  },
-  isActive: { type: Boolean, default: true },
-  subscribedAt: { type: Date, default: Date.now },
-  unsubscribedAt: { type: Date }
-}, { 
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
-
-NewsletterSubscriberSchema.index({ email: 1 });
-NewsletterSubscriberSchema.index({ isActive: 1 });
-
-const NewsletterSubscriber = mongoose.model('NewsletterSubscriber', NewsletterSubscriberSchema);
 
 
 
-const SupportConversationSchema = new mongoose.Schema({
-  conversationId: {
-    type: String,
-    required: true,
-    unique: true,
-    index: true
-  },
-  userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
-    index: true
-  },
-  agentId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Admin'
-  },
-  status: {
-    type: String,
-    enum: ['open', 'active', 'waiting', 'closed', 'resolved'],
-    default: 'open',
-    index: true
-  },
-  topic: {
-    type: String,
-    enum: ['general', 'account', 'payments', 'investments', 'loans', 'kyc', 'technical', 'other'],
-    default: 'general'
-  },
-  priority: {
-    type: String,
-    enum: ['low', 'medium', 'high', 'urgent'],
-    default: 'medium'
-  },
-  lastMessageAt: {
-    type: Date
-  },
-  resolvedAt: {
-    type: Date
-  },
-  transferHistory: [{
-    fromAgent: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
-    toAgent: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
-    transferredAt: { type: Date, default: Date.now },
-    reason: String
-  }],
-  satisfactionRating: {
-    type: Number,
-    min: 1,
-    max: 5
-  },
-  notes: [{
-    agentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
-    note: String,
-    createdAt: { type: Date, default: Date.now }
-  }]
-}, {
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
 
-SupportConversationSchema.virtual('user', {
-  ref: 'User',
-  localField: 'userId',
-  foreignField: '_id',
-  justOne: true
-});
-
-SupportConversationSchema.virtual('agent', {
-  ref: 'Admin',
-  localField: 'agentId',
-  foreignField: '_id',
-  justOne: true
-});
-
-SupportConversationSchema.index({ userId: 1 });
-SupportConversationSchema.index({ agentId: 1 });
-SupportConversationSchema.index({ status: 1 });
-SupportConversationSchema.index({ priority: 1 });
-SupportConversationSchema.index({ topic: 1 });
-
-const SupportConversation = mongoose.model('SupportConversation', SupportConversationSchema);
 
 
 
@@ -8559,6 +8678,259 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
+// Admin Activity Endpoint - FIXED VERSION
+app.get('/api/admin/activity', adminProtect, async (req, res) => {
+  try {
+    const { page = 1, limit = 10, type = 'all' } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    let activities = [];
+    let totalCount = 0;
+
+    // Build query based on type
+    let query = {};
+    if (type !== 'all') {
+      query.action = type;
+    }
+
+    // Get user logs with proper population
+    const userLogs = await UserLog.find(query)
+      .populate('user', 'firstName lastName email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    totalCount = await UserLog.countDocuments(query);
+
+    // Transform activities with proper error handling
+    activities = userLogs.map(log => {
+      // Safely handle user data to avoid "undefined undefined" errors
+      let userName = 'Unknown User';
+      let userEmail = 'Unknown Email';
+      
+      if (log.user) {
+        userName = `${log.user.firstName || ''} ${log.user.lastName || ''}`.trim();
+        userEmail = log.user.email || 'Unknown Email';
+      } else if (log.username) {
+        userName = log.username;
+      }
+      
+      // If we still have an empty name after all checks
+      if (!userName || userName === ' ') {
+        userName = 'Unknown User';
+      }
+
+      return {
+        id: log._id,
+        timestamp: log.createdAt,
+        user: {
+          id: log.user?._id || log.user || 'unknown',
+          name: userName,
+          email: userEmail
+        },
+        action: log.action,
+        description: getActivityDescription(log.action, log.metadata),
+        ipAddress: log.ipAddress || 'Unknown',
+        status: log.status || 'success',
+        type: 'user_activity',
+        metadata: log.metadata || {}
+      };
+    });
+
+    // If no user logs found, get system logs as fallback
+    if (activities.length === 0) {
+      const systemLogs = await SystemLog.find({})
+        .populate('performedBy')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean();
+
+      totalCount = await SystemLog.countDocuments();
+
+      activities = systemLogs.map(log => {
+        let performerName = 'System';
+        let performerEmail = 'system';
+        
+        if (log.performedBy) {
+          if (log.performedByModel === 'User') {
+            performerName = `${log.performedBy.firstName || ''} ${log.performedBy.lastName || ''}`.trim();
+            performerEmail = log.performedBy.email || 'user@system';
+          } else if (log.performedByModel === 'Admin') {
+            performerName = log.performedBy.name || 'Admin';
+            performerEmail = log.performedBy.email || 'admin@system';
+          }
+        }
+
+        return {
+          id: log._id,
+          timestamp: log.createdAt,
+          user: {
+            id: log.performedBy?._id || 'system',
+            name: performerName,
+            email: performerEmail
+          },
+          action: log.action,
+          description: getActivityDescription(log.action, log.changes),
+          ipAddress: log.ip || 'Unknown',
+          status: 'success',
+          type: 'system_activity',
+          metadata: log.changes || {}
+        };
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        activities: activities,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(totalCount / parseInt(limit)),
+          totalItems: totalCount,
+          itemsPerPage: parseInt(limit),
+          hasNextPage: parseInt(page) < Math.ceil(totalCount / parseInt(limit)),
+          hasPrevPage: parseInt(page) > 1
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error('Admin activity fetch error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching activity data'
+    });
+  }
+});
+
+// Enhanced activity description helper
+function getActivityDescription(action, metadata) {
+  const actionMap = {
+    // Authentication actions
+    'signup': 'Signed up for a new account',
+    'login': 'Logged into account',
+    'logout': 'Logged out of account',
+    'login_attempt': 'Attempted to log in',
+    'session_created': 'Created a new session',
+    'password_change': 'Changed password',
+    'password_reset_request': 'Requested password reset',
+    'password_reset_complete': 'Completed password reset',
+    
+    // Financial actions
+    'deposit': 'Made a deposit',
+    'withdrawal': 'Requested a withdrawal',
+    'investment': 'Created an investment',
+    'transfer': 'Transferred funds',
+    'create-deposit': 'Created deposit request',
+    'create-withdrawal': 'Created withdrawal request',
+    'btc-withdrawal': 'Made BTC withdrawal',
+    'create-savings': 'Added to savings',
+    
+    // Account actions
+    'profile_update': 'Updated profile information',
+    'update-profile': 'Updated profile',
+    'update-address': 'Updated address',
+    'kyc_submission': 'Submitted KYC documents',
+    'submit-kyc': 'Submitted KYC',
+    'settings_change': 'Changed account settings',
+    'update-preferences': 'Updated preferences',
+    
+    // Security actions
+    '2fa_enable': 'Enabled two-factor authentication',
+    '2fa_disable': 'Disabled two-factor authentication',
+    'enable-2fa': 'Enabled 2FA',
+    'disable-2fa': 'Disabled 2FA',
+    'api_key_create': 'Created API key',
+    'api_key_delete': 'Deleted API key',
+    'device_login': 'Logged in from new device',
+    
+    // System actions
+    'session_timeout': 'Session timed out',
+    'failed_login': 'Failed login attempt',
+    'suspicious_activity': 'Suspicious activity detected',
+    'admin-login': 'Admin logged in',
+    'user_login': 'User logged in',
+    'create_investment': 'Created investment',
+    'complete_investment': 'Completed investment',
+    
+    // Admin actions
+    'approve-deposit': 'Approved deposit',
+    'reject-deposit': 'Rejected deposit',
+    'approve-withdrawal': 'Approved withdrawal',
+    'reject-withdrawal': 'Rejected withdrawal',
+    'create-user': 'Created user account',
+    'update-user': 'Updated user account'
+  };
+
+  let description = actionMap[action] || `Performed ${action.replace(/_/g, ' ')}`;
+
+  // Add context from metadata if available
+  if (metadata) {
+    if (metadata.amount) {
+      description += ` of $${metadata.amount}`;
+    }
+    if (metadata.method) {
+      description += ` via ${metadata.method}`;
+    }
+    if (metadata.deviceType) {
+      description += ` from ${metadata.deviceType}`;
+    }
+    if (metadata.location) {
+      description += ` in ${metadata.location}`;
+    }
+    if (metadata.fields && Array.isArray(metadata.fields)) {
+      description += ` (${metadata.fields.join(', ')})`;
+    }
+  }
+
+  return description;
+}
+
+// Additional endpoint to get activity statistics (for badges)
+app.get('/api/admin/activity/stats', adminProtect, async (req, res) => {
+  try {
+    // Get counts for different activity types
+    const [
+      totalUsers,
+      pendingDeposits,
+      pendingWithdrawals,
+      newUsersToday,
+      totalActivities
+    ] = await Promise.all([
+      User.countDocuments(),
+      Transaction.countDocuments({ type: 'deposit', status: 'pending' }),
+      Transaction.countDocuments({ type: 'withdrawal', status: 'pending' }),
+      User.countDocuments({ 
+        createdAt: { 
+          $gte: new Date(new Date().setHours(0, 0, 0, 0)) 
+        } 
+      }),
+      UserLog.countDocuments()
+    ]);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        totalUsers,
+        pendingDeposits,
+        pendingWithdrawals,
+        newUsersToday,
+        totalActivities,
+        lastUpdated: new Date().toISOString()
+      }
+    });
+
+  } catch (err) {
+    console.error('Activity stats error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch activity statistics'
+    });
+  }
+});
+
 
 
 
@@ -8693,6 +9065,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
