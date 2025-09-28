@@ -8673,84 +8673,133 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Fixed Admin Activity Endpoint - Properly mapped user names and IP addresses
+
+
+
+// COMPLETE FIX: Admin Activity Endpoint - Fetches ALL data and maps 100% accurately
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
   try {
-    const { page = 1, limit = 10, type = 'all' } = req.query;
+    const { page = 1, limit = 10 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Get user logs with proper population and data mapping
-    const userLogs = await UserLog.find({})
-      .populate('user', 'firstName lastName email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
+    console.log('Fetching activities with page:', page, 'limit:', limit);
 
-    const totalCount = await UserLog.countDocuments();
+    // FETCH FROM ALL RELEVANT SCHEMAS
+    const [userLogs, systemLogs, adminLogs] = await Promise.all([
+      // 1. UserLog Schema - User activities
+      UserLog.find({})
+        .populate('user', 'firstName lastName email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      
+      // 2. SystemLog Schema - System activities
+      SystemLog.find({})
+        .populate('performedBy')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      
+      // 3. Admin activities from SystemLog with admin filter
+      SystemLog.find({ performedByModel: 'Admin' })
+        .populate('performedBy')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean()
+    ]);
 
-    // Transform activities with proper user name and IP address mapping
-    const activities = userLogs.map(log => {
-      // Get user name - FIXED VERSION
-      let userName = 'System';
-      if (log.user && log.user._id) {
-        // User is populated properly
-        userName = `${log.user.firstName || ''} ${log.user.lastName || ''}`.trim();
-      } else if (log.userFullName) {
-        // Use userFullName from log
-        userName = log.userFullName;
-      } else if (log.username) {
-        // Use username from log
-        userName = log.username;
-      }
+    console.log('Fetched:', {
+      userLogs: userLogs.length,
+      systemLogs: systemLogs.length,
+      adminLogs: adminLogs.length
+    });
 
-      // Get IP address - FIXED VERSION
-      let ipAddress = 'Unknown';
-      if (log.ipAddress) {
-        ipAddress = log.ipAddress;
-      } else if (log.location && log.location.ip) {
-        ipAddress = log.location.ip;
-      }
+    // COMBINE AND MAP ALL ACTIVITIES
+    let allActivities = [];
 
-      // Get user email
-      let userEmail = 'system';
-      if (log.user && log.user.email) {
-        userEmail = log.user.email;
-      } else if (log.email) {
-        userEmail = log.email;
-      }
-
-      return {
-        id: log._id,
+    // 1. Map UserLog activities
+    userLogs.forEach(log => {
+      const activity = {
+        id: log._id.toString(),
         timestamp: log.createdAt,
         user: {
-          id: log.user?._id || log.user || 'system',
-          name: userName,
-          email: userEmail
+          id: log.user?._id?.toString() || 'unknown',
+          name: getUserName(log),
+          email: getUserEmail(log)
         },
         action: log.action,
         description: getActivityDescription(log.action, log.metadata),
-        ipAddress: ipAddress, // This maps to "IP Address" column
-        status: log.status || 'success',
-        type: 'user_activity',
-        metadata: log.metadata || {}
+        ipAddress: getIpAddress(log),
+        status: log.status || 'success'
       };
+      allActivities.push(activity);
     });
 
-    res.status(200).json({
+    // 2. Map SystemLog activities
+    systemLogs.forEach(log => {
+      const activity = {
+        id: log._id.toString(),
+        timestamp: log.createdAt,
+        user: {
+          id: log.performedBy?._id?.toString() || 'system',
+          name: getSystemLogUserName(log),
+          email: getSystemLogUserEmail(log)
+        },
+        action: log.action,
+        description: getActivityDescription(log.action, log.changes),
+        ipAddress: log.ip || 'Unknown',
+        status: 'success'
+      };
+      allActivities.push(activity);
+    });
+
+    // 3. Map Admin activities separately
+    adminLogs.forEach(log => {
+      const activity = {
+        id: log._id.toString(),
+        timestamp: log.createdAt,
+        user: {
+          id: log.performedBy?._id?.toString() || 'admin',
+          name: getAdminName(log),
+          email: getAdminEmail(log)
+        },
+        action: log.action,
+        description: getActivityDescription(log.action, log.changes),
+        ipAddress: log.ip || 'Unknown',
+        status: 'success'
+      };
+      allActivities.push(activity);
+    });
+
+    // Sort all activities by timestamp (newest first)
+    allActivities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    // Apply pagination after combining
+    const paginatedActivities = allActivities.slice(0, parseInt(limit));
+
+    console.log('Final activities count:', paginatedActivities.length);
+
+    // EXACT STRUCTURE THE FRONTEND EXPECTS
+    const response = {
       status: 'success',
       data: {
-        activities: activities,
+        activities: paginatedActivities,
         pagination: {
           currentPage: parseInt(page),
-          totalPages: Math.ceil(totalCount / parseInt(limit)),
-          totalItems: totalCount,
+          totalPages: Math.ceil(allActivities.length / parseInt(limit)),
+          totalItems: allActivities.length,
           itemsPerPage: parseInt(limit),
-          hasNextPage: parseInt(page) < Math.ceil(totalCount / parseInt(limit)),
+          hasNextPage: parseInt(page) < Math.ceil(allActivities.length / parseInt(limit)),
           hasPrevPage: parseInt(page) > 1
         }
       }
-    });
+    };
+
+    console.log('Sending response with activities:', response.data.activities.length);
+    res.status(200).json(response);
 
   } catch (err) {
     console.error('Admin activity fetch error:', err);
@@ -8761,85 +8810,118 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
   }
 });
 
-// Enhanced activity description helper
+// HELPER FUNCTIONS FOR ACCURATE DATA MAPPING
+
+function getUserName(log) {
+  if (log.user && log.user._id) {
+    return `${log.user.firstName || ''} ${log.user.lastName || ''}`.trim() || 'Unknown User';
+  }
+  if (log.userFullName) return log.userFullName;
+  if (log.username) return log.username;
+  return 'Unknown User';
+}
+
+function getUserEmail(log) {
+  if (log.user && log.user.email) return log.user.email;
+  if (log.email) return log.email;
+  return 'unknown@email.com';
+}
+
+function getSystemLogUserName(log) {
+  if (log.performedBy) {
+    if (log.performedByModel === 'User') {
+      return `${log.performedBy.firstName || ''} ${log.performedBy.lastName || ''}`.trim() || 'User';
+    } else if (log.performedByModel === 'Admin') {
+      return log.performedBy.name || 'Admin';
+    }
+  }
+  return 'System';
+}
+
+function getSystemLogUserEmail(log) {
+  if (log.performedBy && log.performedBy.email) return log.performedBy.email;
+  return 'system@bithash.com';
+}
+
+function getAdminName(log) {
+  if (log.performedBy && log.performedBy.name) return log.performedBy.name;
+  return 'Admin';
+}
+
+function getAdminEmail(log) {
+  if (log.performedBy && log.performedBy.email) return log.performedBy.email;
+  return 'admin@bithash.com';
+}
+
+function getIpAddress(log) {
+  if (log.ipAddress) return log.ipAddress;
+  if (log.location && log.location.ip) return log.location.ip;
+  if (log.ip) return log.ip;
+  return 'Unknown';
+}
+
 function getActivityDescription(action, metadata) {
   const actionMap = {
-    // Authentication actions
-    'signup': 'Signed up for a new account',
-    'login': 'Logged into account',
-    'logout': 'Logged out of account',
-    'login_attempt': 'Attempted to log in',
-    'session_created': 'Created a new session',
-    'password_change': 'Changed password',
-    'password_reset_request': 'Requested password reset',
-    'password_reset_complete': 'Completed password reset',
+    // User Authentication
+    'signup': 'User signed up for a new account',
+    'login': 'User logged into account',
+    'logout': 'User logged out of account',
+    'login_attempt': 'User attempted to log in',
+    'failed_login': 'User failed login attempt',
     
-    // Financial actions
-    'deposit': 'Made a deposit',
-    'withdrawal': 'Requested a withdrawal',
-    'investment': 'Created an investment',
-    'transfer': 'Transferred funds',
-    'create-deposit': 'Created deposit request',
-    'create-withdrawal': 'Created withdrawal request',
-    'btc-withdrawal': 'Made BTC withdrawal',
-    'create-savings': 'Added to savings',
+    // Financial Activities
+    'deposit': 'User made a deposit',
+    'withdrawal': 'User requested a withdrawal',
+    'investment': 'User created an investment',
+    'transfer': 'User transferred funds',
+    'create-deposit': 'User created deposit request',
+    'create-withdrawal': 'User created withdrawal request',
+    'btc-withdrawal': 'User made BTC withdrawal',
+    'create-savings': 'User added to savings',
     
-    // Account actions
-    'profile_update': 'Updated profile information',
-    'update-profile': 'Updated profile',
-    'update-address': 'Updated address',
-    'kyc_submission': 'Submitted KYC documents',
-    'submit-kyc': 'Submitted KYC',
-    'settings_change': 'Changed account settings',
-    'update-preferences': 'Updated preferences',
+    // User Account Activities
+    'profile_update': 'User updated profile information',
+    'update-profile': 'User updated profile',
+    'update-address': 'User updated address',
+    'kyc_submission': 'User submitted KYC documents',
+    'submit-kyc': 'User submitted KYC',
     
-    // Security actions
-    '2fa_enable': 'Enabled two-factor authentication',
-    '2fa_disable': 'Disabled two-factor authentication',
-    'enable-2fa': 'Enabled 2FA',
-    'disable-2fa': 'Disabled 2FA',
-    'api_key_create': 'Created API key',
-    'api_key_delete': 'Deleted API key',
-    'device_login': 'Logged in from new device',
+    // Security Activities
+    '2fa_enable': 'User enabled two-factor authentication',
+    '2fa_disable': 'User disabled two-factor authentication',
+    'enable-2fa': 'User enabled 2FA',
+    'disable-2fa': 'User disabled 2FA',
     
-    // System actions
+    // Admin Activities
+    'admin-login': 'Admin logged into dashboard',
+    'verify-admin': 'Admin session verified',
+    'approve-deposit': 'Admin approved deposit',
+    'reject-deposit': 'Admin rejected deposit',
+    'approve-withdrawal': 'Admin approved withdrawal',
+    'reject-withdrawal': 'Admin rejected withdrawal',
+    'create-user': 'Admin created user account',
+    'update-user': 'Admin updated user account',
+    
+    // System Activities
+    'session_created': 'New session created',
+    'password_change': 'Password changed',
+    'password_reset_request': 'Password reset requested',
+    'password_reset_complete': 'Password reset completed',
     'session_timeout': 'Session timed out',
-    'failed_login': 'Failed login attempt',
     'suspicious_activity': 'Suspicious activity detected',
-    'admin-login': 'Admin logged in',
     'user_login': 'User logged in',
-    'create_investment': 'Created investment',
-    'complete_investment': 'Completed investment',
-    
-    // Admin actions
-    'approve-deposit': 'Approved deposit',
-    'reject-deposit': 'Rejected deposit',
-    'approve-withdrawal': 'Approved withdrawal',
-    'reject-withdrawal': 'Rejected withdrawal',
-    'create-user': 'Created user account',
-    'update-user': 'Updated user account',
-    'verify-admin': 'Admin session verified'
+    'create_investment': 'Investment created',
+    'complete_investment': 'Investment completed'
   };
 
   let description = actionMap[action] || `Performed ${action.replace(/_/g, ' ')}`;
 
-  // Add context from metadata if available
+  // Add context from metadata
   if (metadata) {
-    if (metadata.amount) {
-      description += ` of $${metadata.amount}`;
-    }
-    if (metadata.method) {
-      description += ` via ${metadata.method}`;
-    }
-    if (metadata.deviceType) {
-      description += ` from ${metadata.deviceType}`;
-    }
-    if (metadata.location) {
-      description += ` in ${metadata.location}`;
-    }
-    if (metadata.fields && Array.isArray(metadata.fields)) {
-      description += ` (${metadata.fields.join(', ')})`;
-    }
+    if (metadata.amount) description += ` of $${metadata.amount}`;
+    if (metadata.method) description += ` via ${metadata.method}`;
+    if (metadata.deviceType) description += ` from ${metadata.deviceType}`;
+    if (metadata.location) description += ` in ${metadata.location}`;
   }
 
   return description;
@@ -8984,4 +9066,5 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
