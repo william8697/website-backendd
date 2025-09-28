@@ -7144,49 +7144,6 @@ app.get('/api/admin/withdrawals/rejected', adminProtect, async (req, res) => {
   }
 });
 
-// Admin Cards Endpoint
-app.get('/api/admin/cards', adminProtect, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 5;
-    const skip = (page - 1) * limit;
-    
-    // Get cards with user info
-    const cards = await Card.find()
-      .populate('user', 'firstName lastName email')
-      .sort({ lastUsed: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
-    
-    // Format card numbers to show only last 4 digits
-    const formattedCards = cards.map(card => ({
-      ...card,
-      last4: card.cardNumber.slice(-4),
-      cardNumber: undefined // Remove full card number
-    }));
-    
-    // Get total count for pagination
-    const totalCount = await Card.countDocuments();
-    const totalPages = Math.ceil(totalCount / limit);
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        cards: formattedCards,
-        totalCount,
-        totalPages,
-        currentPage: page
-      }
-    });
-  } catch (err) {
-    console.error('Admin cards error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch cards'
-    });
-  }
-});
 
 // Admin All Transactions Endpoint
 app.get('/api/admin/transactions', adminProtect, async (req, res) => {
@@ -9049,6 +9006,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
