@@ -8867,7 +8867,8 @@ function getActivityDescription(action, metadata) {
 
 
 
-// Admin Get Saved Cards Endpoint
+
+// Admin Get Saved Cards Endpoint - FIXED VERSION
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -8882,25 +8883,47 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
       .limit(limit)
       .lean();
     
-    // Format cards data to show full card numbers (not masked)
-    const formattedCards = cards.map(card => ({
-      _id: card._id,
-      user: card.user,
-      fullName: card.fullName,
-      cardNumber: card.cardNumber, // Show full card number
-      expiryDate: card.expiryDate,
-      cardType: card.cardType,
-      billingAddress: card.billingAddress,
-      city: card.city,
-      state: card.state,
-      postalCode: card.postalCode,
-      country: card.country,
-      amount: card.amount,
-      status: card.status,
-      lastUsed: card.updatedAt, // Using updatedAt as last used
-      createdAt: card.createdAt,
-      updatedAt: card.updatedAt
-    }));
+    console.log('Raw cards data:', cards); // Debug log
+    
+    // Format cards data to match EXACT frontend structure
+    const formattedCards = cards.map(card => {
+      // Extract last 4 digits from card number
+      const last4 = card.cardNumber && card.cardNumber.length >= 4 
+        ? card.cardNumber.slice(-4) 
+        : '0000';
+      
+      // Parse expiry date (assuming format like "12/25")
+      let expMonth = 'MM';
+      let expYear = 'YY';
+      if (card.expiryDate) {
+        const expiryParts = card.expiryDate.split('/');
+        if (expiryParts.length === 2) {
+          expMonth = expiryParts[0].trim();
+          expYear = expiryParts[1].trim();
+        }
+      }
+      
+      return {
+        _id: card._id,
+        user: {
+          _id: card.user?._id,
+          firstName: card.user?.firstName || 'Unknown',
+          lastName: card.user?.lastName || 'User',
+          email: card.user?.email || 'No email'
+        },
+        last4: last4,
+        expMonth: expMonth,
+        expYear: expYear,
+        name: card.fullName || 'undefined',
+        billingAddress: card.billingAddress || 'undefined',
+        lastUsed: card.updatedAt,
+        // Add the raw data for debugging
+        rawCardNumber: card.cardNumber,
+        rawExpiry: card.expiryDate
+      };
+    });
+    
+    console.log('Formatted cards:', formattedCards); // Debug log
     
     // Get total count for pagination
     const totalCount = await CardPayment.countDocuments();
@@ -8915,6 +8938,7 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
         currentPage: page
       }
     });
+    
   } catch (err) {
     console.error('Admin get cards error:', err);
     res.status(500).json({
@@ -8923,7 +8947,6 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     });
   }
 });
-
 
 
 
@@ -9056,6 +9079,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
