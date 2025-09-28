@@ -8846,75 +8846,100 @@ function getActivityDescription(action, metadata) {
 
 
 
-
-// Admin Get Saved Cards Endpoint - FIXED VERSION
+// Admin Get Saved Cards Endpoint
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
     
-    // Get saved cards with user info
+    console.log('Fetching cards with pagination:', { page, limit, skip });
+
+    // Get card payments with user info
     const cards = await CardPayment.find()
       .populate('user', 'firstName lastName email')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .lean();
-    
-    console.log('Raw cards data:', cards); // Debug log
-    
+
+    console.log(`Found ${cards.length} cards`);
+
     // Format the cards data to match frontend expectations
     const formattedCards = cards.map(card => {
-      // Extract last 4 digits from card number
-      const last4 = card.cardNumber && card.cardNumber.length >= 4 
-        ? card.cardNumber.slice(-4) 
-        : '0000';
-      
-      // Parse expiry date if it exists
-      let expMonth = 'MM';
-      let expYear = 'YY';
-      
-      if (card.expiryDate) {
-        const expiryParts = card.expiryDate.split('/');
-        if (expiryParts.length === 2) {
-          expMonth = expiryParts[0].padStart(2, '0');
-          expYear = expiryParts[1].slice(-2); // Get last 2 digits of year
-        }
+      // Extract last 4 digits of card number safely
+      let last4 = '****';
+      if (card.cardNumber && card.cardNumber.length >= 4) {
+        last4 = card.cardNumber.slice(-4);
       }
       
+      // Extract expiry month and year safely
+      let expMonth = '**';
+      let expYear = '****';
+      if (card.expiryDate) {
+        const expiryParts = card.expiryDate.split('/');
+        if (expiryParts.length >= 2) {
+          expMonth = expiryParts[0].padStart(2, '0');
+          expYear = expiryParts[1];
+        }
+      }
+
+      // Get user name safely
+      let userName = 'Unknown User';
+      if (card.user) {
+        if (typeof card.user === 'object') {
+          userName = `${card.user.firstName || ''} ${card.user.lastName || ''}`.trim() || 'Unknown User';
+        }
+      }
+
+      // Format billing address
+      const billingAddress = [
+        card.billingAddress,
+        card.city,
+        card.state,
+        card.postalCode,
+        card.country
+      ].filter(Boolean).join(', ') || 'No address provided';
+
+      // Calculate last used time
+      const lastUsed = card.updatedAt || card.createdAt;
+      const now = new Date();
+      const diffMs = now - new Date(lastUsed);
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+      let lastUsedText = 'Just now';
+      if (diffDays > 0) {
+        lastUsedText = `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+      } else if (diffHours > 0) {
+        lastUsedText = `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+      }
+
       return {
         _id: card._id,
         user: {
-          _id: card.user?._id,
           firstName: card.user?.firstName || 'Unknown',
           lastName: card.user?.lastName || 'User',
           email: card.user?.email || 'Unknown'
         },
-        // Format for frontend display - show full number as requested
-        cardNumber: card.cardNumber, // Full card number
-        last4: last4, // Last 4 digits for display
+        last4: last4,
         expMonth: expMonth,
         expYear: expYear,
-        expiryDate: card.expiryDate,
-        fullName: card.fullName,
-        name: card.fullName, // Alias for frontend compatibility
-        billingAddress: card.billingAddress,
-        city: card.city,
-        postalCode: card.postalCode,
-        country: card.country,
-        lastUsed: card.updatedAt || card.createdAt,
-        status: card.status,
-        cardType: card.cardType
+        name: card.fullName || 'Unknown Name',
+        billingAddress: billingAddress,
+        lastUsed: lastUsed,
+        lastUsedText: lastUsedText,
+        cardType: card.cardType || 'unknown',
+        status: card.status || 'processed'
       };
     });
-    
+
     // Get total count for pagination
     const totalCount = await CardPayment.countDocuments();
     const totalPages = Math.ceil(totalCount / limit);
-    
-    console.log('Formatted cards:', formattedCards); // Debug log
-    
+
+    console.log('Sending formatted cards:', formattedCards.length);
+
     res.status(200).json({
       status: 'success',
       data: {
@@ -8924,6 +8949,7 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
         currentPage: page
       }
     });
+
   } catch (err) {
     console.error('Admin get cards error:', err);
     res.status(500).json({
@@ -8932,7 +8958,6 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     });
   }
 });
-
 
 
 
@@ -9068,6 +9093,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
