@@ -1771,7 +1771,6 @@ module.exports = {
   Loan,
   KYC,
   SystemLog,
-  Card,
  UserLog,
   setupWebSocketServer
 };
@@ -9061,6 +9060,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
