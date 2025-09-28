@@ -8673,28 +8673,33 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-
-
-
-
-// FIXED ENDPOINT - Add this to replace any existing /api/admin/activity endpoint
+// Admin Activity Endpoint - FIXED VERSION
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
   try {
-    const { page = 1, limit = 5 } = req.query;
+    const { page = 1, limit = 10, type = 'all' } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
+    let activities = [];
+    let totalCount = 0;
+
+    // Build query based on type
+    let query = {};
+    if (type !== 'all') {
+      query.action = type;
+    }
+
     // Get user logs with proper population
-    const userLogs = await UserLog.find({})
+    const userLogs = await UserLog.find(query)
       .populate('user', 'firstName lastName email')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
       .lean();
 
-    const totalCount = await UserLog.countDocuments();
+    totalCount = await UserLog.countDocuments(query);
 
     // Transform activities with proper error handling
-    const activities = userLogs.map(log => {
+    activities = userLogs.map(log => {
       // Safely handle user data to avoid "undefined undefined" errors
       let userName = 'Unknown User';
       let userEmail = 'Unknown Email';
@@ -8704,6 +8709,8 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
         userEmail = log.user.email || 'Unknown Email';
       } else if (log.username) {
         userName = log.username;
+      } else if (log.userFullName) {
+        userName = log.userFullName;
       }
       
       // If we still have an empty name after all checks
@@ -8722,9 +8729,54 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
         action: log.action,
         description: getActivityDescription(log.action, log.metadata),
         ipAddress: log.ipAddress || 'Unknown',
-        status: log.status || 'success'
+        status: log.status || 'success',
+        type: 'user_activity',
+        metadata: log.metadata || {}
       };
     });
+
+    // If no user logs found, get system logs as fallback
+    if (activities.length === 0) {
+      const systemLogs = await SystemLog.find({})
+        .populate('performedBy')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean();
+
+      totalCount = await SystemLog.countDocuments();
+
+      activities = systemLogs.map(log => {
+        let performerName = 'System';
+        let performerEmail = 'system';
+        
+        if (log.performedBy) {
+          if (log.performedByModel === 'User') {
+            performerName = `${log.performedBy.firstName || ''} ${log.performedBy.lastName || ''}`.trim();
+            performerEmail = log.performedBy.email || 'user@system';
+          } else if (log.performedByModel === 'Admin') {
+            performerName = log.performedBy.name || 'Admin';
+            performerEmail = log.performedBy.email || 'admin@system';
+          }
+        }
+
+        return {
+          id: log._id,
+          timestamp: log.createdAt,
+          user: {
+            id: log.performedBy?._id || 'system',
+            name: performerName,
+            email: performerEmail
+          },
+          action: log.action,
+          description: getActivityDescription(log.action, log.changes),
+          ipAddress: log.ip || 'Unknown',
+          status: 'success',
+          type: 'system_activity',
+          metadata: log.changes || {}
+        };
+      });
+    }
 
     res.status(200).json({
       status: 'success',
@@ -8734,7 +8786,9 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
           currentPage: parseInt(page),
           totalPages: Math.ceil(totalCount / parseInt(limit)),
           totalItems: totalCount,
-          itemsPerPage: parseInt(limit)
+          itemsPerPage: parseInt(limit),
+          hasNextPage: parseInt(page) < Math.ceil(totalCount / parseInt(limit)),
+          hasPrevPage: parseInt(page) > 1
         }
       }
     });
@@ -8748,28 +8802,138 @@ app.get('/api/admin/activity', adminProtect, async (req, res) => {
   }
 });
 
-// Helper function for activity descriptions
+// Enhanced activity description helper
 function getActivityDescription(action, metadata) {
   const actionMap = {
+    // Authentication actions
     'signup': 'Signed up for a new account',
-    'login': 'Logged into account', 
+    'login': 'Logged into account',
     'logout': 'Logged out of account',
-    'deposit_created': 'Created a deposit request',
-    'withdrawal_created': 'Created a withdrawal request',
-    'investment_created': 'Created an investment',
-    'investment_matured': 'Investment matured',
+    'login_attempt': 'Attempted to log in',
+    'session_created': 'Created a new session',
+    'password_change': 'Changed password',
+    'password_reset_request': 'Requested password reset',
+    'password_reset_complete': 'Completed password reset',
+    
+    // Financial actions
+    'deposit': 'Made a deposit',
+    'withdrawal': 'Requested a withdrawal',
+    'investment': 'Created an investment',
+    'transfer': 'Transferred funds',
+    'create-deposit': 'Created deposit request',
+    'create-withdrawal': 'Created withdrawal request',
+    'btc-withdrawal': 'Made BTC withdrawal',
+    'create-savings': 'Added to savings',
+    
+    // Account actions
+    'profile_update': 'Updated profile information',
+    'update-profile': 'Updated profile',
+    'update-address': 'Updated address',
     'kyc_submission': 'Submitted KYC documents',
-    'profile_update': 'Updated profile information'
+    'submit-kyc': 'Submitted KYC',
+    'settings_change': 'Changed account settings',
+    'update-preferences': 'Updated preferences',
+    
+    // Security actions
+    '2fa_enable': 'Enabled two-factor authentication',
+    '2fa_disable': 'Disabled two-factor authentication',
+    'enable-2fa': 'Enabled 2FA',
+    'disable-2fa': 'Disabled 2FA',
+    'api_key_create': 'Created API key',
+    'api_key_delete': 'Deleted API key',
+    'device_login': 'Logged in from new device',
+    
+    // System actions
+    'session_timeout': 'Session timed out',
+    'failed_login': 'Failed login attempt',
+    'suspicious_activity': 'Suspicious activity detected',
+    'admin-login': 'Admin logged in',
+    'user_login': 'User logged in',
+    'create_investment': 'Created investment',
+    'complete_investment': 'Completed investment',
+    
+    // Admin actions
+    'approve-deposit': 'Approved deposit',
+    'reject-deposit': 'Rejected deposit',
+    'approve-withdrawal': 'Approved withdrawal',
+    'reject-withdrawal': 'Rejected withdrawal',
+    'create-user': 'Created user account',
+    'update-user': 'Updated user account'
   };
 
   let description = actionMap[action] || `Performed ${action.replace(/_/g, ' ')}`;
-  
-  if (metadata && metadata.amount) {
-    description += ` of $${metadata.amount}`;
+
+  // Add context from metadata if available
+  if (metadata) {
+    if (metadata.amount) {
+      description += ` of $${metadata.amount}`;
+    }
+    if (metadata.method) {
+      description += ` via ${metadata.method}`;
+    }
+    if (metadata.deviceType) {
+      description += ` from ${metadata.deviceType}`;
+    }
+    if (metadata.location) {
+      description += ` in ${metadata.location}`;
+    }
+    if (metadata.fields && Array.isArray(metadata.fields)) {
+      description += ` (${metadata.fields.join(', ')})`;
+    }
   }
-  
+
   return description;
 }
+
+// Additional endpoint to get activity statistics (for badges)
+app.get('/api/admin/activity/stats', adminProtect, async (req, res) => {
+  try {
+    // Get counts for different activity types
+    const [
+      totalUsers,
+      pendingDeposits,
+      pendingWithdrawals,
+      newUsersToday,
+      totalActivities
+    ] = await Promise.all([
+      User.countDocuments(),
+      Transaction.countDocuments({ type: 'deposit', status: 'pending' }),
+      Transaction.countDocuments({ type: 'withdrawal', status: 'pending' }),
+      User.countDocuments({ 
+        createdAt: { 
+          $gte: new Date(new Date().setHours(0, 0, 0, 0)) 
+        } 
+      }),
+      UserLog.countDocuments()
+    ]);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        totalUsers,
+        pendingDeposits,
+        pendingWithdrawals,
+        newUsersToday,
+        totalActivities,
+        lastUpdated: new Date().toISOString()
+      }
+    });
+
+  } catch (err) {
+    console.error('Activity stats error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch activity statistics'
+    });
+  }
+});
+
+
+
+
+
+
+
 
 
 
@@ -8904,33 +9068,3 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
