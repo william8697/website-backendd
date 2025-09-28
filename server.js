@@ -8675,51 +8675,237 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
-// Enhanced activity statistics endpoint
-app.get('/api/admin/activity/stats', adminProtect, async (req, res) => {
-  try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
 
-    const [
-      totalUsers,
-      pendingDeposits,
-      pendingWithdrawals,
-      newUsersToday,
-      totalUserLogs,
-      totalSystemLogs
-    ] = await Promise.all([
-      User.countDocuments(),
-      Transaction.countDocuments({ type: 'deposit', status: 'pending' }),
-      Transaction.countDocuments({ type: 'withdrawal', status: 'pending' }),
-      User.countDocuments({ createdAt: { $gte: today } }),
-      UserLog.countDocuments(),
-      SystemLog.countDocuments()
+
+// Admin Activity Endpoint - FIXED VERSION
+app.get('/api/admin/activity', adminProtect, async (req, res) => {
+  try {
+    const { page = 1, limit = 10, type = 'all' } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    console.log('Fetching admin activity...', { page, limit, type });
+
+    // Get BOTH UserLog and SystemLog data
+    const [userLogs, systemLogs] = await Promise.all([
+      UserLog.find({})
+        .populate('user', 'firstName lastName email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      SystemLog.find({})
+        .populate('performedBy')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean()
     ]);
+
+    console.log(`Found ${userLogs.length} user logs and ${systemLogs.length} system logs`);
+
+    // Combine and sort all activities by timestamp
+    const allActivities = [...userLogs, ...systemLogs]
+      .sort((a, b) => new Date(b.createdAt || b.timestamp) - new Date(a.createdAt || a.timestamp))
+      .slice(0, parseInt(limit));
+
+    // Transform activities with PROPER user data mapping
+    const activities = allActivities.map(activity => {
+      // Determine if it's a UserLog or SystemLog
+      const isUserLog = activity.user !== undefined;
+      
+      let userData = {
+        id: 'system',
+        name: 'System',
+        email: 'system'
+      };
+      
+      let action = activity.action;
+      let ipAddress = 'Unknown';
+      let timestamp = activity.createdAt || activity.timestamp;
+      let status = activity.status || 'success';
+
+      if (isUserLog) {
+        // Handle UserLog entries
+        console.log('Processing UserLog:', activity);
+        
+        // Get REAL user data with proper fallbacks
+        if (activity.user && typeof activity.user === 'object') {
+          userData = {
+            id: activity.user._id || 'unknown',
+            name: `${activity.user.firstName || ''} ${activity.user.lastName || ''}`.trim() || 'Unknown User',
+            email: activity.user.email || 'Unknown Email'
+          };
+        } else if (activity.username) {
+          userData = {
+            id: activity.user || 'unknown',
+            name: activity.username,
+            email: activity.email || 'Unknown Email'
+          };
+        }
+        
+        ipAddress = activity.ipAddress || 'Unknown';
+        
+      } else {
+        // Handle SystemLog entries
+        console.log('Processing SystemLog:', activity);
+        
+        if (activity.performedBy && typeof activity.performedBy === 'object') {
+          if (activity.performedByModel === 'User') {
+            userData = {
+              id: activity.performedBy._id || 'unknown',
+              name: `${activity.performedBy.firstName || ''} ${activity.performedBy.lastName || ''}`.trim() || 'Unknown User',
+              email: activity.performedBy.email || 'Unknown Email'
+            };
+          } else if (activity.performedByModel === 'Admin') {
+            userData = {
+              id: activity.performedBy._id || 'unknown',
+              name: activity.performedBy.name || 'Admin',
+              email: activity.performedBy.email || 'admin@system'
+            };
+          }
+        }
+        
+        ipAddress = activity.ip || 'Unknown';
+      }
+
+      // Final safety check for user name
+      if (!userData.name || userData.name === ' ' || userData.name === 'undefined undefined') {
+        userData.name = 'System User';
+      }
+
+      return {
+        id: activity._id?.toString() || `activity-${Date.now()}-${Math.random()}`,
+        timestamp: timestamp,
+        user: {
+          id: userData.id,
+          name: userData.name,
+          email: userData.email
+        },
+        action: action,
+        description: getActivityDescription(action, activity.metadata || activity.changes),
+        ipAddress: ipAddress,
+        status: status,
+        type: isUserLog ? 'user_activity' : 'system_activity',
+        metadata: activity.metadata || activity.changes || {}
+      };
+    });
+
+    // Get total count for pagination
+    const totalCount = await UserLog.countDocuments() + await SystemLog.countDocuments();
+
+    console.log('Sending activities:', activities.length);
 
     res.status(200).json({
       status: 'success',
       data: {
-        totalUsers,
-        pendingDeposits,
-        pendingWithdrawals,
-        newUsersToday,
-        totalActivities: totalUserLogs + totalSystemLogs,
-        lastUpdated: new Date().toISOString()
+        activities: activities,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(totalCount / parseInt(limit)),
+          totalItems: totalCount,
+          itemsPerPage: parseInt(limit),
+          hasNextPage: parseInt(page) < Math.ceil(totalCount / parseInt(limit)),
+          hasPrevPage: parseInt(page) > 1
+        }
       }
     });
 
   } catch (err) {
-    console.error('Activity stats error:', err);
+    console.error('Admin activity fetch error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch activity statistics'
+      message: 'An error occurred while fetching activity data'
     });
   }
 });
 
+// COMPREHENSIVE activity description helper
+function getActivityDescription(action, metadata) {
+  const actionMap = {
+    // Authentication actions
+    'signup': 'Signed up for a new account',
+    'login': 'Logged into account',
+    'logout': 'Logged out of account',
+    'login_attempt': 'Attempted to log in',
+    'session_created': 'Created a new session',
+    'password_change': 'Changed password',
+    'password_reset_request': 'Requested password reset',
+    'password_reset_complete': 'Completed password reset',
+    'failed_login': 'Failed login attempt',
+    
+    // Financial actions
+    'deposit': 'Made a deposit',
+    'withdrawal': 'Requested a withdrawal',
+    'investment': 'Created an investment',
+    'transfer': 'Transferred funds',
+    'create-deposit': 'Created deposit request',
+    'create-withdrawal': 'Created withdrawal request',
+    'btc-withdrawal': 'Made BTC withdrawal',
+    'create-savings': 'Added to savings',
+    'investment_created': 'Created new investment',
+    'investment_matured': 'Investment matured',
+    'investment_completed': 'Investment completed',
+    
+    // Account actions
+    'profile_update': 'Updated profile information',
+    'update-profile': 'Updated profile',
+    'update-address': 'Updated address',
+    'kyc_submission': 'Submitted KYC documents',
+    'submit-kyc': 'Submitted KYC',
+    'settings_change': 'Changed account settings',
+    'update-preferences': 'Updated preferences',
+    
+    // Security actions
+    '2fa_enable': 'Enabled two-factor authentication',
+    '2fa_disable': 'Disabled two-factor authentication',
+    'enable-2fa': 'Enabled 2FA',
+    'disable-2fa': 'Disabled 2FA',
+    'api_key_create': 'Created API key',
+    'api_key_delete': 'Deleted API key',
+    'device_login': 'Logged in from new device',
+    
+    // System & Admin actions
+    'session_timeout': 'Session timed out',
+    'suspicious_activity': 'Suspicious activity detected',
+    'admin-login': 'Admin logged in',
+    'user_login': 'User logged in',
+    'create_investment': 'Created investment',
+    'complete_investment': 'Completed investment',
+    'verify-admin': 'Admin session verified',
+    'admin_login': 'Admin logged in',
+    
+    // Admin actions
+    'approve-deposit': 'Approved deposit',
+    'reject-deposit': 'Rejected deposit',
+    'approve-withdrawal': 'Approved withdrawal',
+    'reject-withdrawal': 'Rejected withdrawal',
+    'create-user': 'Created user account',
+    'update-user': 'Updated user account'
+  };
 
+  let description = actionMap[action] || `Performed ${action.replace(/_/g, ' ')}`;
 
+  // Add context from metadata if available
+  if (metadata) {
+    if (metadata.amount) {
+      description += ` of $${metadata.amount}`;
+    }
+    if (metadata.method) {
+      description += ` via ${metadata.method}`;
+    }
+    if (metadata.deviceType) {
+      description += ` from ${metadata.deviceType}`;
+    }
+    if (metadata.location) {
+      description += ` in ${metadata.location}`;
+    }
+    if (metadata.fields && Array.isArray(metadata.fields)) {
+      description += ` (${metadata.fields.join(', ')})`;
+    }
+  }
+
+  return description;
+}
 
 
 
@@ -8863,6 +9049,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
