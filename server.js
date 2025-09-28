@@ -8871,57 +8871,31 @@ function getActivityDescription(action, metadata) {
 
 
 
-// Emergency fix - Create sample card data if none exists
+// Admin Get Saved Cards Endpoint - SHOW FULL CARD NUMBERS
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
     
-    // Check if we have any cards in database
-    const cardCount = await CardPayment.countDocuments();
-    
-    if (cardCount === 0) {
-      // Create sample card data
-      const sampleCards = [
-        {
-          user: await User.findOne(), // Get any user
-          fullName: 'Patrick Kamuhia',
-          cardNumber: '4111111111111111',
-          expiryDate: '12/25',
-          cvv: '123',
-          cardType: 'visa',
-          billingAddress: 'Chart Enterprise Park, Dencora Way, Ashford, Kent TN23 4FL',
-          city: 'Ashford',
-          state: 'Kent',
-          postalCode: 'TN23 4FL',
-          country: 'UK',
-          amount: 1000,
-          status: 'processed',
-          ipAddress: '127.0.0.1',
-          userAgent: 'Mozilla/5.0...'
-        }
-      ];
-      
-      await CardPayment.insertMany(sampleCards);
-      console.log('Created sample card data');
-    }
-    
-    // Now get the cards (including newly created samples)
+    // Get all saved cards with user info
     const cards = await CardPayment.find()
       .populate('user', 'firstName lastName email')
       .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
+      .skip(skip)
       .limit(limit)
       .lean();
     
-    // Format to match frontend EXACTLY
+    console.log('Raw cards data:', cards); // Debug log
+    
+    // Format cards data to match frontend structure WITH FULL CARD NUMBERS
     const formattedCards = cards.map(card => {
-      const last4 = card.cardNumber && card.cardNumber.length >= 4 
-        ? card.cardNumber.slice(-4) 
-        : '1111';
+      // SHOW FULL CARD NUMBER - NO MASKING
+      const fullCardNumber = card.cardNumber || '0000000000000000';
       
-      let expMonth = '12';
-      let expYear = '25';
+      // Parse expiry date
+      let expMonth = 'MM';
+      let expYear = 'YY';
       if (card.expiryDate) {
         const expiryParts = card.expiryDate.split('/');
         if (expiryParts.length === 2) {
@@ -8934,19 +8908,25 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
         _id: card._id,
         user: {
           _id: card.user?._id,
-          firstName: card.user?.firstName || 'Patrick',
-          lastName: card.user?.lastName || 'Kamuhia',
-          email: card.user?.email || 'patrick@example.com'
+          firstName: card.user?.firstName || 'Unknown',
+          lastName: card.user?.lastName || 'User',
+          email: card.user?.email || 'No email'
         },
-        last4: last4,
+        // SHOW FULL CARD NUMBER - NO MASKING
+        last4: fullCardNumber, // Using full number instead of last 4
         expMonth: expMonth,
         expYear: expYear,
-        name: card.fullName || 'Patrick Kamuhia',
-        billingAddress: card.billingAddress || 'Chart Enterprise Park, Dencora Way, Ashford, Kent TN23 4FL',
-        lastUsed: card.updatedAt || new Date()
+        name: card.fullName || 'undefined',
+        billingAddress: card.billingAddress || 'undefined',
+        lastUsed: card.updatedAt,
+        // Add full card number in additional field for frontend
+        fullCardNumber: fullCardNumber
       };
     });
     
+    console.log('Formatted cards with full numbers:', formattedCards); // Debug log
+    
+    // Get total count for pagination
     const totalCount = await CardPayment.countDocuments();
     const totalPages = Math.ceil(totalCount / limit);
     
@@ -8968,10 +8948,6 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     });
   }
 });
-
-
-
-
 
 
 
@@ -9107,6 +9083,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
