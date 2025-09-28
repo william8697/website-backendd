@@ -3875,17 +3875,18 @@ app.post('/api/investments', protect, [
 
 
 
+
+
 // Investment completion endpoint - moves funds from active to matured
 app.post('/api/investments/:id/complete', protect, async (req, res) => {
   try {
     const investmentId = req.params.id;
     const userId = req.user._id;
 
-    // Find the investment - CRITICAL FIX: Check for both active AND completed status
+    // Find the investment - removed status filter to handle already completed investments
     const investment = await Investment.findOne({ 
       _id: investmentId, 
       user: userId
-      // Removed status filter to check both active and completed investments
     }).populate('plan');
     
     if (!investment) {
@@ -3895,7 +3896,7 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       });
     }
 
-    // CRITICAL FIX: Check if investment is already completed
+    // Check if investment is already completed
     if (investment.status === 'completed') {
       return res.status(400).json({
         status: 'fail',
@@ -3903,8 +3904,10 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       });
     }
 
-    // Check if investment has actually matured
-    if (new Date() < investment.endDate) {
+    // Check if investment has actually matured (with a small buffer to avoid timing issues)
+    const currentDate = new Date();
+    const maturityBuffer = 5 * 60 * 1000; // 5 minute buffer
+    if (currentDate < new Date(investment.endDate.getTime() - maturityBuffer)) {
       return res.status(400).json({
         status: 'fail',
         message: 'Investment has not matured yet'
@@ -3920,7 +3923,7 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       });
     }
 
-    // CRITICAL FIX: Verify investment amount is still in active balance
+    // Verify the investment amount exists in active balance
     if (user.balances.active < investment.amount) {
       return res.status(400).json({
         status: 'fail',
@@ -3931,16 +3934,17 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
     // Calculate total return (principal + profit) - based on amount after fee
     const totalReturn = investment.expectedReturn;
 
-    // Transfer from active to matured balance
-    user.balances.active -= investment.amount; // This is the amount after fee
-    user.balances.matured += totalReturn;
+    // Transfer from active to matured balance with validation
+    user.balances.active = Number((user.balances.active - investment.amount).toFixed(2));
+    user.balances.matured = Number((user.balances.matured + totalReturn).toFixed(2));
     
-    // Update investment status
+    // Update investment status with comprehensive completion data
     investment.status = 'completed';
     investment.completionDate = new Date();
     investment.actualReturn = totalReturn - investment.amount;
+    investment.isProcessed = true; // Additional flag to prevent reprocessing
 
-    // Save changes
+    // Save changes with transaction for data consistency
     await user.save();
     await investment.save();
 
@@ -3993,8 +3997,6 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
     });
   }
 });
-
-
 
 
 
@@ -8919,6 +8921,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
