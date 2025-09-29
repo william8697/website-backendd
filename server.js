@@ -8840,6 +8840,11 @@ function getActivityDescription(action, metadata) {
 
 
 
+
+
+
+
+
 // Admin Cards Endpoint - Fix for the 404 error
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
   try {
@@ -8893,6 +8898,10 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     });
   }
 });
+
+
+
+
 
 
 
@@ -9026,6 +9035,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
