@@ -8843,15 +8843,13 @@ function getActivityDescription(action, metadata) {
 
 
 
-// Admin Cards Endpoint - FIXED VERSION
+// Admin Cards Endpoint
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
     
-    console.log('Fetching cards with pagination:', { page, limit, skip });
-
     // Get card payments with user info
     const cards = await CardPayment.find()
       .populate('user', 'firstName lastName email')
@@ -8859,72 +8857,47 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
       .skip(skip)
       .limit(limit)
       .lean();
-
-    console.log(`Found ${cards.length} cards`);
-
-    // Transform to match EXACT frontend table structure
+    
+    // Format the data to match frontend expectations
     const formattedCards = cards.map(card => {
-      console.log('Processing card:', card);
-      
-      // Extract user information with proper fallbacks
-      const user = card.user || {};
-      const userName = user.firstName && user.lastName 
-        ? `${user.firstName} ${user.lastName}`
-        : 'Unknown User';
-
-      // Extract card number safely (last 4 digits)
+      // Extract last 4 digits of card number safely
       const cardNumber = card.cardNumber || '';
-      const last4 = cardNumber.length >= 4 
-        ? cardNumber.slice(-4) 
-        : '****';
-
-      // Extract expiry date safely
-      const expiryDate = card.expiryDate || '';
-      const [expMonth, expYear] = expiryDate.split('/');
+      const last4 = cardNumber.length >= 4 ? cardNumber.slice(-4) : '****';
       
-      // Format billing address
-      const billingAddress = [
-        card.billingAddress,
-        card.city,
-        card.state,
-        card.country
-      ].filter(Boolean).join(', ') || 'Not provided';
-
-      // Calculate last used time
-      const lastUsed = card.createdAt 
-        ? formatActivityTime(card.createdAt)
-        : 'Never';
-
+      // Extract expiry month and year safely
+      const expiryDate = card.expiryDate || '';
+      const [expMonth = '', expYear = ''] = expiryDate.split('/');
+      
+      // Get user name safely
+      const userName = card.user ? 
+        `${card.user.firstName || ''} ${card.user.lastName || ''}`.trim() : 
+        'Unknown User';
+      
+      // Format last used time
+      const lastUsed = card.createdAt ? 
+        formatActivityTime(card.createdAt) : 
+        'Never';
+      
       return {
-        _id: card._id.toString(),
+        _id: card._id,
         user: {
-          _id: user._id || 'unknown',
-          firstName: user.firstName || '',
-          lastName: user.lastName || '',
-          email: user.email || '',
-          fullName: userName
+          firstName: card.user?.firstName || 'Unknown',
+          lastName: card.user?.lastName || 'User'
         },
-        cardNumber: cardNumber,
         last4: last4,
-        expiryDate: expiryDate,
-        expMonth: expMonth || 'MM',
-        expYear: expYear || 'YYYY',
-        name: card.fullName || 'Not provided',
-        billingAddress: billingAddress,
-        city: card.city || '',
-        state: card.state || '',
-        country: card.country || '',
+        expMonth: expMonth,
+        expYear: expYear,
+        name: card.fullName || 'N/A',
+        billingAddress: card.billingAddress || 'N/A',
         lastUsed: lastUsed,
         createdAt: card.createdAt
       };
     });
-
+    
     // Get total count for pagination
     const totalCount = await CardPayment.countDocuments();
     const totalPages = Math.ceil(totalCount / limit);
-
-    console.log('Sending formatted cards:', formattedCards.length);
-
+    
     res.status(200).json({
       status: 'success',
       data: {
@@ -8934,7 +8907,7 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
         currentPage: page
       }
     });
-
+    
   } catch (err) {
     console.error('Admin cards error:', err);
     res.status(500).json({
@@ -8943,7 +8916,6 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     });
   }
 });
-
 
 
 
@@ -9078,6 +9050,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
