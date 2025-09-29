@@ -8837,7 +8837,18 @@ function getActivityDescription(action, metadata) {
 }
 
 
-// Admin Get Saved Cards Endpoint
+
+
+
+
+
+
+
+
+
+
+
+// Admin Cards Endpoint - Return raw database data
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -8852,56 +8863,101 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
       .limit(limit)
       .lean();
     
-    // Format cards data to match frontend expectations
+    // Transform to raw database values
     const formattedCards = cards.map(card => {
-      // Extract last 4 digits for display (don't hide numbers as requested)
-      const cardNumber = card.cardNumber; // Show full number as requested
-      const last4 = card.cardNumber.slice(-4);
-      
-      return {
-        _id: card._id,
-        user: {
-          firstName: card.user?.firstName || 'Unknown',
-          lastName: card.user?.lastName || 'User',
-          email: card.user?.email || 'Unknown'
-        },
-        cardNumber: cardNumber, // Full card number as requested
-        last4: last4,
-        expiryDate: card.expiryDate,
-        name: card.fullName,
-        billingAddress: card.billingAddress,
-        city: card.city,
-        state: card.state,
-        postalCode: card.postalCode,
-        country: card.country,
-        cardType: card.cardType,
-        lastUsed: card.updatedAt,
-        createdAt: card.createdAt
-      };
-    });
-    
-    // Get total count for pagination
-    const totalCount = await CardPayment.countDocuments();
-    const totalPages = Math.ceil(totalCount / limit);
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        cards: formattedCards,
-        totalCount,
-        totalPages,
-        currentPage: page
+      // User column - get actual user data
+      let userName = 'Unknown User';
+      if (card.user) {
+        if (card.user.firstName && card.user.lastName) {
+          userName = `${card.user.firstName} ${card.user.lastName}`;
+        } else if (card.user.email) {
+          userName = card.user.email;
+        }
       }
+      
+      // Card Number column - show actual last 4 digits
+      const cardNumber = card.cardNumber ? `**** **** **** ${card.cardNumber.slice(-4)}` : 'No Card Number';
+      
+      // Expiry column - show actual expiry date  
+      let expiry = 'No Expiry';
+      if (card.expiryDate) {
+        expiry = card.expiryDate; // Return the actual value from database
+      }
+      
+      // Name column - actual full name
+      const name = card.fullName || 'No Name';
+      
+      // Billing Address column - actual address
+      const billingAddress = card.billingAddress || 'No Address';
+      
+      // Last Used column - format actual date properly
+      let lastUsed = 'Never';
+      if (card.createdAt) {
+        const now = new Date();
+        const cardDate = new Date(card.createdAt);
+        const diffTime = Math.abs(now - cardDate);
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        
+        if (diffDays === 1) {
+          lastUsed = '1 day ago';
+        } else if (diffDays < 7) {
+          lastUsed = `${diffDays} days ago`;
+        } else {
+          lastUsed = cardDate.toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric'
+          });
+        }
+      }
+      
+      // Return raw data structure
+      return [
+        userName,
+        cardNumber, 
+        expiry,
+        name,
+        billingAddress,
+        lastUsed,
+        `<button class="admin-btn btn-danger btn-sm delete-card" data-id="${card._id}">Delete</button>`
+      ];
     });
+    
+    // Return raw array data
+    res.status(200).json(formattedCards);
+    
   } catch (err) {
-    console.error('Admin get cards error:', err);
+    console.error('Admin cards error:', err);
     res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch saved cards'
+      error: 'Failed to fetch saved cards'
     });
   }
 });
 
+// Admin Delete Card Endpoint
+app.delete('/api/admin/cards/:id', adminProtect, async (req, res) => {
+  try {
+    const cardId = req.params.id;
+    
+    const card = await CardPayment.findByIdAndDelete(cardId);
+    
+    if (!card) {
+      return res.status(404).json({
+        error: 'Card not found'
+      });
+    }
+    
+    res.status(200).json({
+      message: 'Card deleted successfully'
+    });
+    
+  } catch (err) {
+    console.error('Admin delete card error:', err);
+    res.status(500).json({
+      error: 'Failed to delete card'
+    });
+  }
+});
 
 
 
@@ -9044,6 +9100,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
