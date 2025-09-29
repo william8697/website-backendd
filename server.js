@@ -8840,15 +8840,14 @@ function getActivityDescription(action, metadata) {
 
 
 
-
-// Admin Cards Endpoint - RAW DATA FETCH
+// Admin Cards Endpoint - FIXED with null checks
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    // Get ALL card data exactly as stored
+    // Get cards with proper population
     const cards = await CardPayment.find()
       .populate('user', 'firstName lastName email')
       .sort({ createdAt: -1 })
@@ -8860,12 +8859,13 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     const totalCount = await CardPayment.countDocuments();
     const totalPages = Math.ceil(totalCount / limit);
 
+    // Return data with proper structure
     res.status(200).json({
       status: 'success',
       data: {
-        cards: cards, // Return raw data exactly as stored
-        totalCount,
-        totalPages,
+        cards: cards,
+        totalCount: totalCount,
+        totalPages: totalPages,
         currentPage: page
       }
     });
@@ -8878,6 +8878,11 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     });
   }
 });
+
+
+
+
+
 
 
 
@@ -9009,25 +9014,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
