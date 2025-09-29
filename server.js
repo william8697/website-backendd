@@ -8838,23 +8838,14 @@ function getActivityDescription(action, metadata) {
 
 
 
-
-
-
-
-
-
-
-// Admin Cards Endpoint - Fix for the 404 error
+// Admin Cards Endpoint - FIXED VERSION
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
     
-    console.log('Fetching cards with page:', page, 'limit:', limit);
-    
-    // Get saved cards with user info
+    // Get card payments with user info
     const cards = await CardPayment.find()
       .populate('user', 'firstName lastName email')
       .sort({ createdAt: -1 })
@@ -8866,38 +8857,107 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     const totalCount = await CardPayment.countDocuments();
     const totalPages = Math.ceil(totalCount / limit);
     
-    console.log(`Found ${cards.length} cards out of ${totalCount} total`);
-    
-    // Format the response to match exactly what the frontend expects
-    const response = {
+    // Format the response to match the admin.html table structure
+    const formattedCards = cards.map(card => ({
+      user: {
+        firstName: card.user?.firstName || 'N/A',
+        lastName: card.user?.lastName || 'N/A',
+        email: card.user?.email || 'N/A'
+      },
+      cardNumber: card.cardNumber ? `**** **** **** ${card.cardNumber.slice(-4)}` : 'N/A',
+      expiryDate: card.expiryDate || 'N/A',
+      fullName: card.fullName || 'N/A',
+      billingAddress: card.billingAddress || 'N/A',
+      lastUsed: card.updatedAt ? formatActivityTime(card.updatedAt) : 'Never',
+      _id: card._id,
+      city: card.city || 'N/A',
+      state: card.state || 'N/A',
+      postalCode: card.postalCode || 'N/A',
+      country: card.country || 'N/A',
+      cardType: card.cardType || 'N/A',
+      status: card.status || 'N/A'
+    }));
+
+    res.status(200).json({
       status: 'success',
       data: {
-        cards: cards.map(card => ({
-          // Map to match your admin table columns exactly
-          user: card.user ? `${card.user.firstName} ${card.user.lastName}` : 'Unknown User',
-          cardNumber: `**** **** **** ${card.cardNumber?.slice(-4) || '0000'}`,
-          expiry: card.expiryDate || 'N/A',
-          name: card.fullName || 'N/A',
-          billingAddress: card.billingAddress || 'N/A',
-          lastUsed: card.lastUsed ? new Date(card.lastUsed).toLocaleDateString() : 'Never',
-          actions: `<button class="admin-btn btn-danger btn-sm delete-card" data-id="${card._id}">Delete</button>`
-        })),
-        totalCount: totalCount,
-        totalPages: totalPages,
+        cards: formattedCards,
+        totalCount,
+        totalPages,
         currentPage: page
       }
-    };
-    
-    res.status(200).json(response);
-    
+    });
   } catch (err) {
-    console.error('Admin cards endpoint error:', err);
+    console.error('Admin cards error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch saved cards'
+      message: 'Failed to fetch cards data'
     });
   }
 });
+
+
+
+// Helper function to format activity time (add this with your other helper functions)
+function formatActivityTime(timestamp) {
+  if (!timestamp) return 'Never';
+  
+  const now = new Date();
+  const activityTime = new Date(timestamp);
+  const diffMs = now - activityTime;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  
+  if (diffMins < 1) {
+    return 'Just now';
+  } else if (diffMins < 60) {
+    return `${diffMins} min ago`;
+  } else if (diffHours < 24) {
+    return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+  } else if (diffDays < 7) {
+    return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+  } else {
+    return activityTime.toLocaleDateString();
+  }
+}
+
+
+
+
+// Admin Delete Card Endpoint
+app.delete('/api/admin/cards/:id', adminProtect, async (req, res) => {
+  try {
+    const card = await CardPayment.findByIdAndDelete(req.params.id);
+    
+    if (!card) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Card not found'
+      });
+    }
+    
+    res.status(200).json({
+      status: 'success',
+      message: 'Card deleted successfully'
+    });
+    
+    await logActivity('delete-card', 'card-payment', card._id, req.admin._id, 'Admin', req, {
+      userId: card.user,
+      cardType: card.cardType
+    });
+  } catch (err) {
+    console.error('Admin delete card error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to delete card'
+    });
+  }
+});
+
+
+
+
 
 
 
@@ -9035,6 +9095,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
