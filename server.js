@@ -8848,88 +8848,88 @@ function getActivityDescription(action, metadata) {
 
 
 
-// Admin Cards Endpoint - Return raw database data
+
+// Admin Cards Endpoint
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
     
-    // Get saved cards with user info
+    console.log('Fetching cards with pagination:', { page, limit, skip });
+
+    // Get card payments with user info
     const cards = await CardPayment.find()
       .populate('user', 'firstName lastName email')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .lean();
-    
-    // Transform to raw database values
+
+    console.log(`Found ${cards.length} cards`);
+
+    // Format cards data to match frontend expectations
     const formattedCards = cards.map(card => {
-      // User column - get actual user data
-      let userName = 'Unknown User';
-      if (card.user) {
-        if (card.user.firstName && card.user.lastName) {
-          userName = `${card.user.firstName} ${card.user.lastName}`;
-        } else if (card.user.email) {
-          userName = card.user.email;
-        }
-      }
+      // Extract last 4 digits of card number
+      const cardNumber = card.cardNumber || '';
+      const last4 = cardNumber.length > 4 ? cardNumber.slice(-4) : '****';
       
-      // Card Number column - show actual last 4 digits
-      const cardNumber = card.cardNumber ? `**** **** **** ${card.cardNumber.slice(-4)}` : 'No Card Number';
+      // Format expiry date (assuming format like "12/25")
+      const expiryDate = card.expiryDate || '';
+      const [expMonth, expYear] = expiryDate.split('/');
       
-      // Expiry column - show actual expiry date  
-      let expiry = 'No Expiry';
-      if (card.expiryDate) {
-        expiry = card.expiryDate; // Return the actual value from database
-      }
+      // Get user name or fallback
+      const userName = card.user 
+        ? `${card.user.firstName || ''} ${card.user.lastName || ''}`.trim() 
+        : 'Unknown User';
       
-      // Name column - actual full name
-      const name = card.fullName || 'No Name';
-      
-      // Billing Address column - actual address
-      const billingAddress = card.billingAddress || 'No Address';
-      
-      // Last Used column - format actual date properly
-      let lastUsed = 'Never';
-      if (card.createdAt) {
-        const now = new Date();
-        const cardDate = new Date(card.createdAt);
-        const diffTime = Math.abs(now - cardDate);
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        
-        if (diffDays === 1) {
-          lastUsed = '1 day ago';
-        } else if (diffDays < 7) {
-          lastUsed = `${diffDays} days ago`;
-        } else {
-          lastUsed = cardDate.toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric'
-          });
-        }
-      }
-      
-      // Return raw data structure
-      return [
-        userName,
-        cardNumber, 
-        expiry,
-        name,
-        billingAddress,
-        lastUsed,
-        `<button class="admin-btn btn-danger btn-sm delete-card" data-id="${card._id}">Delete</button>`
-      ];
+      // Format last used time
+      const lastUsed = card.createdAt 
+        ? formatActivityTime(card.createdAt)
+        : 'Never';
+
+      return {
+        _id: card._id,
+        user: {
+          firstName: card.user?.firstName || 'Unknown',
+          lastName: card.user?.lastName || 'User',
+          fullName: userName
+        },
+        cardNumber: cardNumber,
+        last4: last4,
+        expiryDate: expiryDate,
+        expMonth: expMonth || 'undefined',
+        expYear: expYear || 'undefined',
+        fullName: card.fullName || 'Dati Weekend', // Default as seen in your frontend
+        billingAddress: card.billingAddress || 'N/A',
+        city: card.city || '',
+        country: card.country || '',
+        lastUsed: lastUsed,
+        createdAt: card.createdAt
+      };
     });
-    
-    // Return raw array data
-    res.status(200).json(formattedCards);
-    
+
+    // Get total count for pagination
+    const totalCount = await CardPayment.countDocuments();
+    const totalPages = Math.ceil(totalCount / limit);
+
+    console.log('Sending formatted cards:', formattedCards.length);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        cards: formattedCards,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
+
   } catch (err) {
     console.error('Admin cards error:', err);
     res.status(500).json({
-      error: 'Failed to fetch saved cards'
+      status: 'error',
+      message: 'Failed to fetch cards data'
     });
   }
 });
@@ -8937,29 +8937,32 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
 // Admin Delete Card Endpoint
 app.delete('/api/admin/cards/:id', adminProtect, async (req, res) => {
   try {
-    const cardId = req.params.id;
-    
-    const card = await CardPayment.findByIdAndDelete(cardId);
+    const card = await CardPayment.findByIdAndDelete(req.params.id);
     
     if (!card) {
       return res.status(404).json({
-        error: 'Card not found'
+        status: 'fail',
+        message: 'Card not found'
       });
     }
     
     res.status(200).json({
+      status: 'success',
       message: 'Card deleted successfully'
     });
     
+    await logActivity('delete-card', 'card', card._id, req.admin._id, 'Admin', req, {
+      userId: card.user,
+      last4: card.cardNumber ? card.cardNumber.slice(-4) : '****'
+    });
   } catch (err) {
     console.error('Admin delete card error:', err);
     res.status(500).json({
-      error: 'Failed to delete card'
+      status: 'error',
+      message: 'Failed to delete card'
     });
   }
 });
-
-
 
 
 
@@ -9100,6 +9103,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
