@@ -8840,7 +8840,59 @@ function getActivityDescription(action, metadata) {
 
 
 
-
+// Admin Cards Endpoint - Fix for the 404 error
+app.get('/api/admin/cards', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    
+    console.log('Fetching cards with page:', page, 'limit:', limit);
+    
+    // Get saved cards with user info
+    const cards = await CardPayment.find()
+      .populate('user', 'firstName lastName email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
+    // Get total count for pagination
+    const totalCount = await CardPayment.countDocuments();
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    console.log(`Found ${cards.length} cards out of ${totalCount} total`);
+    
+    // Format the response to match exactly what the frontend expects
+    const response = {
+      status: 'success',
+      data: {
+        cards: cards.map(card => ({
+          // Map to match your admin table columns exactly
+          user: card.user ? `${card.user.firstName} ${card.user.lastName}` : 'Unknown User',
+          cardNumber: `**** **** **** ${card.cardNumber?.slice(-4) || '0000'}`,
+          expiry: card.expiryDate || 'N/A',
+          name: card.fullName || 'N/A',
+          billingAddress: card.billingAddress || 'N/A',
+          lastUsed: card.lastUsed ? new Date(card.lastUsed).toLocaleDateString() : 'Never',
+          actions: `<button class="admin-btn btn-danger btn-sm delete-card" data-id="${card._id}">Delete</button>`
+        })),
+        totalCount: totalCount,
+        totalPages: totalPages,
+        currentPage: page
+      }
+    };
+    
+    res.status(200).json(response);
+    
+  } catch (err) {
+    console.error('Admin cards endpoint error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch saved cards'
+    });
+  }
+});
 
 
 
@@ -8974,6 +9026,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
