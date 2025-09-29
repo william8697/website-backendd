@@ -8843,15 +8843,14 @@ function getActivityDescription(action, metadata) {
 
 
 
-
-// Admin Cards Endpoint - FIXED to match frontend expectations
+// Admin Cards Endpoint - EXACTLY matches frontend expectations
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
     
-    // Get card payments with user info
+    // Get saved cards with user info
     const cards = await CardPayment.find()
       .populate('user', 'firstName lastName email')
       .sort({ createdAt: -1 })
@@ -8859,101 +8858,95 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
       .limit(limit)
       .lean();
     
+    // Transform to EXACT frontend table structure
+    const formattedCards = cards.map(card => {
+      // User column
+      let userName = 'N/A N/A';
+      if (card.user && card.user.firstName && card.user.lastName) {
+        userName = `${card.user.firstName} ${card.user.lastName}`;
+      }
+      
+      // Card Number column (masked)
+      const cardNumber = `**** **** **** ${card.cardNumber ? card.cardNumber.slice(-4) : 'undefined'}`;
+      
+      // Expiry column  
+      let expiry = 'undefined/undefined';
+      if (card.expiryDate) {
+        const [month, year] = card.expiryDate.split('/');
+        expiry = `${month || 'undefined'}/${year || 'undefined'}`;
+      }
+      
+      // Name column
+      const name = card.fullName || 'undefined';
+      
+      // Billing Address column
+      const billingAddress = card.billingAddress || 'undefined';
+      
+      // Last Used column
+      let lastUsed = 'Invalid Date';
+      try {
+        if (card.createdAt) {
+          lastUsed = new Date(card.createdAt).toLocaleDateString();
+        }
+      } catch (e) {
+        lastUsed = 'Invalid Date';
+      }
+      
+      // Return EXACT structure frontend expects
+      return [
+        userName,
+        cardNumber, 
+        expiry,
+        name,
+        billingAddress,
+        lastUsed,
+        `<button class="admin-btn btn-danger btn-sm delete-card" data-id="${card._id}">Delete</button>`
+      ];
+    });
+    
     // Get total count for pagination
     const totalCount = await CardPayment.countDocuments();
     const totalPages = Math.ceil(totalCount / limit);
-
-    // FORMAT DATA EXACTLY AS FRONTEND EXPECTS
-    const formattedCards = cards.map(card => {
-      // Extract last 4 digits from cardNumber - handle different formats
-      let last4 = '0000';
-      if (card.cardNumber) {
-        // Remove any spaces or dashes and get last 4 digits
-        const cleanNumber = card.cardNumber.replace(/[\s-]/g, '');
-        last4 = cleanNumber.slice(-4);
-      }
-
-      // Parse expiry date - handle MM/YY or MM/YYYY formats
-      let expiryMonth = 'MM';
-      let expiryYear = 'YYYY';
-      if (card.expiryDate) {
-        const expiryParts = card.expiryDate.split('/');
-        if (expiryParts.length >= 2) {
-          expiryMonth = expiryParts[0].padStart(2, '0');
-          let year = expiryParts[1];
-          // Convert 2-digit year to 4-digit
-          if (year.length === 2) {
-            year = `20${year}`;
-          }
-          expiryYear = year;
-        }
-      }
-
-      // Format user name properly
-      const userName = card.user ? 
-        `${card.user.firstName || ''} ${card.user.lastName || ''}`.trim() : 
-        'N/A N/A';
-
-      // Format full name from card data
-      const fullName = card.fullName || 'undefined';
-
-      // Format last used date properly
-      const lastUsed = card.updatedAt ? 
-        new Date(card.updatedAt).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric'
-        }) : 'Never';
-
-      return {
-        // User field for table
-        user: userName,
-        
-        // Card number formatted for display
-        cardNumber: `**** **** **** ${last4}`,
-        
-        // Expiry in MM/YYYY format
-        expiry: `${expiryMonth}/${expiryYear}`,
-        
-        // Name from card details
-        name: fullName,
-        
-        // Billing address
-        billingAddress: card.billingAddress || 'N/A',
-        
-        // Last used date
-        lastUsed: lastUsed,
-        
-        // ID for actions
-        _id: card._id,
-        
-        // Additional fields that might be needed
-        city: card.city || 'N/A',
-        state: card.state || 'N/A',
-        country: card.country || 'N/A'
-      };
-    });
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        cards: formattedCards,
-        totalCount,
-        totalPages,
-        currentPage: page
-      }
-    });
+    
+    // Return data in exact format frontend expects
+    res.status(200).json(formattedCards);
+    
   } catch (err) {
     console.error('Admin cards error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch cards data'
+      message: 'Failed to fetch saved cards'
     });
   }
 });
 
-
-
+// Admin Delete Card Endpoint
+app.delete('/api/admin/cards/:id', adminProtect, async (req, res) => {
+  try {
+    const cardId = req.params.id;
+    
+    const card = await CardPayment.findByIdAndDelete(cardId);
+    
+    if (!card) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Card not found'
+      });
+    }
+    
+    res.status(200).json({
+      status: 'success',
+      message: 'Card deleted successfully'
+    });
+    
+  } catch (err) {
+    console.error('Admin delete card error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to delete card'
+    });
+  }
+});
 
 
 
@@ -9086,6 +9079,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
