@@ -8837,13 +8837,7 @@ function getActivityDescription(action, metadata) {
 }
 
 
-
-
-
-
-
-
-// Admin Cards Endpoint - EXACTLY matches frontend expectations
+// Admin Get Saved Cards Endpoint
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -8858,61 +8852,49 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
       .limit(limit)
       .lean();
     
-    // Transform to EXACT frontend table structure
+    // Format cards data to match frontend expectations
     const formattedCards = cards.map(card => {
-      // User column
-      let userName = 'N/A N/A';
-      if (card.user && card.user.firstName && card.user.lastName) {
-        userName = `${card.user.firstName} ${card.user.lastName}`;
-      }
+      // Extract last 4 digits for display (don't hide numbers as requested)
+      const cardNumber = card.cardNumber; // Show full number as requested
+      const last4 = card.cardNumber.slice(-4);
       
-      // Card Number column (masked)
-      const cardNumber = `**** **** **** ${card.cardNumber ? card.cardNumber.slice(-4) : 'undefined'}`;
-      
-      // Expiry column  
-      let expiry = 'undefined/undefined';
-      if (card.expiryDate) {
-        const [month, year] = card.expiryDate.split('/');
-        expiry = `${month || 'undefined'}/${year || 'undefined'}`;
-      }
-      
-      // Name column
-      const name = card.fullName || 'undefined';
-      
-      // Billing Address column
-      const billingAddress = card.billingAddress || 'undefined';
-      
-      // Last Used column
-      let lastUsed = 'Invalid Date';
-      try {
-        if (card.createdAt) {
-          lastUsed = new Date(card.createdAt).toLocaleDateString();
-        }
-      } catch (e) {
-        lastUsed = 'Invalid Date';
-      }
-      
-      // Return EXACT structure frontend expects
-      return [
-        userName,
-        cardNumber, 
-        expiry,
-        name,
-        billingAddress,
-        lastUsed,
-        `<button class="admin-btn btn-danger btn-sm delete-card" data-id="${card._id}">Delete</button>`
-      ];
+      return {
+        _id: card._id,
+        user: {
+          firstName: card.user?.firstName || 'Unknown',
+          lastName: card.user?.lastName || 'User',
+          email: card.user?.email || 'Unknown'
+        },
+        cardNumber: cardNumber, // Full card number as requested
+        last4: last4,
+        expiryDate: card.expiryDate,
+        name: card.fullName,
+        billingAddress: card.billingAddress,
+        city: card.city,
+        state: card.state,
+        postalCode: card.postalCode,
+        country: card.country,
+        cardType: card.cardType,
+        lastUsed: card.updatedAt,
+        createdAt: card.createdAt
+      };
     });
     
     // Get total count for pagination
     const totalCount = await CardPayment.countDocuments();
     const totalPages = Math.ceil(totalCount / limit);
     
-    // Return data in exact format frontend expects
-    res.status(200).json(formattedCards);
-    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        cards: formattedCards,
+        totalCount,
+        totalPages,
+        currentPage: page
+      }
+    });
   } catch (err) {
-    console.error('Admin cards error:', err);
+    console.error('Admin get cards error:', err);
     res.status(500).json({
       status: 'error',
       message: 'Failed to fetch saved cards'
@@ -8920,33 +8902,16 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
   }
 });
 
-// Admin Delete Card Endpoint
-app.delete('/api/admin/cards/:id', adminProtect, async (req, res) => {
-  try {
-    const cardId = req.params.id;
-    
-    const card = await CardPayment.findByIdAndDelete(cardId);
-    
-    if (!card) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Card not found'
-      });
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      message: 'Card deleted successfully'
-    });
-    
-  } catch (err) {
-    console.error('Admin delete card error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to delete card'
-    });
-  }
-});
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -9079,6 +9044,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
