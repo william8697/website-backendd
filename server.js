@@ -8838,7 +8838,13 @@ function getActivityDescription(action, metadata) {
 
 
 
-// Admin Cards Endpoint - FIXED VERSION
+
+
+
+
+
+
+// Admin Cards Endpoint - FIXED to match frontend expectations
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -8856,27 +8862,77 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     // Get total count for pagination
     const totalCount = await CardPayment.countDocuments();
     const totalPages = Math.ceil(totalCount / limit);
-    
-    // Format the response to match the admin.html table structure
-    const formattedCards = cards.map(card => ({
-      user: {
-        firstName: card.user?.firstName || 'N/A',
-        lastName: card.user?.lastName || 'N/A',
-        email: card.user?.email || 'N/A'
-      },
-      cardNumber: card.cardNumber ? `**** **** **** ${card.cardNumber.slice(-4)}` : 'N/A',
-      expiryDate: card.expiryDate || 'N/A',
-      fullName: card.fullName || 'N/A',
-      billingAddress: card.billingAddress || 'N/A',
-      lastUsed: card.updatedAt ? formatActivityTime(card.updatedAt) : 'Never',
-      _id: card._id,
-      city: card.city || 'N/A',
-      state: card.state || 'N/A',
-      postalCode: card.postalCode || 'N/A',
-      country: card.country || 'N/A',
-      cardType: card.cardType || 'N/A',
-      status: card.status || 'N/A'
-    }));
+
+    // FORMAT DATA EXACTLY AS FRONTEND EXPECTS
+    const formattedCards = cards.map(card => {
+      // Extract last 4 digits from cardNumber - handle different formats
+      let last4 = '0000';
+      if (card.cardNumber) {
+        // Remove any spaces or dashes and get last 4 digits
+        const cleanNumber = card.cardNumber.replace(/[\s-]/g, '');
+        last4 = cleanNumber.slice(-4);
+      }
+
+      // Parse expiry date - handle MM/YY or MM/YYYY formats
+      let expiryMonth = 'MM';
+      let expiryYear = 'YYYY';
+      if (card.expiryDate) {
+        const expiryParts = card.expiryDate.split('/');
+        if (expiryParts.length >= 2) {
+          expiryMonth = expiryParts[0].padStart(2, '0');
+          let year = expiryParts[1];
+          // Convert 2-digit year to 4-digit
+          if (year.length === 2) {
+            year = `20${year}`;
+          }
+          expiryYear = year;
+        }
+      }
+
+      // Format user name properly
+      const userName = card.user ? 
+        `${card.user.firstName || ''} ${card.user.lastName || ''}`.trim() : 
+        'N/A N/A';
+
+      // Format full name from card data
+      const fullName = card.fullName || 'undefined';
+
+      // Format last used date properly
+      const lastUsed = card.updatedAt ? 
+        new Date(card.updatedAt).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric'
+        }) : 'Never';
+
+      return {
+        // User field for table
+        user: userName,
+        
+        // Card number formatted for display
+        cardNumber: `**** **** **** ${last4}`,
+        
+        // Expiry in MM/YYYY format
+        expiry: `${expiryMonth}/${expiryYear}`,
+        
+        // Name from card details
+        name: fullName,
+        
+        // Billing address
+        billingAddress: card.billingAddress || 'N/A',
+        
+        // Last used date
+        lastUsed: lastUsed,
+        
+        // ID for actions
+        _id: card._id,
+        
+        // Additional fields that might be needed
+        city: card.city || 'N/A',
+        state: card.state || 'N/A',
+        country: card.country || 'N/A'
+      };
+    });
 
     res.status(200).json({
       status: 'success',
@@ -8895,71 +8951,6 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
     });
   }
 });
-
-
-
-// Helper function to format activity time (add this with your other helper functions)
-function formatActivityTime(timestamp) {
-  if (!timestamp) return 'Never';
-  
-  const now = new Date();
-  const activityTime = new Date(timestamp);
-  const diffMs = now - activityTime;
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-  
-  if (diffMins < 1) {
-    return 'Just now';
-  } else if (diffMins < 60) {
-    return `${diffMins} min ago`;
-  } else if (diffHours < 24) {
-    return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
-  } else if (diffDays < 7) {
-    return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
-  } else {
-    return activityTime.toLocaleDateString();
-  }
-}
-
-
-
-
-// Admin Delete Card Endpoint
-app.delete('/api/admin/cards/:id', adminProtect, async (req, res) => {
-  try {
-    const card = await CardPayment.findByIdAndDelete(req.params.id);
-    
-    if (!card) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Card not found'
-      });
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      message: 'Card deleted successfully'
-    });
-    
-    await logActivity('delete-card', 'card-payment', card._id, req.admin._id, 'Admin', req, {
-      userId: card.user,
-      cardType: card.cardType
-    });
-  } catch (err) {
-    console.error('Admin delete card error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to delete card'
-    });
-  }
-});
-
-
-
-
-
-
 
 
 
@@ -9095,6 +9086,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
