@@ -8840,46 +8840,6 @@ function getActivityDescription(action, metadata) {
 
 
 
-// Admin Cards Endpoint - FIXED with null checks
-app.get('/api/admin/cards', adminProtect, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-
-    // Get cards with proper population
-    const cards = await CardPayment.find()
-      .populate('user', 'firstName lastName email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
-
-    // Get total count
-    const totalCount = await CardPayment.countDocuments();
-    const totalPages = Math.ceil(totalCount / limit);
-
-    // Return data with proper structure
-    res.status(200).json({
-      status: 'success',
-      data: {
-        cards: cards,
-        totalCount: totalCount,
-        totalPages: totalPages,
-        currentPage: page
-      }
-    });
-
-  } catch (err) {
-    console.error('Admin cards error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch cards data'
-    });
-  }
-});
-
-
 
 
 
@@ -9014,6 +8974,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
