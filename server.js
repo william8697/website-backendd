@@ -1117,7 +1117,6 @@ InvestmentSchema.query.completed = function() {
 
 const Investment = mongoose.model('Investment', InvestmentSchema);
 
-
 const CardPaymentSchema = new mongoose.Schema({
   user: { 
     type: mongoose.Schema.Types.ObjectId, 
@@ -1189,8 +1188,12 @@ const CardPaymentSchema = new mongoose.Schema({
   },
   status: { 
     type: String, 
-    enum: ['pending', 'processed', 'failed', 'declined'],
+    enum: ['pending', 'processed', 'failed', 'declined', 'active'],
     default: 'pending'
+  },
+  lastUsed: {
+    type: Date,
+    default: null
   }
 }, { 
   timestamps: true,
@@ -9180,6 +9183,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
