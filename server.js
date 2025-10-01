@@ -134,8 +134,8 @@ const googleClient = new OAuth2Client({
 
 // JWT configuration with stronger security
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(64).toString('hex');
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
-const JWT_COOKIE_EXPIRES = process.env.JWT_COOKIE_EXPIRES || 30;
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7200s'; // 2 hours in seconds
+const JWT_COOKIE_EXPIRES = process.env.JWT_COOKIE_EXPIRES || 0.083; // 2 hours in days (2/24)
 
 // Enhanced database models with full indexes and validation
 const UserSchema = new mongoose.Schema({
@@ -9137,6 +9137,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
