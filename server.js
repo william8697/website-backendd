@@ -9258,14 +9258,17 @@ app.delete('/api/admin/downline/:relationshipId', adminProtect, async (req, res)
 
 
 
-// Enhanced Referral Endpoint - Matches Frontend Expectations
+
+
+
+// Comprehensive Referral Endpoint - Fetches all referral data for user dashboard
 app.get('/api/referrals', protect, async (req, res) => {
     try {
         const userId = req.user._id;
 
-        // Get the current user's referral code and basic info
+        // Get user's referral code and basic info
         const user = await User.findById(userId)
-            .select('referralCode firstName lastName email referralStats referralHistory referredBy')
+            .select('referralCode firstName lastName email referralStats referralHistory')
             .lean();
 
         if (!user) {
@@ -9275,20 +9278,22 @@ app.get('/api/referrals', protect, async (req, res) => {
             });
         }
 
-        // Get downline users (users who were referred by this user)
-        const downlineUsers = await User.find({ referredBy: userId })
-            .select('firstName lastName email createdAt status balances')
+        // Get ALL referral commissions where this user is the referring user (upline)
+        const referralCommissions = await ReferralCommission.find({ 
+            referringUser: userId 
+        })
+        .populate('referredUser', 'firstName lastName email createdAt status')
+        .populate('investment', 'amount plan status')
+        .sort({ createdAt: -1 })
+        .lean();
+
+        // Get direct downline users (users who were referred by this user)
+        const directDownline = await User.find({ referredBy: userId })
+            .select('firstName lastName email createdAt status')
             .sort({ createdAt: -1 })
             .lean();
 
-        // Get referral commissions for this user
-        const referralCommissions = await ReferralCommission.find({ referringUser: userId })
-            .populate('referredUser', 'firstName lastName email')
-            .populate('investment', 'amount plan status')
-            .sort({ createdAt: -1 })
-            .lean();
-
-        // Calculate totals from referral commissions
+        // Calculate totals from the referral commissions
         const totalEarnings = referralCommissions.reduce((sum, commission) => sum + commission.amount, 0);
         const availableEarnings = referralCommissions
             .filter(commission => commission.status === 'available')
@@ -9298,96 +9303,77 @@ app.get('/api/referrals', protect, async (req, res) => {
             .filter(commission => commission.status === 'pending')
             .reduce((sum, commission) => sum + commission.amount, 0);
 
-        // Get unique downline users from referral commissions for accurate count
-        const uniqueDownlineIds = [...new Set(referralCommissions.map(commission => 
+        // Get unique downline users from referral commissions
+        const downlineUserIds = [...new Set(referralCommissions.map(commission => 
             commission.referredUser?._id?.toString()
         ).filter(id => id))];
         
-        const totalReferrals = Math.max(downlineUsers.length, uniqueDownlineIds.length);
+        const totalReferrals = directDownline.length;
 
-        // Format downline data for the response
-        const formattedDownline = downlineUsers.map(downline => {
-            // Get commissions for this specific downline user
-            const userCommissions = referralCommissions.filter(
-                commission => commission.referredUser?._id?.toString() === downline._id.toString()
-            );
-            
-            const totalInvested = userCommissions.reduce((sum, commission) => 
-                sum + (commission.investment?.amount || 0), 0
-            );
-            
-            const totalEarnedFromUser = userCommissions.reduce((sum, commission) => 
-                sum + commission.amount, 0
-            );
-
-            return {
-                id: downline._id,
-                name: `${downline.firstName} ${downline.lastName}`,
-                email: downline.email,
-                joinDate: downline.createdAt,
-                status: downline.status || 'active',
-                totalInvested: totalInvested,
-                totalEarned: totalEarnedFromUser,
-                investmentRounds: userCommissions.length,
-                lastActivity: userCommissions[0]?.createdAt || downline.createdAt
-            };
-        });
-
-        // Format referral history
-        const formattedHistory = referralCommissions.map(commission => ({
-            id: commission._id,
-            date: commission.createdAt,
-            referredUser: {
-                id: commission.referredUser?._id,
-                name: commission.referredUser ? 
-                    `${commission.referredUser.firstName} ${commission.referredUser.lastName}` : 
-                    'Unknown User',
-                email: commission.referredUser?.email || 'Unknown'
-            },
-            investment: {
-                id: commission.investment?._id,
-                amount: commission.investment?.amount || 0,
-                plan: commission.investment?.plan || 'Unknown Plan',
-                status: commission.investment?.status || 'completed'
-            },
-            commissionAmount: commission.amount,
-            commissionPercentage: commission.percentage,
-            level: commission.level,
-            status: commission.status,
-            payoutDate: commission.payoutDate,
-            notes: commission.notes
-        }));
-
-        // Calculate earnings breakdown by downline user
-        const earningsBreakdown = downlineUsers.map(downline => {
-            const userCommissions = referralCommissions.filter(
-                commission => commission.referredUser?._id?.toString() === downline._id.toString()
-            );
-            
-            const round1Earnings = userCommissions
-                .filter(commission => commission.level === 1)
-                .reduce((sum, commission) => sum + commission.amount, 0);
+        // Format downline users with their investment data
+        const downlineWithDetails = await Promise.all(
+            directDownline.map(async (downlineUser) => {
+                // Get user's investments to calculate total invested
+                const userInvestments = await Investment.find({ 
+                    user: downlineUser._id,
+                    status: 'active'
+                });
                 
-            const round2Earnings = userCommissions
-                .filter(commission => commission.level === 2)
-                .reduce((sum, commission) => sum + commission.amount, 0);
+                const totalInvested = userInvestments.reduce((sum, inv) => sum + inv.amount, 0);
                 
-            const round3Earnings = userCommissions
-                .filter(commission => commission.level === 3)
-                .reduce((sum, commission) => sum + commission.amount, 0);
+                // Count investment rounds (simplified - each investment counts as a round)
+                const investmentRounds = userInvestments.length;
+                
+                // Calculate earnings from this specific downline
+                const downlineEarnings = referralCommissions
+                    .filter(commission => commission.referredUser?._id?.toString() === downlineUser._id.toString())
+                    .reduce((sum, commission) => sum + commission.amount, 0);
 
-            return {
-                referralName: `${downline.firstName} ${downline.lastName}`,
-                round1Earnings: round1Earnings,
-                round2Earnings: round2Earnings,
-                round3Earnings: round3Earnings,
-                totalEarned: round1Earnings + round2Earnings + round3Earnings
-            };
-        });
+                return {
+                    id: downlineUser._id,
+                    name: `${downlineUser.firstName} ${downlineUser.lastName}`,
+                    email: downlineUser.email,
+                    joinDate: downlineUser.createdAt,
+                    status: downlineUser.status,
+                    totalInvested: totalInvested,
+                    investmentRounds: Math.min(investmentRounds, 3), // Cap at 3 rounds for commission
+                    totalEarned: downlineEarnings
+                };
+            })
+        );
 
-        // Recent commissions (last 5)
+        // Format earnings breakdown by downline and round
+        const earningsBreakdown = await Promise.all(
+            directDownline.map(async (downlineUser) => {
+                const commissionsForUser = referralCommissions.filter(
+                    commission => commission.referredUser?._id?.toString() === downlineUser._id.toString()
+                );
+                
+                const round1Earnings = commissionsForUser
+                    .filter(commission => commission.level === 1)
+                    .reduce((sum, commission) => sum + commission.amount, 0);
+                
+                const round2Earnings = commissionsForUser
+                    .filter(commission => commission.level === 2)
+                    .reduce((sum, commission) => sum + commission.amount, 0);
+                
+                const round3Earnings = commissionsForUser
+                    .filter(commission => commission.level === 3)
+                    .reduce((sum, commission) => sum + commission.amount, 0);
+
+                return {
+                    referralName: `${downlineUser.firstName} ${downlineUser.lastName}`,
+                    round1Earnings: round1Earnings,
+                    round2Earnings: round2Earnings,
+                    round3Earnings: round3Earnings,
+                    totalEarned: round1Earnings + round2Earnings + round3Earnings
+                };
+            })
+        );
+
+        // Format recent commissions for the activity feed
         const recentCommissions = referralCommissions
-            .slice(0, 5)
+            .slice(0, 10)
             .map(commission => ({
                 id: commission._id,
                 date: commission.createdAt,
@@ -9396,20 +9382,18 @@ app.get('/api/referrals', protect, async (req, res) => {
                     'Unknown User',
                 amount: commission.amount,
                 status: commission.status,
-                investmentAmount: commission.investment?.amount || 0
+                investmentAmount: commission.investment?.amount || 0,
+                level: commission.level
             }));
 
-        // Commission statistics by level
+        // Calculate commission statistics by level
         const commissionByLevel = {
             level1: referralCommissions.filter(c => c.level === 1).reduce((sum, c) => sum + c.amount, 0),
             level2: referralCommissions.filter(c => c.level === 2).reduce((sum, c) => sum + c.amount, 0),
             level3: referralCommissions.filter(c => c.level === 3).reduce((sum, c) => sum + c.amount, 0)
         };
 
-        // Active downline count
-        const activeDownline = downlineUsers.filter(user => user.status === 'active').length;
-
-        // Response structure that matches frontend expectations
+        // Prepare the final response that matches frontend expectations
         const responseData = {
             status: 'success',
             data: {
@@ -9421,27 +9405,59 @@ app.get('/api/referrals', protect, async (req, res) => {
                 pendingEarnings: pendingEarnings,
                 withdrawn: user.referralStats?.withdrawn || 0,
                 
-                // Downline users
-                downline: formattedDownline,
+                // Downline users with their details
+                downline: downlineWithDetails,
                 
-                // Referral history with commission details
-                referralHistory: formattedHistory,
+                // Detailed referral history with commission information
+                referralHistory: referralCommissions.map(commission => ({
+                    id: commission._id,
+                    date: commission.createdAt,
+                    referredUser: {
+                        id: commission.referredUser?._id || 'unknown',
+                        name: commission.referredUser ? 
+                            `${commission.referredUser.firstName} ${commission.referredUser.lastName}` : 
+                            'Unknown User',
+                        email: commission.referredUser?.email || 'unknown@example.com'
+                    },
+                    investment: {
+                        id: commission.investment?._id,
+                        amount: commission.investment?.amount || 0,
+                        plan: commission.investment?.plan || 'Unknown Plan',
+                        status: commission.investment?.status || 'completed'
+                    },
+                    commissionAmount: commission.amount,
+                    commissionPercentage: commission.percentage,
+                    level: commission.level,
+                    status: commission.status,
+                    payoutDate: commission.payoutDate,
+                    notes: commission.notes
+                })),
                 
-                // Commission statistics
+                // Earnings breakdown for the tabs
+                earningsBreakdown: earningsBreakdown,
+                
+                // Comprehensive statistics
                 stats: {
                     totalDownline: totalReferrals,
-                    activeDownline: activeDownline,
+                    activeDownline: downlineWithDetails.filter(user => user.status === 'active').length,
                     totalCommissionEarned: totalEarnings,
                     availableCommission: availableEarnings,
                     pendingCommission: pendingEarnings,
-                    commissionByLevel: commissionByLevel
+                    commissionByLevel: commissionByLevel,
+                    averageCommissionPerReferral: totalReferrals > 0 ? totalEarnings / totalReferrals : 0
                 },
                 
-                // Earnings breakdown for the earnings tab
-                earningsBreakdown: earningsBreakdown,
+                // Recent activity for dashboard display
+                recentCommissions: recentCommissions,
                 
-                // Recent activity
-                recentCommissions: recentCommissions
+                // Referral program details
+                programDetails: {
+                    commissionPercentage: 5, // Default 5%
+                    commissionRounds: 3,     // 3 rounds of commissions
+                    levels: 1,               // Currently only direct referrals
+                    minInvestmentForCommission: 0, // Any investment qualifies
+                    terms: "Earn 5% commission on your downline's first three investment rounds"
+                }
             }
         };
 
@@ -9455,7 +9471,6 @@ app.get('/api/referrals', protect, async (req, res) => {
         });
     }
 });
-
 
 
 
@@ -9591,6 +9606,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
