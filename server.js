@@ -9494,7 +9494,300 @@ app.get('/api/users/downline', protect, async (req, res) => {
 
 
 
+// Enhanced Referral Endpoint - Fetches from DownlineRelationship with User data
+app.get('/api/referrals', protect, async (req, res) => {
+    try {
+        const userId = req.user._id;
 
+        // Get user's referral code
+        const user = await User.findById(userId).select('referralCode referralStats');
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Get all downline relationships where this user is the upline
+        const downlineRelationships = await DownlineRelationship.find({ 
+            upline: userId 
+        })
+        .populate('downline', 'firstName lastName email createdAt')
+        .populate('upline', 'firstName lastName email')
+        .sort({ createdAt: -1 })
+        .lean();
+
+        // Calculate referral statistics
+        const totalReferrals = downlineRelationships.length;
+        const activeReferrals = downlineRelationships.filter(rel => rel.status === 'active').length;
+        
+        // Calculate total earnings from commission history
+        const commissionEarnings = await CommissionHistory.aggregate([
+            { 
+                $match: { 
+                    upline: userId,
+                    status: 'paid'
+                } 
+            },
+            {
+                $group: {
+                    _id: null,
+                    totalEarnings: { $sum: '$commissionAmount' }
+                }
+            }
+        ]);
+
+        const totalEarnings = commissionEarnings.length > 0 ? commissionEarnings[0].totalEarnings : 0;
+
+        // Calculate pending earnings (from active relationships with remaining rounds)
+        const pendingEarningsResult = await DownlineRelationship.aggregate([
+            { 
+                $match: { 
+                    upline: userId,
+                    status: 'active',
+                    remainingRounds: { $gt: 0 }
+                } 
+            },
+            {
+                $group: {
+                    _id: null,
+                    totalPotential: { $sum: '$totalCommissionEarned' }
+                }
+            }
+        ]);
+
+        const pendingEarnings = pendingEarningsResult.length > 0 ? pendingEarningsResult[0].totalPotential : 0;
+
+        // Format referral data with real names
+        const referrals = downlineRelationships.map(relationship => {
+            const downlineUser = relationship.downline;
+            return {
+                id: relationship._id,
+                fullName: `${downlineUser.firstName} ${downlineUser.lastName}`,
+                email: downlineUser.email,
+                joinDate: downlineUser.createdAt,
+                isActive: relationship.status === 'active',
+                investmentRounds: relationship.commissionRounds - relationship.remainingRounds,
+                totalEarned: relationship.totalCommissionEarned,
+                commissionPercentage: relationship.commissionPercentage,
+                remainingRounds: relationship.remainingRounds,
+                status: relationship.status,
+                assignedAt: relationship.assignedAt
+            };
+        });
+
+        // Calculate earnings breakdown by round
+        const earningsBreakdown = await CommissionHistory.aggregate([
+            { 
+                $match: { 
+                    upline: userId,
+                    status: 'paid'
+                } 
+            },
+            {
+                $group: {
+                    _id: {
+                        downline: '$downline',
+                        roundNumber: '$roundNumber'
+                    },
+                    roundEarnings: { $sum: '$commissionAmount' },
+                    downlineName: { $first: '$downline' }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: '_id.downline',
+                    foreignField: '_id',
+                    as: 'downlineInfo'
+                }
+            },
+            {
+                $unwind: '$downlineInfo'
+            },
+            {
+                $group: {
+                    _id: '$_id.downline',
+                    referralName: { 
+                        $first: { 
+                            $concat: [
+                                '$downlineInfo.firstName', 
+                                ' ', 
+                                '$downlineInfo.lastName'
+                            ] 
+                        } 
+                    },
+                    round1Earnings: {
+                        $sum: {
+                            $cond: [{ $eq: ['$_id.roundNumber', 1] }, '$roundEarnings', 0]
+                        }
+                    },
+                    round2Earnings: {
+                        $sum: {
+                            $cond: [{ $eq: ['$_id.roundNumber', 2] }, '$roundEarnings', 0]
+                        }
+                    },
+                    round3Earnings: {
+                        $sum: {
+                            $cond: [{ $eq: ['$_id.roundNumber', 3] }, '$roundEarnings', 0]
+                        }
+                    },
+                    totalEarned: { $sum: '$roundEarnings' }
+                }
+            }
+        ]);
+
+        // Update user's referral stats in the database
+        await User.findByIdAndUpdate(userId, {
+            $set: {
+                'referralStats.totalReferrals': totalReferrals,
+                'referralStats.totalEarnings': totalEarnings,
+                'referralStats.availableBalance': totalEarnings - (user.referralStats?.withdrawn || 0),
+                'downlineStats.totalDownlines': totalReferrals,
+                'downlineStats.activeDownlines': activeReferrals,
+                'downlineStats.totalCommissionEarned': totalEarnings
+            }
+        });
+
+        // Return the complete referral data in the exact format expected by frontend
+        const responseData = {
+            status: 'success',
+            data: {
+                code: user.referralCode,
+                totalReferrals: totalReferrals,
+                totalEarnings: totalEarnings,
+                pendingEarnings: pendingEarnings,
+                activeReferrals: activeReferrals,
+                referrals: referrals,
+                earnings: earningsBreakdown,
+                stats: {
+                    directReferrals: totalReferrals,
+                    totalCommission: totalEarnings,
+                    availableBalance: totalEarnings - (user.referralStats?.withdrawn || 0),
+                    withdrawn: user.referralStats?.withdrawn || 0
+                }
+            }
+        };
+
+        res.status(200).json(responseData);
+
+        // Log the activity
+        await logActivity('view_referrals', 'referral', userId, userId, 'User', req);
+
+    } catch (error) {
+        console.error('Error loading referral data:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to load referral data'
+        });
+    }
+});
+
+// Additional endpoint for downline details (used by the referral tabs)
+app.get('/api/referrals/downline', protect, async (req, res) => {
+    try {
+        const userId = req.user._id;
+
+        // Get downline relationships with detailed information
+        const downlineRelationships = await DownlineRelationship.find({ 
+            upline: userId 
+        })
+        .populate('downline', 'firstName lastName email createdAt')
+        .populate('upline', 'firstName lastName email')
+        .sort({ createdAt: -1 })
+        .lean();
+
+        // Format for the frontend tables
+        const referrals = downlineRelationships.map(relationship => {
+            const downlineUser = relationship.downline;
+            return {
+                id: relationship._id,
+                fullName: `${downlineUser.firstName} ${downlineUser.lastName}`,
+                email: downlineUser.email,
+                joinDate: downlineUser.createdAt,
+                isActive: relationship.status === 'active',
+                investmentRounds: relationship.commissionRounds - relationship.remainingRounds,
+                totalEarned: relationship.totalCommissionEarned,
+                status: relationship.status
+            };
+        });
+
+        // Get earnings breakdown
+        const earningsBreakdown = await CommissionHistory.aggregate([
+            { 
+                $match: { 
+                    upline: userId,
+                    status: 'paid'
+                } 
+            },
+            {
+                $group: {
+                    _id: {
+                        downline: '$downline',
+                        roundNumber: '$roundNumber'
+                    },
+                    roundEarnings: { $sum: '$commissionAmount' }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: '_id.downline',
+                    foreignField: '_id',
+                    as: 'downlineInfo'
+                }
+            },
+            {
+                $unwind: '$downlineInfo'
+            },
+            {
+                $group: {
+                    _id: '$_id.downline',
+                    referralName: { 
+                        $first: { 
+                            $concat: [
+                                '$downlineInfo.firstName', 
+                                ' ', 
+                                '$downlineInfo.lastName'
+                            ] 
+                        } 
+                    },
+                    round1Earnings: {
+                        $sum: {
+                            $cond: [{ $eq: ['$_id.roundNumber', 1] }, '$roundEarnings', 0]
+                        }
+                    },
+                    round2Earnings: {
+                        $sum: {
+                            $cond: [{ $eq: ['$_id.roundNumber', 2] }, '$roundEarnings', 0]
+                        }
+                    },
+                    round3Earnings: {
+                        $sum: {
+                            $cond: [{ $eq: ['$_id.roundNumber', 3] }, '$roundEarnings', 0]
+                        }
+                    },
+                    totalEarned: { $sum: '$roundEarnings' }
+                }
+            }
+        ]);
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                referrals: referrals,
+                earnings: earningsBreakdown
+            }
+        });
+
+    } catch (error) {
+        console.error('Error loading downline data:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to load downline information'
+        });
+    }
+});
 
 
 
@@ -9632,5 +9925,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
