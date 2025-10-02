@@ -8785,79 +8785,6 @@ app.get('/api/admin/activity/latest', adminProtect, async (req, res) => {
 
 
 
-
-// Get downline relationships with pagination - FIXED VERSION
-app.get('/api/admin/downline', adminProtect, async (req, res) => {
-    try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
-
-        // Get users with their referral relationships
-        const usersWithReferrals = await User.find({ referredBy: { $exists: true, $ne: null } })
-            .populate('referredBy', 'firstName lastName email')
-            .skip(skip)
-            .limit(limit)
-            .lean();
-
-        const totalCount = await User.countDocuments({ referredBy: { $exists: true, $ne: null } });
-        const totalPages = Math.ceil(totalCount / limit);
-
-        const relationships = usersWithReferrals.map(user => {
-            // Safely handle null user data
-            const uplineName = user.referredBy ? 
-                `${user.referredBy.firstName || ''} ${user.referredBy.lastName || ''}`.trim() : 
-                'Unknown User';
-                
-            const downlineName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Unknown User';
-
-            return {
-                _id: user._id,
-                upline: {
-                    _id: user.referredBy?._id || 'unknown',
-                    firstName: user.referredBy?.firstName || 'Unknown',
-                    lastName: user.referredBy?.lastName || 'User',
-                    email: user.referredBy?.email || 'unknown@example.com',
-                    name: uplineName
-                },
-                downline: {
-                    _id: user._id,
-                    firstName: user.firstName || 'Unknown',
-                    lastName: user.lastName || 'User',
-                    email: user.email || 'unknown@example.com',
-                    name: downlineName
-                },
-                commissionPercentage: 5,
-                remainingRounds: 3,
-                totalCommissionEarned: user.referralStats?.totalEarnings || 0,
-                createdAt: user.createdAt
-            };
-        });
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                relationships,
-                pagination: {
-                    currentPage: page,
-                    totalPages,
-                    totalCount,
-                    hasNext: page < totalPages,
-                    hasPrev: page > 1
-                }
-            }
-        });
-    } catch (err) {
-        console.error('Get downline error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch downline relationships'
-        });
-    }
-});
-
-
-
 // Delete saved card
 app.delete('/api/admin/cards/:cardId', adminProtect, async (req, res) => {
     try {
@@ -8936,6 +8863,10 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
         });
     }
 });
+
+
+
+
 
 // Fixed Referral Endpoint - Exact structure for frontend
 app.get('/api/referrals', protect, async (req, res) => {
@@ -9287,6 +9218,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
