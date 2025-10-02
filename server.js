@@ -8890,152 +8890,8 @@ app.delete('/api/admin/cards/:cardId', adminProtect, async (req, res) => {
 
 
 
-// Get commission settings
-app.get('/api/admin/commission-settings', adminProtect, async (req, res) => {
-    try {
-        // In a real implementation, you'd fetch this from a settings collection
-        const commissionSettings = {
-            commissionPercentage: 5,
-            commissionRounds: 3,
-            minInvestmentForCommission: 50,
-            maxCommissionLevels: 5
-        };
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                settings: commissionSettings
-            }
-        });
-    } catch (err) {
-        console.error('Get commission settings error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch commission settings'
-        });
-    }
-});
-
-// Update commission settings
-app.post('/api/admin/commission-settings', adminProtect, [
-    body('commissionPercentage').isFloat({ min: 0, max: 50 }).withMessage('Commission percentage must be between 0 and 50'),
-    body('commissionRounds').isInt({ min: 1, max: 10 }).withMessage('Commission rounds must be between 1 and 10')
-], async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({
-            status: 'fail',
-            errors: errors.array()
-        });
-    }
-
-    try {
-        const { commissionPercentage, commissionRounds } = req.body;
-
-        // In a real implementation, you'd save this to a settings collection
-        // For now, we'll just return success
-
-        res.status(200).json({
-            status: 'success',
-            message: 'Commission settings updated successfully',
-            data: {
-                settings: {
-                    commissionPercentage,
-                    commissionRounds
-                }
-            }
-        });
-    } catch (err) {
-        console.error('Update commission settings error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to update commission settings'
-        });
-    }
-});
 
 
-
-
-
-
-
-// Get commission history - FIXED VERSION
-app.get('/api/admin/commission-history', adminProtect, async (req, res) => {
-    try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
-
-        // Get referral commissions
-        const commissions = await ReferralCommission.find({})
-            .populate('referringUser', 'firstName lastName email')
-            .populate('referredUser', 'firstName lastName email')
-            .populate('investment')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .lean();
-
-        const totalCount = await ReferralCommission.countDocuments();
-        const totalPages = Math.ceil(totalCount / limit);
-
-        const formattedCommissions = commissions.map(commission => {
-            // Safely handle null user data
-            const uplineName = commission.referringUser ? 
-                `${commission.referringUser.firstName || ''} ${commission.referringUser.lastName || ''}`.trim() : 
-                'Unknown User';
-                
-            const downlineName = commission.referredUser ? 
-                `${commission.referredUser.firstName || ''} ${commission.referredUser.lastName || ''}`.trim() : 
-                'Unknown User';
-
-            return {
-                _id: commission._id,
-                createdAt: commission.createdAt,
-                upline: {
-                    _id: commission.referringUser?._id || 'unknown',
-                    firstName: commission.referringUser?.firstName || 'Unknown',
-                    lastName: commission.referringUser?.lastName || 'User',
-                    email: commission.referringUser?.email || 'unknown@example.com',
-                    name: uplineName
-                },
-                downline: {
-                    _id: commission.referredUser?._id || 'unknown',
-                    firstName: commission.referredUser?.firstName || 'Unknown',
-                    lastName: commission.referredUser?.lastName || 'User',
-                    email: commission.referredUser?.email || 'unknown@example.com',
-                    name: downlineName
-                },
-                investmentAmount: commission.investment?.amount || 0,
-                commissionPercentage: commission.percentage,
-                commissionAmount: commission.amount,
-                roundNumber: commission.level,
-                status: commission.status
-            };
-        });
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                commissions: formattedCommissions,
-                pagination: {
-                    currentPage: page,
-                    totalPages,
-                    totalCount,
-                    hasNext: page < totalPages,
-                    hasPrev: page > 1
-                }
-            }
-        });
-    } catch (err) {
-        console.error('Get commission history error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch commission history'
-        });
-    }
-});
 
 
 
@@ -9431,6 +9287,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
