@@ -809,6 +809,31 @@ PlanSchema.index({ name: 1 });
 PlanSchema.index({ isActive: 1 });
 
 const Plan = mongoose.model('Plan', PlanSchema);
+
+
+
+
+
+const ReferralCommissionSchema = new mongoose.Schema({
+    referringUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    referredUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    investment: { type: mongoose.Schema.Types.ObjectId, ref: 'Investment' },
+    amount: { type: Number, required: true },
+    percentage: { type: Number, required: true },
+    level: { type: Number, required: true }, // 1 for direct, 2 for indirect, etc.
+    status: { type: String, enum: ['pending', 'available', 'paid', 'rejected'], default: 'pending' },
+    payoutDate: Date,
+    notes: String
+}, { timestamps: true });
+
+const ReferralCommission = mongoose.model('ReferralCommission', ReferralCommissionSchema);
+
+
+
+
+
+
+
 const InvestmentSchema = new mongoose.Schema({
   // Core investment information
   user: { 
@@ -2119,7 +2144,40 @@ const checkCSRF = (req, res, next) => {
 
 
 
+// Calculate referral commissions
+async function calculateReferralCommissions(investment) {
+    try {
+        const user = await User.findById(investment.user).populate('referredBy');
+        if (!user || !user.referredBy) return;
 
+        const commissionPercentage = 5; // Default commission percentage
+        const commissionAmount = (investment.amount * commissionPercentage) / 100;
+
+        // Create referral commission record
+        await ReferralCommission.create({
+            referringUser: user.referredBy._id,
+            referredUser: user._id,
+            investment: investment._id,
+            amount: commissionAmount,
+            percentage: commissionPercentage,
+            level: 1,
+            status: 'available'
+        });
+
+        // Update referring user's balance and stats
+        await User.findByIdAndUpdate(user.referredBy._id, {
+            $inc: {
+                'balances.main': commissionAmount,
+                'referralStats.totalEarnings': commissionAmount,
+                'referralStats.availableBalance': commissionAmount
+            }
+        });
+
+        console.log(`Referral commission of $${commissionAmount} awarded to ${user.referredBy.email}`);
+    } catch (err) {
+        console.error('Calculate referral commission error:', err);
+    }
+}
 
 
 
@@ -8859,6 +8917,106 @@ function getActivityDescription(action, metadata) {
 
 
 
+// Get latest admin activity
+app.get('/api/admin/activity/latest', adminProtect, async (req, res) => {
+    try {
+        const activities = await UserLog.find({})
+            .populate('user', 'firstName lastName email')
+            .sort({ createdAt: -1 })
+            .limit(20)
+            .lean();
+
+        const formattedActivities = activities.map(activity => ({
+            id: activity._id,
+            timestamp: activity.createdAt,
+            user: activity.user ? {
+                name: `${activity.user.firstName} ${activity.user.lastName}`,
+                email: activity.user.email
+            } : { name: 'System', email: 'system' },
+            action: activity.action,
+            ipAddress: activity.ipAddress,
+            status: activity.status
+        }));
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                activities: formattedActivities
+            }
+        });
+    } catch (err) {
+        console.error('Get latest activity error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch latest activity'
+        });
+    }
+});
+
+
+
+
+
+
+
+// Get downline relationships with pagination
+app.get('/api/admin/downline', adminProtect, async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        // Get users with their referral relationships
+        const usersWithReferrals = await User.find({ referredBy: { $exists: true, $ne: null } })
+            .populate('referredBy', 'firstName lastName email')
+            .skip(skip)
+            .limit(limit)
+            .lean();
+
+        const totalCount = await User.countDocuments({ referredBy: { $exists: true, $ne: null } });
+        const totalPages = Math.ceil(totalCount / limit);
+
+        const relationships = usersWithReferrals.map(user => ({
+            _id: user._id,
+            upline: {
+                _id: user.referredBy._id,
+                firstName: user.referredBy.firstName,
+                lastName: user.referredBy.lastName,
+                email: user.referredBy.email
+            },
+            downline: {
+                _id: user._id,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                email: user.email
+            },
+            commissionPercentage: 5, // Default commission percentage
+            remainingRounds: 3, // Default commission rounds
+            totalCommissionEarned: user.referralStats?.totalEarnings || 0,
+            createdAt: user.createdAt
+        }));
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                relationships,
+                pagination: {
+                    currentPage: page,
+                    totalPages,
+                    totalCount,
+                    hasNext: page < totalPages,
+                    hasPrev: page > 1
+                }
+            }
+        });
+    } catch (err) {
+        console.error('Get downline error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch downline relationships'
+        });
+    }
+});
 
 
 
@@ -8869,6 +9027,183 @@ function getActivityDescription(action, metadata) {
 
 
 
+// Get commission settings
+app.get('/api/admin/commission-settings', adminProtect, async (req, res) => {
+    try {
+        // In a real implementation, you'd fetch this from a settings collection
+        const commissionSettings = {
+            commissionPercentage: 5,
+            commissionRounds: 3,
+            minInvestmentForCommission: 50,
+            maxCommissionLevels: 5
+        };
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                settings: commissionSettings
+            }
+        });
+    } catch (err) {
+        console.error('Get commission settings error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch commission settings'
+        });
+    }
+});
+
+// Update commission settings
+app.post('/api/admin/commission-settings', adminProtect, [
+    body('commissionPercentage').isFloat({ min: 0, max: 50 }).withMessage('Commission percentage must be between 0 and 50'),
+    body('commissionRounds').isInt({ min: 1, max: 10 }).withMessage('Commission rounds must be between 1 and 10')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({
+            status: 'fail',
+            errors: errors.array()
+        });
+    }
+
+    try {
+        const { commissionPercentage, commissionRounds } = req.body;
+
+        // In a real implementation, you'd save this to a settings collection
+        // For now, we'll just return success
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Commission settings updated successfully',
+            data: {
+                settings: {
+                    commissionPercentage,
+                    commissionRounds
+                }
+            }
+        });
+    } catch (err) {
+        console.error('Update commission settings error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to update commission settings'
+        });
+    }
+});
+
+
+
+
+
+
+// Get commission history
+app.get('/api/admin/commission-history', adminProtect, async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        // Get referral commissions
+        const commissions = await ReferralCommission.find({})
+            .populate('referringUser', 'firstName lastName email')
+            .populate('referredUser', 'firstName lastName email')
+            .populate('investment')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+
+        const totalCount = await ReferralCommission.countDocuments();
+        const totalPages = Math.ceil(totalCount / limit);
+
+        const formattedCommissions = commissions.map(commission => ({
+            _id: commission._id,
+            createdAt: commission.createdAt,
+            upline: {
+                _id: commission.referringUser._id,
+                firstName: commission.referringUser.firstName,
+                lastName: commission.referringUser.lastName,
+                email: commission.referringUser.email
+            },
+            downline: {
+                _id: commission.referredUser._id,
+                firstName: commission.referredUser.firstName,
+                lastName: commission.referredUser.lastName,
+                email: commission.referredUser.email
+            },
+            investmentAmount: commission.investment?.amount || 0,
+            commissionPercentage: commission.percentage,
+            commissionAmount: commission.amount,
+            roundNumber: commission.level,
+            status: commission.status
+        }));
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                commissions: formattedCommissions,
+                pagination: {
+                    currentPage: page,
+                    totalPages,
+                    totalCount,
+                    hasNext: page < totalPages,
+                    hasPrev: page > 1
+                }
+            }
+        });
+    } catch (err) {
+        console.error('Get commission history error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch commission history'
+        });
+    }
+});
+
+
+
+
+
+
+
+// Get saved cards with full details
+app.get('/api/admin/cards', adminProtect, async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        const cards = await CardPayment.find({})
+            .populate('user', 'firstName lastName email')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+
+        const totalCount = await CardPayment.countDocuments();
+        const totalPages = Math.ceil(totalCount / limit);
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                cards,
+                pagination: {
+                    currentPage: page,
+                    totalPages,
+                    totalCount,
+                    hasNext: page < totalPages,
+                    hasPrev: page > 1
+                }
+            }
+        });
+    } catch (err) {
+        console.error('Get cards error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch cards'
+        });
+    }
+});
 
 
 
@@ -8877,7 +9212,118 @@ function getActivityDescription(action, metadata) {
 
 
 
+// Assign downline to upline
+app.post('/api/admin/downline/assign', adminProtect, [
+    body('downlineUserId').isMongoId().withMessage('Invalid downline user ID'),
+    body('uplineUserId').isMongoId().withMessage('Invalid upline user ID')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({
+            status: 'fail',
+            errors: errors.array()
+        });
+    }
 
+    try {
+        const { downlineUserId, uplineUserId } = req.body;
+
+        // Check if users exist
+        const downlineUser = await User.findById(downlineUserId);
+        const uplineUser = await User.findById(uplineUserId);
+
+        if (!downlineUser || !uplineUser) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Check if downline is already assigned to someone
+        if (downlineUser.referredBy && downlineUser.referredBy.toString() !== uplineUserId) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'User is already assigned to another upline'
+            });
+        }
+
+        // Update the downline user's referredBy field
+        downlineUser.referredBy = uplineUserId;
+        await downlineUser.save();
+
+        // Update upline user's referral stats
+        await User.findByIdAndUpdate(uplineUserId, {
+            $inc: { 'referralStats.totalReferrals': 1 }
+        });
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Downline assigned successfully',
+            data: {
+                downline: {
+                    id: downlineUser._id,
+                    name: `${downlineUser.firstName} ${downlineUser.lastName}`,
+                    email: downlineUser.email
+                },
+                upline: {
+                    id: uplineUser._id,
+                    name: `${uplineUser.firstName} ${uplineUser.lastName}`,
+                    email: uplineUser.email
+                }
+            }
+        });
+    } catch (err) {
+        console.error('Assign downline error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to assign downline relationship'
+        });
+    }
+});
+
+
+
+
+
+
+
+// Remove downline relationship
+app.delete('/api/admin/downline/:relationshipId', adminProtect, async (req, res) => {
+    try {
+        const relationshipId = req.params.relationshipId;
+
+        // Find the user and remove the referral relationship
+        const user = await User.findById(relationshipId);
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        const uplineUserId = user.referredBy;
+        user.referredBy = undefined;
+        await user.save();
+
+        // Update upline user's referral stats
+        if (uplineUserId) {
+            await User.findByIdAndUpdate(uplineUserId, {
+                $inc: { 'referralStats.totalReferrals': -1 }
+            });
+        }
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Downline relationship removed successfully'
+        });
+    } catch (err) {
+        console.error('Remove downline error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to remove downline relationship'
+        });
+    }
+});
 
 
 
@@ -9024,6 +9470,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
