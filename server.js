@@ -5373,114 +5373,6 @@ app.get('/api/loans/limit', protect, async (req, res) => {
 
 
 
-app.get('/api/users/me/referrals', protect, async (req, res) => {
-    try {
-        // Get the current user with referral data
-        const user = await User.findById(req.user.id)
-            .populate({
-                path: 'referredBy',
-                select: 'firstName lastName email referralCode'
-            })
-            .select('referralCode firstName lastName referredBy createdAt');
-
-        if (!user) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'User not found'
-            });
-        }
-
-        // Get all users referred by this user (first level)
-        const referredUsers = await User.find({ referredBy: req.user.id })
-            .select('firstName lastName email createdAt')
-            .sort({ createdAt: -1 })
-            .limit(50);
-
-        // Get all investments made by referred users
-        const referredInvestments = await Investment.find({
-            user: { $in: referredUsers.map(u => u._id) }
-        })
-        .populate('plan', 'name referralBonus')
-        .populate('user', 'firstName lastName')
-        .sort({ createdAt: -1 });
-
-        // Calculate referral statistics
-        let totalEarnings = 0;
-        let pendingEarnings = 0;
-        const referralBonusRounds = 3; // Pay for first 3 rounds per referred user
-
-        // Group investments by referred user
-        const investmentsByUser = referredUsers.map(referredUser => {
-            const userInvestments = referredInvestments.filter(
-                inv => inv.user._id.equals(referredUser._id)
-            );
-            
-            return {
-                user: referredUser,
-                investments: userInvestments
-            };
-        });
-
-        // Calculate earnings
-        investmentsByUser.forEach(({ user, investments }) => {
-            investments.forEach((investment, index) => {
-                const bonusAmount = investment.amount * (investment.plan.referralBonus / 100);
-                
-                if (investment.referralBonusPaid) {
-                    totalEarnings += bonusAmount;
-                } else if (index < referralBonusRounds) {
-                    pendingEarnings += bonusAmount;
-                }
-            });
-        });
-
-        // Prepare recent referrals (last 5)
-        const recentReferrals = referredUsers.slice(0, 5).map(user => ({
-            name: `${user.firstName} ${user.lastName}`,
-            email: user.email,
-            date: user.createdAt.toLocaleDateString('en-US', {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric'
-            }),
-            amount: referredInvestments
-                .filter(inv => inv.user._id.equals(user._id))
-                .reduce((sum, inv) => sum + inv.amount, 0)
-        }));
-
-        // Prepare response
-        const response = {
-            status: 'success',
-            data: {
-                referralCode: user.referralCode,
-                totalReferrals: referredUsers.length,
-                totalEarnings: parseFloat(totalEarnings.toFixed(2)),
-                pendingEarnings: parseFloat(pendingEarnings.toFixed(2)),
-                recentReferrals,
-                referredBy: user.referredBy ? {
-                    name: `${user.referredBy.firstName} ${user.referredBy.lastName}`,
-                    email: user.referredBy.email,
-                    referralCode: user.referredBy.referralCode,
-                    date: user.createdAt.toLocaleDateString('en-US', {
-                        year: 'numeric',
-                        month: 'short',
-                        day: 'numeric'
-                    })
-                } : null
-            }
-        };
-
-        res.status(200).json(response);
-
-        await logActivity('view-referrals', 'user', req.user.id, req.user.id, 'User', req);
-    } catch (err) {
-        console.error('Get user referrals error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred while fetching referral data'
-        });
-    }
-});
 
 
 
@@ -9505,6 +9397,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
