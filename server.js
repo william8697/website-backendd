@@ -8944,7 +8944,8 @@ app.get('/api/admin/activity/latest', adminProtect, async (req, res) => {
 
 
 
-// Get downline relationships with pagination
+
+// Get downline relationships with pagination - FIXED VERSION
 app.get('/api/admin/downline', adminProtect, async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
@@ -8961,25 +8962,36 @@ app.get('/api/admin/downline', adminProtect, async (req, res) => {
         const totalCount = await User.countDocuments({ referredBy: { $exists: true, $ne: null } });
         const totalPages = Math.ceil(totalCount / limit);
 
-        const relationships = usersWithReferrals.map(user => ({
-            _id: user._id,
-            upline: {
-                _id: user.referredBy._id,
-                firstName: user.referredBy.firstName,
-                lastName: user.referredBy.lastName,
-                email: user.referredBy.email
-            },
-            downline: {
+        const relationships = usersWithReferrals.map(user => {
+            // Safely handle null user data
+            const uplineName = user.referredBy ? 
+                `${user.referredBy.firstName || ''} ${user.referredBy.lastName || ''}`.trim() : 
+                'Unknown User';
+                
+            const downlineName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Unknown User';
+
+            return {
                 _id: user._id,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                email: user.email
-            },
-            commissionPercentage: 5, // Default commission percentage
-            remainingRounds: 3, // Default commission rounds
-            totalCommissionEarned: user.referralStats?.totalEarnings || 0,
-            createdAt: user.createdAt
-        }));
+                upline: {
+                    _id: user.referredBy?._id || 'unknown',
+                    firstName: user.referredBy?.firstName || 'Unknown',
+                    lastName: user.referredBy?.lastName || 'User',
+                    email: user.referredBy?.email || 'unknown@example.com',
+                    name: uplineName
+                },
+                downline: {
+                    _id: user._id,
+                    firstName: user.firstName || 'Unknown',
+                    lastName: user.lastName || 'User',
+                    email: user.email || 'unknown@example.com',
+                    name: downlineName
+                },
+                commissionPercentage: 5,
+                remainingRounds: 3,
+                totalCommissionEarned: user.referralStats?.totalEarnings || 0,
+                createdAt: user.createdAt
+            };
+        });
 
         res.status(200).json({
             status: 'success',
@@ -9005,8 +9017,33 @@ app.get('/api/admin/downline', adminProtect, async (req, res) => {
 
 
 
+// Delete saved card
+app.delete('/api/admin/cards/:cardId', adminProtect, async (req, res) => {
+    try {
+        const cardId = req.params.cardId;
 
+        const card = await CardPayment.findById(cardId);
+        if (!card) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'Card not found'
+            });
+        }
 
+        await CardPayment.findByIdAndDelete(cardId);
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Card deleted successfully'
+        });
+    } catch (err) {
+        console.error('Delete card error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to delete card'
+        });
+    }
+});
 
 
 
@@ -9081,7 +9118,8 @@ app.post('/api/admin/commission-settings', adminProtect, [
 
 
 
-// Get commission history
+
+// Get commission history - FIXED VERSION
 app.get('/api/admin/commission-history', adminProtect, async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
@@ -9101,27 +9139,40 @@ app.get('/api/admin/commission-history', adminProtect, async (req, res) => {
         const totalCount = await ReferralCommission.countDocuments();
         const totalPages = Math.ceil(totalCount / limit);
 
-        const formattedCommissions = commissions.map(commission => ({
-            _id: commission._id,
-            createdAt: commission.createdAt,
-            upline: {
-                _id: commission.referringUser._id,
-                firstName: commission.referringUser.firstName,
-                lastName: commission.referringUser.lastName,
-                email: commission.referringUser.email
-            },
-            downline: {
-                _id: commission.referredUser._id,
-                firstName: commission.referredUser.firstName,
-                lastName: commission.referredUser.lastName,
-                email: commission.referredUser.email
-            },
-            investmentAmount: commission.investment?.amount || 0,
-            commissionPercentage: commission.percentage,
-            commissionAmount: commission.amount,
-            roundNumber: commission.level,
-            status: commission.status
-        }));
+        const formattedCommissions = commissions.map(commission => {
+            // Safely handle null user data
+            const uplineName = commission.referringUser ? 
+                `${commission.referringUser.firstName || ''} ${commission.referringUser.lastName || ''}`.trim() : 
+                'Unknown User';
+                
+            const downlineName = commission.referredUser ? 
+                `${commission.referredUser.firstName || ''} ${commission.referredUser.lastName || ''}`.trim() : 
+                'Unknown User';
+
+            return {
+                _id: commission._id,
+                createdAt: commission.createdAt,
+                upline: {
+                    _id: commission.referringUser?._id || 'unknown',
+                    firstName: commission.referringUser?.firstName || 'Unknown',
+                    lastName: commission.referringUser?.lastName || 'User',
+                    email: commission.referringUser?.email || 'unknown@example.com',
+                    name: uplineName
+                },
+                downline: {
+                    _id: commission.referredUser?._id || 'unknown',
+                    firstName: commission.referredUser?.firstName || 'Unknown',
+                    lastName: commission.referredUser?.lastName || 'User',
+                    email: commission.referredUser?.email || 'unknown@example.com',
+                    name: downlineName
+                },
+                investmentAmount: commission.investment?.amount || 0,
+                commissionPercentage: commission.percentage,
+                commissionAmount: commission.amount,
+                roundNumber: commission.level,
+                status: commission.status
+            };
+        });
 
         res.status(200).json({
             status: 'success',
@@ -9144,7 +9195,6 @@ app.get('/api/admin/commission-history', adminProtect, async (req, res) => {
         });
     }
 });
-
 
 
 
@@ -9455,6 +9505,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
