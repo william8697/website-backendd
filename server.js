@@ -249,6 +249,16 @@ UserSchema.add({
   }]
 });
 
+// Add to UserSchema
+UserSchema.add({
+  downlineStats: {
+    totalDownlines: { type: Number, default: 0 },
+    activeDownlines: { type: Number, default: 0 },
+    totalCommissionEarned: { type: Number, default: 0 },
+    thisMonthCommission: { type: Number, default: 0 }
+  }
+});
+
 UserSchema.index({ email: 1 });
 UserSchema.index({ status: 1 });
 UserSchema.index({ 'kycStatus.identity': 1, 'kycStatus.address': 1, 'kycStatus.facial': 1 });
@@ -256,6 +266,167 @@ UserSchema.index({ referredBy: 1 });
 UserSchema.index({ createdAt: -1 });
 
 const User = mongoose.model('User', UserSchema);
+
+
+
+
+
+// Downline Relationship Schema
+const DownlineRelationshipSchema = new mongoose.Schema({
+  upline: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'Upline user is required'],
+    index: true
+  },
+  downline: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'Downline user is required'],
+    index: true
+  },
+  commissionPercentage: {
+    type: Number,
+    default: 5,
+    min: [0, 'Commission percentage cannot be negative'],
+    max: [50, 'Commission percentage cannot exceed 50%']
+  },
+  commissionRounds: {
+    type: Number,
+    default: 3,
+    min: [1, 'At least 1 commission round required'],
+    max: [10, 'Maximum 10 commission rounds allowed']
+  },
+  remainingRounds: {
+    type: Number,
+    default: 3
+  },
+  totalCommissionEarned: {
+    type: Number,
+    default: 0
+  },
+  status: {
+    type: String,
+    enum: ['active', 'inactive', 'completed'],
+    default: 'active'
+  },
+  assignedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    required: true
+  },
+  assignedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, {
+  timestamps: true
+});
+
+// Index to ensure unique downline relationships
+DownlineRelationshipSchema.index({ downline: 1 }, { unique: true });
+DownlineRelationshipSchema.index({ upline: 1, downline: 1 }, { unique: true });
+DownlineRelationshipSchema.index({ status: 1 });
+
+// Virtual for relationship description
+DownlineRelationshipSchema.virtual('relationshipDescription').get(function() {
+  return `${this.downline} is downline of ${this.upline} with ${this.commissionPercentage}% commission`;
+});
+
+const DownlineRelationship = mongoose.model('DownlineRelationship', DownlineRelationshipSchema);
+
+// Commission History Schema
+const CommissionHistorySchema = new mongoose.Schema({
+  upline: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true
+  },
+  downline: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true
+  },
+  investment: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Investment',
+    required: true,
+    index: true
+  },
+  investmentAmount: {
+    type: Number,
+    required: true,
+    min: 0
+  },
+  commissionPercentage: {
+    type: Number,
+    required: true,
+    min: 0,
+    max: 50
+  },
+  commissionAmount: {
+    type: Number,
+    required: true,
+    min: 0
+  },
+  roundNumber: {
+    type: Number,
+    required: true,
+    min: 1,
+    max: 10
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'paid', 'cancelled'],
+    default: 'paid'
+  },
+  paidAt: {
+    type: Date,
+    default: Date.now
+  }
+}, {
+  timestamps: true
+});
+
+CommissionHistorySchema.index({ upline: 1, createdAt: -1 });
+CommissionHistorySchema.index({ downline: 1, createdAt: -1 });
+CommissionHistorySchema.index({ investment: 1 });
+
+const CommissionHistory = mongoose.model('CommissionHistory', CommissionHistorySchema);
+
+// Commission Settings Schema
+const CommissionSettingsSchema = new mongoose.Schema({
+  commissionPercentage: {
+    type: Number,
+    default: 5,
+    min: [0, 'Commission percentage cannot be negative'],
+    max: [50, 'Commission percentage cannot exceed 50%']
+  },
+  commissionRounds: {
+    type: Number,
+    default: 3,
+    min: [1, 'At least 1 commission round required'],
+    max: [10, 'Maximum 10 commission rounds allowed']
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  updatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    required: true
+  }
+}, {
+  timestamps: true
+});
+
+const CommissionSettings = mongoose.model('CommissionSettings', CommissionSettingsSchema);
+
+
+
 
 
 // Enhanced User Log Schema - Comprehensive Activity Tracking
@@ -1773,6 +1944,9 @@ module.exports = {
   KYC,
   SystemLog,
  UserLog,
+  DownlineRelationship, // Add this
+  CommissionHistory,     // Add this
+  CommissionSettings, 
   setupWebSocketServer
 };
 
@@ -2114,7 +2288,95 @@ const checkCSRF = (req, res, next) => {
 
 
 
+// Function to calculate and distribute referral commissions
+const calculateReferralCommissions = async (investment) => {
+  try {
+    const investmentId = investment._id;
+    const investorId = investment.user;
+    const investmentAmount = investment.amount;
 
+    // Find the downline relationship for this investor
+    const relationship = await DownlineRelationship.findOne({
+      downline: investorId,
+      status: 'active',
+      remainingRounds: { $gt: 0 }
+    }).populate('upline');
+
+    if (!relationship) {
+      return; // No upline found or no commission rounds remaining
+    }
+
+    const uplineId = relationship.upline._id;
+    const commissionPercentage = relationship.commissionPercentage;
+    const commissionAmount = (investmentAmount * commissionPercentage) / 100;
+
+    // Create commission history record
+    const commissionHistory = await CommissionHistory.create({
+      upline: uplineId,
+      downline: investorId,
+      investment: investmentId,
+      investmentAmount,
+      commissionPercentage,
+      commissionAmount,
+      roundNumber: relationship.commissionRounds - relationship.remainingRounds + 1,
+      status: 'paid'
+    });
+
+    // Update upline user's balance
+    await User.findByIdAndUpdate(uplineId, {
+      $inc: {
+        'balances.main': commissionAmount,
+        'referralStats.totalEarnings': commissionAmount,
+        'referralStats.availableBalance': commissionAmount
+      },
+      $push: {
+        referralHistory: {
+          referredUser: investorId,
+          amount: commissionAmount,
+          percentage: commissionPercentage,
+          level: 1,
+          status: 'available',
+          date: new Date()
+        }
+      }
+    });
+
+    // Update downline relationship
+    relationship.remainingRounds -= 1;
+    relationship.totalCommissionEarned += commissionAmount;
+    
+    if (relationship.remainingRounds === 0) {
+      relationship.status = 'completed';
+    }
+
+    await relationship.save();
+
+    // Create transaction record for the commission
+    await Transaction.create({
+      user: uplineId,
+      type: 'referral',
+      amount: commissionAmount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference: `COMM-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      details: {
+        commissionFrom: investorId,
+        investmentId: investmentId,
+        round: relationship.commissionRounds - relationship.remainingRounds,
+        totalRounds: relationship.commissionRounds
+      },
+      fee: 0,
+      netAmount: commissionAmount
+    });
+
+    console.log(`Commission of $${commissionAmount} paid to upline ${uplineId} for investment ${investmentId}`);
+
+  } catch (err) {
+    console.error('Commission calculation error:', err);
+    // Don't throw error to avoid disrupting investment process
+  }
+};
 
 
 
@@ -9091,6 +9353,370 @@ app.get('/api/referrals/downline', protect, async (req, res) => {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+// Downline Management Endpoints
+
+// Get all downline relationships with pagination
+app.get('/api/admin/downline', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const relationships = await DownlineRelationship.find({})
+      .populate('upline', 'firstName lastName email')
+      .populate('downline', 'firstName lastName email')
+      .populate('assignedBy', 'name email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const total = await DownlineRelationship.countDocuments();
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        relationships,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(total / limit),
+          totalItems: total,
+          itemsPerPage: limit
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Get downline relationships error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch downline relationships'
+    });
+  }
+});
+
+// Assign downline to upline
+app.post('/api/admin/downline/assign', adminProtect, restrictTo('super', 'support'), [
+  body('downlineUserId').isMongoId().withMessage('Valid downline user ID is required'),
+  body('uplineUserId').isMongoId().withMessage('Valid upline user ID is required')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { downlineUserId, uplineUserId } = req.body;
+
+    // Check if users exist
+    const [downlineUser, uplineUser] = await Promise.all([
+      User.findById(downlineUserId),
+      User.findById(uplineUserId)
+    ]);
+
+    if (!downlineUser || !uplineUser) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'One or both users not found'
+      });
+    }
+
+    // Check if downline already has an upline
+    const existingRelationship = await DownlineRelationship.findOne({ 
+      downline: downlineUserId 
+    });
+
+    if (existingRelationship) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'This user already has an upline assigned'
+      });
+    }
+
+    // Prevent circular relationships (user cannot be their own upline)
+    if (downlineUserId.toString() === uplineUserId.toString()) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'User cannot be their own upline'
+      });
+    }
+
+    // Get current commission settings
+    const commissionSettings = await CommissionSettings.findOne({ isActive: true }) || 
+      await CommissionSettings.create({
+        commissionPercentage: 5,
+        commissionRounds: 3,
+        updatedBy: req.admin._id
+      });
+
+    // Create downline relationship
+    const relationship = await DownlineRelationship.create({
+      upline: uplineUserId,
+      downline: downlineUserId,
+      commissionPercentage: commissionSettings.commissionPercentage,
+      commissionRounds: commissionSettings.commissionRounds,
+      remainingRounds: commissionSettings.commissionRounds,
+      assignedBy: req.admin._id
+    });
+
+    // Populate and return the relationship
+    const populatedRelationship = await DownlineRelationship.findById(relationship._id)
+      .populate('upline', 'firstName lastName email')
+      .populate('downline', 'firstName lastName email')
+      .populate('assignedBy', 'name email');
+
+    res.status(201).json({
+      status: 'success',
+      data: {
+        relationship: populatedRelationship
+      }
+    });
+
+    await logActivity('assign_downline', 'DownlineRelationship', relationship._id, req.admin._id, 'Admin', req, {
+      upline: uplineUserId,
+      downline: downlineUserId,
+      commissionPercentage: commissionSettings.commissionPercentage,
+      commissionRounds: commissionSettings.commissionRounds
+    });
+
+  } catch (err) {
+    console.error('Assign downline error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to assign downline relationship'
+    });
+  }
+});
+
+// Remove downline relationship
+app.delete('/api/admin/downline/:relationshipId', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const relationshipId = req.params.relationshipId;
+
+    const relationship = await DownlineRelationship.findByIdAndDelete(relationshipId);
+
+    if (!relationship) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Downline relationship not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Downline relationship removed successfully'
+    });
+
+    await logActivity('remove_downline', 'DownlineRelationship', relationshipId, req.admin._id, 'Admin', req, {
+      upline: relationship.upline,
+      downline: relationship.downline
+    });
+
+  } catch (err) {
+    console.error('Remove downline error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to remove downline relationship'
+    });
+  }
+});
+
+// Get commission settings
+app.get('/api/admin/commission-settings', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    let settings = await CommissionSettings.findOne({ isActive: true });
+
+    if (!settings) {
+      // Create default settings if none exist
+      settings = await CommissionSettings.create({
+        commissionPercentage: 5,
+        commissionRounds: 3,
+        updatedBy: req.admin._id
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        settings
+      }
+    });
+  } catch (err) {
+    console.error('Get commission settings error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch commission settings'
+    });
+  }
+});
+
+// Update commission settings
+app.post('/api/admin/commission-settings', adminProtect, restrictTo('super'), [
+  body('commissionPercentage').isFloat({ min: 0, max: 50 }).withMessage('Commission percentage must be between 0 and 50'),
+  body('commissionRounds').isInt({ min: 1, max: 10 }).withMessage('Commission rounds must be between 1 and 10')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { commissionPercentage, commissionRounds } = req.body;
+
+    // Deactivate all current settings
+    await CommissionSettings.updateMany(
+      { isActive: true },
+      { isActive: false }
+    );
+
+    // Create new active settings
+    const settings = await CommissionSettings.create({
+      commissionPercentage,
+      commissionRounds,
+      updatedBy: req.admin._id
+    });
+
+    // Update all active relationships with new settings
+    await DownlineRelationship.updateMany(
+      { status: 'active' },
+      { 
+        commissionPercentage,
+        commissionRounds,
+        remainingRounds: commissionRounds
+      }
+    );
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        settings
+      }
+    });
+
+    await logActivity('update_commission_settings', 'CommissionSettings', settings._id, req.admin._id, 'Admin', req, {
+      commissionPercentage,
+      commissionRounds
+    });
+
+  } catch (err) {
+    console.error('Update commission settings error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update commission settings'
+    });
+  }
+});
+
+// Get commission history
+app.get('/api/admin/commission-history', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const commissions = await CommissionHistory.find({})
+      .populate('upline', 'firstName lastName email')
+      .populate('downline', 'firstName lastName email')
+      .populate('investment', 'amount plan')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const total = await CommissionHistory.countDocuments();
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        commissions,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(total / limit),
+          totalItems: total,
+          itemsPerPage: limit
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Get commission history error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch commission history'
+    });
+  }
+});
+
+// Get user's downline tree (for user dashboard)
+app.get('/api/users/downline', protect, async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // Get direct downlines
+    const directDownlines = await DownlineRelationship.find({ upline: userId })
+      .populate('downline', 'firstName lastName email createdAt')
+      .select('downline commissionPercentage remainingRounds totalCommissionEarned assignedAt')
+      .lean();
+
+    // Calculate total downline stats
+    const downlineStats = {
+      totalDirectDownlines: directDownlines.length,
+      totalCommissionEarned: directDownlines.reduce((sum, rel) => sum + (rel.totalCommissionEarned || 0), 0),
+      activeDownlines: directDownlines.filter(rel => rel.remainingRounds > 0).length
+    };
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        downlines: directDownlines,
+        stats: downlineStats
+      }
+    });
+
+  } catch (err) {
+    console.error('Get user downline error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch downline information'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -9218,37 +9844,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
