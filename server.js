@@ -4132,9 +4132,9 @@ app.post('/api/investments', protect, [
       }
     });
 
-    // Handle referral if applicable
+    // Handle referral commissions using the dedicated function
     if (user.referredBy) {
-      const referralBonus = investmentAmountAfterFee * (plan.referralBonus / 100); // Calculate bonus on amount after fee
+      await calculateReferralCommissions(investment);
       
       // Update referring user's balance
       await User.findByIdAndUpdate(user.referredBy, {
@@ -4201,8 +4201,6 @@ app.post('/api/investments', protect, [
     res.status(200).json({
       status: 'success',
       message: 'Investment created successfully'
-
-      await calculateReferralCommissions(investment);
     });
   }
 });
@@ -9704,6 +9702,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
