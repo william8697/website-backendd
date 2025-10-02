@@ -249,21 +249,6 @@ UserSchema.add({
   }]
 });
 
-// New ReferralCommissionSchema
-const ReferralCommissionSchema = new mongoose.Schema({
-  referringUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  referredUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  investment: { type: mongoose.Schema.Types.ObjectId, ref: 'Investment' },
-  amount: { type: Number, required: true },
-  percentage: { type: Number, required: true },
-  level: { type: Number, required: true }, // 1 for direct, 2 for indirect
-  status: { type: String, enum: ['pending', 'available', 'paid', 'rejected'], default: 'pending' },
-  payoutDate: Date,
-  notes: String
-}, { timestamps: true });
-
-const ReferralCommission = mongoose.model('ReferralCommission', ReferralCommissionSchema);
-
 UserSchema.index({ email: 1 });
 UserSchema.index({ status: 1 });
 UserSchema.index({ 'kycStatus.identity': 1, 'kycStatus.address': 1, 'kycStatus.facial': 1 });
@@ -9470,6 +9455,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
