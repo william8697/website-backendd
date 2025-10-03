@@ -2287,12 +2287,40 @@ const checkCSRF = (req, res, next) => {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // Fixed function to calculate and distribute downline referral commissions
 const calculateReferralCommissions = async (investment) => {
   try {
-    const investmentId = investment._id;
-    const investorId = investment.user;
-    const investmentAmount = investment.amount;
+    // First, populate the investment with user data
+    const populatedInvestment = await Investment.findById(investment._id)
+      .populate('user', 'firstName lastName email')
+      .populate('plan');
+
+    if (!populatedInvestment) {
+      console.log(`❌ Investment not found: ${investment._id}`);
+      return;
+    }
+
+    const investmentId = populatedInvestment._id;
+    const investorId = populatedInvestment.user._id;
+    const investmentAmount = populatedInvestment.amount;
 
     console.log(`🔍 Checking downline commissions for investment: ${investmentId}, user: ${investorId}, amount: $${investmentAmount}`);
 
@@ -2301,7 +2329,7 @@ const calculateReferralCommissions = async (investment) => {
       downline: investorId,
       status: 'active',
       remainingRounds: { $gt: 0 }
-    }).populate('upline', 'firstName lastName email balances referralStats');
+    }).populate('upline', 'firstName lastName email balances referralStats downlineStats');
 
     if (!relationship) {
       console.log(`❌ No active downline relationship found for user: ${investorId}`);
@@ -2328,22 +2356,22 @@ const calculateReferralCommissions = async (investment) => {
       paidAt: new Date()
     });
 
-    // Update upline user's balance and stats
-    uplineUser.balances.main += commissionAmount;
-    uplineUser.referralStats.totalEarnings += commissionAmount;
-    uplineUser.referralStats.availableBalance += commissionAmount;
-    
-    // Update downline stats
-    uplineUser.downlineStats.totalCommissionEarned += commissionAmount;
-    uplineUser.downlineStats.thisMonthCommission += commissionAmount;
-    uplineUser.downlineStats.activeDownlines = await DownlineRelationship.countDocuments({ 
-      upline: uplineId, 
-      status: 'active',
-      remainingRounds: { $gt: 0 }
-    });
+    // ✅ FIXED: Add commission to upline's MAIN balance as requested
+    const updatedUpline = await User.findByIdAndUpdate(
+      uplineId,
+      {
+        $inc: {
+          'balances.main': commissionAmount, // Added to main balance
+          'referralStats.totalEarnings': commissionAmount,
+          'referralStats.availableBalance': commissionAmount,
+          'downlineStats.totalCommissionEarned': commissionAmount,
+          'downlineStats.thisMonthCommission': commissionAmount
+        }
+      },
+      { new: true }
+    );
 
-    await uplineUser.save();
-    console.log(`✅ Updated upline ${uplineUser.email} balance with $${commissionAmount}`);
+    console.log(`✅ Updated upline ${uplineUser.email} MAIN balance with $${commissionAmount}. New balance: $${updatedUpline.balances.main}`);
 
     // Update downline relationship
     relationship.remainingRounds -= 1;
@@ -2371,7 +2399,7 @@ const calculateReferralCommissions = async (investment) => {
         round: relationship.commissionRounds - relationship.remainingRounds + 1,
         totalRounds: relationship.commissionRounds,
         commissionType: 'downline',
-        downlineName: `${investment.user.firstName} ${investment.user.lastName}`,
+        downlineName: `${populatedInvestment.user.firstName} ${populatedInvestment.user.lastName}`,
         percentage: commissionPercentage
       },
       fee: 0,
@@ -2393,6 +2421,17 @@ const calculateReferralCommissions = async (investment) => {
       }
     });
 
+    // Update downline stats count
+    const activeDownlinesCount = await DownlineRelationship.countDocuments({ 
+      upline: uplineId, 
+      status: 'active',
+      remainingRounds: { $gt: 0 }
+    });
+
+    await User.findByIdAndUpdate(uplineId, {
+      'downlineStats.activeDownlines': activeDownlinesCount
+    });
+
     console.log(`🎉 Downline commission of $${commissionAmount} paid to upline ${uplineUser.email} for investment ${investmentId} (Round ${relationship.commissionRounds - relationship.remainingRounds + 1}/${relationship.commissionRounds})`);
 
     // Log the activity
@@ -2410,6 +2449,19 @@ const calculateReferralCommissions = async (investment) => {
     // Don't throw error to avoid disrupting investment process
   }
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -9976,6 +10028,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
