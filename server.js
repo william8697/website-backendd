@@ -235,57 +235,6 @@ UserSchema.virtual('fullName').get(function() {
 
 
 
-// User Schema with language preference
-const userSchema = new mongoose.Schema({
-  email: {
-    type: String,
-    required: true,
-    unique: true
-  },
-  password: {
-    type: String,
-    required: true
-  },
-  language: {
-    type: String,
-    default: 'en',
-    enum: ['en', 'fi', 'sv', 'no', 'da', 'de', 'fr', 'es', 'it', 'pt', 'nl', 'ru', 'zh', 'ja', 'ko', 'ar', 'hi', 'tr', 'pl', 'uk', 'cs', 'el', 'he', 'th', 'vi', 'id', 'ms', 'fil', 'ro', 'hu', 'bg', 'hr', 'sr', 'sk', 'sl', 'et', 'lv', 'lt', 'mt', 'ga', 'is', 'sq', 'mk', 'bs', 'ca', 'eu', 'gl', 'af', 'sw', 'zu']
-  },
-  balances: {
-    main: { type: Number, default: 0 },
-    matured: { type: Number, default: 0 }
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  }
-});
-
-// Language Settings Schema for tracking user preferences
-const languageSettingsSchema = new mongoose.Schema({
-  userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  preferredLanguage: {
-    type: String,
-    default: 'en',
-    required: true
-  },
-  lastUpdated: {
-    type: Date,
-    default: Date.now
-  },
-  browserLanguage: String,
-  ipAddress: String,
-  country: String
-});
-
-
-
-
-
 
 
 
@@ -331,6 +280,44 @@ const User = mongoose.model('User', UserSchema);
 
 
 
+const TranslationSchema = new mongoose.Schema({
+  language: {
+    type: String,
+    required: [true, 'Language code is required'],
+    index: true
+  },
+  key: {
+    type: String,
+    required: [true, 'Translation key is required'],
+    index: true
+  },
+  value: {
+    type: String,
+    required: [true, 'Translation value is required']
+  },
+  namespace: {
+    type: String,
+    default: 'common',
+    index: true
+  },
+  context: {
+    type: String,
+    default: 'general'
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  }
+}, {
+  timestamps: true
+});
+
+// Compound index for efficient lookups
+TranslationSchema.index({ language: 1, key: 1, namespace: 1 }, { unique: true });
+TranslationSchema.index({ language: 1, namespace: 1 });
+TranslationSchema.index({ isActive: 1 });
+
+const Translation = mongoose.model('Translation', TranslationSchema);
 
 
 // Downline Relationship Schema
@@ -2009,6 +1996,8 @@ module.exports = {
   DownlineRelationship, // Add this
   CommissionHistory,     // Add this
   CommissionSettings, 
+  Language, // Add this
+  Translation,
   setupWebSocketServer
 };
 
@@ -2520,7 +2509,44 @@ const calculateReferralCommissions = async (investment) => {
 
 
 
+const initializeLanguages = async () => {
+  try {
+    const defaultLanguages = [
+      { code: 'EN', name: 'English', nativeName: 'English', flag: 'https://flagcdn.com/w40/gb.png', sortOrder: 1 },
+      { code: 'FI', name: 'Finnish', nativeName: 'Suomi', flag: 'https://flagcdn.com/w40/fi.png', sortOrder: 2 },
+      { code: 'SV', name: 'Swedish', nativeName: 'Svenska', flag: 'https://flagcdn.com/w40/se.png', sortOrder: 3 },
+      { code: 'NO', name: 'Norwegian', nativeName: 'Norsk', flag: 'https://flagcdn.com/w40/no.png', sortOrder: 4 },
+      { code: 'DA', name: 'Danish', nativeName: 'Dansk', flag: 'https://flagcdn.com/w40/dk.png', sortOrder: 5 },
+      { code: 'DE', name: 'German', nativeName: 'Deutsch', flag: 'https://flagcdn.com/w40/de.png', sortOrder: 6 },
+      { code: 'FR', name: 'French', nativeName: 'Français', flag: 'https://flagcdn.com/w40/fr.png', sortOrder: 7 },
+      { code: 'ES', name: 'Spanish', nativeName: 'Español', flag: 'https://flagcdn.com/w40/es.png', sortOrder: 8 },
+      { code: 'IT', name: 'Italian', nativeName: 'Italiano', flag: 'https://flagcdn.com/w40/it.png', sortOrder: 9 },
+      { code: 'PT', name: 'Portuguese', nativeName: 'Português', flag: 'https://flagcdn.com/w40/pt.png', sortOrder: 10 },
+      { code: 'NL', name: 'Dutch', nativeName: 'Nederlands', flag: 'https://flagcdn.com/w40/nl.png', sortOrder: 11 },
+      { code: 'RU', name: 'Russian', nativeName: 'Русский', flag: 'https://flagcdn.com/w40/ru.png', sortOrder: 12 },
+      { code: 'ZH', name: 'Chinese', nativeName: '中文', flag: 'https://flagcdn.com/w40/cn.png', sortOrder: 13 },
+      { code: 'JA', name: 'Japanese', nativeName: '日本語', flag: 'https://flagcdn.com/w40/jp.png', sortOrder: 14 },
+      { code: 'KO', name: 'Korean', nativeName: '한국어', flag: 'https://flagcdn.com/w40/kr.png', sortOrder: 15 },
+      { code: 'AR', name: 'Arabic', nativeName: 'العربية', flag: 'https://flagcdn.com/w40/sa.png', rtl: true, sortOrder: 16 },
+      { code: 'HI', name: 'Hindi', nativeName: 'हिन्दी', flag: 'https://flagcdn.com/w40/in.png', sortOrder: 17 }
+    ];
 
+    for (const lang of defaultLanguages) {
+      await Language.findOneAndUpdate(
+        { code: lang.code },
+        { $set: lang },
+        { upsert: true, new: true }
+      );
+    }
+
+    console.log('Default languages initialized successfully');
+  } catch (err) {
+    console.error('Error initializing languages:', err);
+  }
+};
+
+// Call this function after database connection
+initializeLanguages();
 
 
 
@@ -9966,7 +9992,223 @@ app.get('/api/referrals/downline', protect, async (req, res) => {
 
 
 
+// Language endpoints
+app.get('/api/languages', async (req, res) => {
+  try {
+    const { 
+      page = 1, 
+      limit = 50, 
+      search = '',
+      activeOnly = true 
+    } = req.query;
 
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Build query
+    const query = {};
+    if (activeOnly === 'true') {
+      query.isActive = true;
+    }
+    
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { nativeName: { $regex: search, $options: 'i' } },
+        { code: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Get languages with pagination
+    const languages = await Language.find(query)
+      .sort({ sortOrder: 1, name: 1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Get total count for pagination
+    const total = await Language.countDocuments(query);
+    const totalPages = Math.ceil(total / parseInt(limit));
+
+    // Check if user has a preferred language
+    let userPreferredLanguage = null;
+    try {
+      const token = req.headers.authorization?.split(' ')[1];
+      if (token) {
+        const decoded = verifyJWT(token);
+        const user = await User.findById(decoded.id).select('preferences');
+        if (user?.preferences?.language) {
+          userPreferredLanguage = await Language.findOne({ 
+            code: user.preferences.language,
+            isActive: true 
+          }).lean();
+        }
+      }
+    } catch (error) {
+      // Silent fail - don't break the endpoint if user lookup fails
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        languages,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalItems: total,
+          itemsPerPage: parseInt(limit),
+          hasNextPage: parseInt(page) < totalPages,
+          hasPrevPage: parseInt(page) > 1
+        },
+        userPreferredLanguage
+      }
+    });
+
+  } catch (err) {
+    console.error('Get languages error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch languages'
+    });
+  }
+});
+
+// Get specific language
+app.get('/api/languages/:code', async (req, res) => {
+  try {
+    const { code } = req.params;
+    
+    const language = await Language.findOne({ 
+      code: code.toUpperCase(),
+      isActive: true 
+    }).lean();
+
+    if (!language) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Language not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: { language }
+    });
+
+  } catch (err) {
+    console.error('Get language error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch language'
+    });
+  }
+});
+
+// Get translations for a specific language
+app.get('/api/translations/:language', async (req, res) => {
+  try {
+    const { language } = req.params;
+    const { namespace = 'common' } = req.query;
+
+    // Verify language exists and is active
+    const languageExists = await Language.findOne({ 
+      code: language.toUpperCase(),
+      isActive: true 
+    });
+
+    if (!languageExists) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Language not found or inactive'
+      });
+    }
+
+    // Get translations
+    const translations = await Translation.find({
+      language: language.toUpperCase(),
+      namespace,
+      isActive: true
+    }).lean();
+
+    // Format as key-value pairs for frontend
+    const translationObject = {};
+    translations.forEach(translation => {
+      translationObject[translation.key] = translation.value;
+    });
+
+    res.status(200).json({
+      status: 'success',
+      data: translationObject
+    });
+
+  } catch (err) {
+    console.error('Get translations error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch translations'
+    });
+  }
+});
+
+// Update user language preference
+app.put('/api/users/language', protect, [
+  body('language').isLength({ min: 2, max: 10 }).withMessage('Language code must be between 2-10 characters')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { language } = req.body;
+
+    // Verify language exists
+    const languageExists = await Language.findOne({ 
+      code: language.toUpperCase(),
+      isActive: true 
+    });
+
+    if (!languageExists) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Invalid language code'
+      });
+    }
+
+    // Update user preferences
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { 
+        $set: { 
+          'preferences.language': language.toUpperCase() 
+        } 
+      },
+      { new: true }
+    ).select('preferences');
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        user: {
+          preferences: user.preferences
+        }
+      }
+    });
+
+    await logActivity('update_language', 'user', user._id, user._id, 'User', req, {
+      language: language.toUpperCase()
+    });
+
+  } catch (err) {
+    console.error('Update user language error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update language preference'
+    });
+  }
+});
 
 
 
@@ -10107,5 +10349,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
