@@ -230,6 +230,68 @@ UserSchema.virtual('fullName').get(function() {
 });
 
 
+
+
+
+
+
+// User Schema with language preference
+const userSchema = new mongoose.Schema({
+  email: {
+    type: String,
+    required: true,
+    unique: true
+  },
+  password: {
+    type: String,
+    required: true
+  },
+  language: {
+    type: String,
+    default: 'en',
+    enum: ['en', 'fi', 'sv', 'no', 'da', 'de', 'fr', 'es', 'it', 'pt', 'nl', 'ru', 'zh', 'ja', 'ko', 'ar', 'hi', 'tr', 'pl', 'uk', 'cs', 'el', 'he', 'th', 'vi', 'id', 'ms', 'fil', 'ro', 'hu', 'bg', 'hr', 'sr', 'sk', 'sl', 'et', 'lv', 'lt', 'mt', 'ga', 'is', 'sq', 'mk', 'bs', 'ca', 'eu', 'gl', 'af', 'sw', 'zu']
+  },
+  balances: {
+    main: { type: Number, default: 0 },
+    matured: { type: Number, default: 0 }
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Language Settings Schema for tracking user preferences
+const languageSettingsSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  preferredLanguage: {
+    type: String,
+    default: 'en',
+    required: true
+  },
+  lastUpdated: {
+    type: Date,
+    default: Date.now
+  },
+  browserLanguage: String,
+  ipAddress: String,
+  country: String
+});
+
+
+
+
+
+
+
+
+
+
+
 // Add to UserSchema
 UserSchema.add({
   referralStats: {
@@ -9899,6 +9961,158 @@ app.get('/api/referrals/downline', protect, async (req, res) => {
 
 
 
+// GET /api/user/language - Get user's language preference
+app.get('/api/user/language', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('language');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        language: user.language || 'en'
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching language preference:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/user/language - Update user's language preference
+app.post('/api/user/language', authenticateToken, async (req, res) => {
+  try {
+    const { language } = req.body;
+    
+    // Validate language code
+    const validLanguages = ['en', 'fi', 'sv', 'no', 'da', 'de', 'fr', 'es', 'it', 'pt', 'nl', 'ru', 'zh', 'ja', 'ko', 'ar', 'hi', 'tr', 'pl', 'uk', 'cs', 'el', 'he', 'th', 'vi', 'id', 'ms', 'fil', 'ro', 'hu', 'bg', 'hr', 'sr', 'sk', 'sl', 'et', 'lv', 'lt', 'mt', 'ga', 'is', 'sq', 'mk', 'bs', 'ca', 'eu', 'gl', 'af', 'sw', 'zu'];
+    
+    if (!validLanguages.includes(language)) {
+      return res.status(400).json({ error: 'Invalid language code' });
+    }
+    
+    // Update user's language preference
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { language },
+      { new: true }
+    ).select('language');
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Log language change
+    await LanguageSettings.create({
+      userId: req.user.id,
+      preferredLanguage: language,
+      browserLanguage: req.headers['accept-language'],
+      ipAddress: req.ip,
+      country: req.headers['cf-ipcountry'] || null
+    });
+    
+    res.json({
+      success: true,
+      message: 'Language preference updated successfully',
+      data: {
+        language: user.language
+      }
+    });
+  } catch (error) {
+    console.error('Error updating language preference:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/languages - Get available languages
+app.get('/api/languages', async (req, res) => {
+  try {
+    const languages = [
+      { code: 'en', name: 'English', nativeName: 'English', flag: '🇺🇸' },
+      { code: 'fi', name: 'Finnish', nativeName: 'Suomi', flag: '🇫🇮' },
+      { code: 'sv', name: 'Swedish', nativeName: 'Svenska', flag: '🇸🇪' },
+      { code: 'no', name: 'Norwegian', nativeName: 'Norsk', flag: '🇳🇴' },
+      { code: 'da', name: 'Danish', nativeName: 'Dansk', flag: '🇩🇰' },
+      { code: 'de', name: 'German', nativeName: 'Deutsch', flag: '🇩🇪' },
+      { code: 'fr', name: 'French', nativeName: 'Français', flag: '🇫🇷' },
+      { code: 'es', name: 'Spanish', nativeName: 'Español', flag: '🇪🇸' },
+      { code: 'it', name: 'Italian', nativeName: 'Italiano', flag: '🇮🇹' },
+      { code: 'pt', name: 'Portuguese', nativeName: 'Português', flag: '🇵🇹' },
+      { code: 'nl', name: 'Dutch', nativeName: 'Nederlands', flag: '🇳🇱' },
+      { code: 'ru', name: 'Russian', nativeName: 'Русский', flag: '🇷🇺' },
+      { code: 'zh', name: 'Chinese', nativeName: '中文', flag: '🇨🇳' },
+      { code: 'ja', name: 'Japanese', nativeName: '日本語', flag: '🇯🇵' },
+      { code: 'ko', name: 'Korean', nativeName: '한국어', flag: '🇰🇷' },
+      { code: 'ar', name: 'Arabic', nativeName: 'العربية', flag: '🇸🇦' },
+      { code: 'hi', name: 'Hindi', nativeName: 'हिन्दी', flag: '🇮🇳' },
+      { code: 'tr', name: 'Turkish', nativeName: 'Türkçe', flag: '🇹🇷' },
+      { code: 'pl', name: 'Polish', nativeName: 'Polski', flag: '🇵🇱' },
+      { code: 'uk', name: 'Ukrainian', nativeName: 'Українська', flag: '🇺🇦' },
+      { code: 'cs', name: 'Czech', nativeName: 'Čeština', flag: '🇨🇿' },
+      { code: 'el', name: 'Greek', nativeName: 'Ελληνικά', flag: '🇬🇷' },
+      { code: 'he', name: 'Hebrew', nativeName: 'עברית', flag: '🇮🇱' },
+      { code: 'th', name: 'Thai', nativeName: 'ไทย', flag: '🇹🇭' },
+      { code: 'vi', name: 'Vietnamese', nativeName: 'Tiếng Việt', flag: '🇻🇳' },
+      { code: 'id', name: 'Indonesian', nativeName: 'Bahasa Indonesia', flag: '🇮🇩' },
+      { code: 'ms', name: 'Malay', nativeName: 'Bahasa Melayu', flag: '🇲🇾' },
+      { code: 'fil', name: 'Filipino', nativeName: 'Filipino', flag: '🇵🇭' },
+      { code: 'ro', name: 'Romanian', nativeName: 'Română', flag: '🇷🇴' },
+      { code: 'hu', name: 'Hungarian', nativeName: 'Magyar', flag: '🇭🇺' },
+      { code: 'bg', name: 'Bulgarian', nativeName: 'Български', flag: '🇧🇬' },
+      { code: 'hr', name: 'Croatian', nativeName: 'Hrvatski', flag: '🇭🇷' },
+      { code: 'sr', name: 'Serbian', nativeName: 'Српски', flag: '🇷🇸' },
+      { code: 'sk', name: 'Slovak', nativeName: 'Slovenčina', flag: '🇸🇰' },
+      { code: 'sl', name: 'Slovenian', nativeName: 'Slovenščina', flag: '🇸🇮' },
+      { code: 'et', name: 'Estonian', nativeName: 'Eesti', flag: '🇪🇪' },
+      { code: 'lv', name: 'Latvian', nativeName: 'Latviešu', flag: '🇱🇻' },
+      { code: 'lt', name: 'Lithuanian', nativeName: 'Lietuvių', flag: '🇱🇹' },
+      { code: 'mt', name: 'Maltese', nativeName: 'Malti', flag: '🇲🇹' },
+      { code: 'ga', name: 'Irish', nativeName: 'Gaeilge', flag: '🇮🇪' },
+      { code: 'is', name: 'Icelandic', nativeName: 'Íslenska', flag: '🇮🇸' },
+      { code: 'sq', name: 'Albanian', nativeName: 'Shqip', flag: '🇦🇱' },
+      { code: 'mk', name: 'Macedonian', nativeName: 'Македонски', flag: '🇲🇰' },
+      { code: 'bs', name: 'Bosnian', nativeName: 'Bosanski', flag: '🇧🇦' },
+      { code: 'ca', name: 'Catalan', nativeName: 'Català', flag: '🇪🇸' },
+      { code: 'eu', name: 'Basque', nativeName: 'Euskara', flag: '🇪🇸' },
+      { code: 'gl', name: 'Galician', nativeName: 'Galego', flag: '🇪🇸' },
+      { code: 'af', name: 'Afrikaans', nativeName: 'Afrikaans', flag: '🇿🇦' },
+      { code: 'sw', name: 'Swahili', nativeName: 'Kiswahili', flag: '🇰🇪' },
+      { code: 'zu', name: 'Zulu', nativeName: 'isiZulu', flag: '🇿🇦' }
+    ];
+    
+    res.json({
+      success: true,
+      data: {
+        languages,
+        total: languages.length
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching languages:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 // Error handling middleware
@@ -10028,3 +10242,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
