@@ -1996,7 +1996,6 @@ module.exports = {
   DownlineRelationship, // Add this
   CommissionHistory,     // Add this
   CommissionSettings, 
-  Language, // Add this
   Translation,
   setupWebSocketServer
 };
@@ -10349,6 +10348,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
