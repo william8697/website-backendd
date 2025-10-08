@@ -6000,7 +6000,7 @@ function fluctuateValue(valueStr, percent) {
 app.get('/api/deposits/btc-address', protect, async (req, res) => {
     try {
         // Default BTC address from your frontend
-        const btcAddress = 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k';
+        const btcAddress = 'bc1qrucrnwzvjyuhzgxp67gryumcvhjq28c97sve0n';
         
         // Get BTC price (matches frontend's loadBtcDepositAddress() expectations)
         let btcRate;
@@ -6020,7 +6020,7 @@ app.get('/api/deposits/btc-address', protect, async (req, res) => {
         console.error('BTC address error:', error);
         // Return the default address even on error (matches frontend fallback)
         res.status(200).json({
-            address: 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k',
+            address: 'bc1qrucrnwzvjyuhzgxp67gryumcvhjq28c97sve0n',
             rate: 50000,
             rateExpiry: Date.now() + 900000
         });
@@ -8783,7 +8783,7 @@ app.get('/api/admin/settings/payments', adminProtect, async (req, res) => {
       stripePublicKey: '',
       stripeSecretKey: '',
       stripeWebhookSecret: '',
-      btcWalletAddress: 'bc1qf98sra3ljvpgy9as0553z79leeq2w2ryvggf3fnvpeh3rz3dk4zs33uf9k',
+      btcWalletAddress: 'bc1qrucrnwzvjyuhzgxp67gryumcvhjq28c97sve0n',
       ethWalletAddress: '',
       minDepositAmount: 10,
       maxDepositAmount: 10000,
@@ -10348,6 +10348,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
