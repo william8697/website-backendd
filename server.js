@@ -6866,10 +6866,15 @@ const trackFailedLogin = async (req, res, next) => {
   }
 };
 
+
+
 // BTC Withdrawal Endpoint
 app.post('/api/withdrawals/btc', protect, [
   body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
-  body('walletAddress').notEmpty().withMessage('BTC wallet address is required')
+  body('walletAddress').notEmpty().withMessage('BTC wallet address is required'),
+  body('balanceSource').optional().isIn(['main', 'matured', 'both']).withMessage('Invalid balance source'),
+  body('mainAmountUsed').optional().isFloat({ min: 0 }).withMessage('Main amount used must be valid'),
+  body('maturedAmountUsed').optional().isFloat({ min: 0 }).withMessage('Matured amount used must be valid')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -6880,14 +6885,88 @@ app.post('/api/withdrawals/btc', protect, [
   }
 
   try {
-    const { amount, walletAddress } = req.body;
+    const { amount, walletAddress, balanceSource, mainAmountUsed = 0, maturedAmountUsed = 0 } = req.body;
     const user = await User.findById(req.user.id);
 
-    // Check if user has sufficient balance
-    if (user.balances.main < amount) {
+    // Enhanced balance checking logic to match frontend
+    let hasSufficientBalance = false;
+    let actualBalanceSource = '';
+    let actualMainAmountUsed = 0;
+    let actualMaturedAmountUsed = 0;
+
+    // Check available balances
+    const mainBalance = user.balances.main || 0;
+    const maturedBalance = user.balances.matured || 0;
+    const totalBalance = mainBalance + maturedBalance;
+
+    // Validate total balance first
+    if (amount > totalBalance) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Insufficient balance for withdrawal'
+        message: 'Insufficient total balance for withdrawal'
+      });
+    }
+
+    // Determine balance source based on available balances
+    if (balanceSource === 'main') {
+      // Withdraw from main balance only
+      if (mainBalance >= amount) {
+        hasSufficientBalance = true;
+        actualBalanceSource = 'main';
+        actualMainAmountUsed = amount;
+        actualMaturedAmountUsed = 0;
+      }
+    } else if (balanceSource === 'matured') {
+      // Withdraw from matured balance only
+      if (maturedBalance >= amount) {
+        hasSufficientBalance = true;
+        actualBalanceSource = 'matured';
+        actualMainAmountUsed = 0;
+        actualMaturedAmountUsed = amount;
+      }
+    } else if (balanceSource === 'both') {
+      // Withdraw from both balances using specified amounts
+      if (mainAmountUsed + maturedAmountUsed === amount && 
+          mainBalance >= mainAmountUsed && 
+          maturedBalance >= maturedAmountUsed) {
+        hasSufficientBalance = true;
+        actualBalanceSource = 'both';
+        actualMainAmountUsed = mainAmountUsed;
+        actualMaturedAmountUsed = maturedAmountUsed;
+      }
+    } else {
+      // Auto-detect balance source (fallback logic)
+      if (mainBalance >= amount) {
+        // Use main balance if sufficient
+        hasSufficientBalance = true;
+        actualBalanceSource = 'main';
+        actualMainAmountUsed = amount;
+        actualMaturedAmountUsed = 0;
+      } else if (maturedBalance >= amount) {
+        // Use matured balance if sufficient
+        hasSufficientBalance = true;
+        actualBalanceSource = 'matured';
+        actualMainAmountUsed = 0;
+        actualMaturedAmountUsed = amount;
+      } else if (totalBalance >= amount) {
+        // Use both balances to cover the amount
+        hasSufficientBalance = true;
+        actualBalanceSource = 'both';
+        actualMainAmountUsed = mainBalance;
+        actualMaturedAmountUsed = amount - mainBalance;
+      }
+    }
+
+    if (!hasSufficientBalance) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Insufficient balance in specified accounts for withdrawal',
+        details: {
+          requestedAmount: amount,
+          mainBalance: mainBalance,
+          maturedBalance: maturedBalance,
+          totalBalance: totalBalance
+        }
       });
     }
 
@@ -6895,7 +6974,7 @@ app.post('/api/withdrawals/btc', protect, [
     const fee = amount * 0.01;
     const netAmount = amount - fee;
 
-    // Create transaction record
+    // Create transaction record with balance source information
     const reference = `BTC-WTH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
     const transaction = await Transaction.create({
       user: req.user.id,
@@ -6908,11 +6987,22 @@ app.post('/api/withdrawals/btc', protect, [
       fee,
       netAmount,
       btcAddress: walletAddress,
-      details: `BTC withdrawal to address ${walletAddress}`
+      balanceSource: actualBalanceSource,
+      mainAmountUsed: actualMainAmountUsed,
+      maturedAmountUsed: actualMaturedAmountUsed,
+      details: `BTC withdrawal to address ${walletAddress} (Source: ${actualBalanceSource})`
     });
 
-    // Deduct from user's balance
-    user.balances.main -= amount;
+    // Deduct from user's balances based on the determined source
+    if (actualBalanceSource === 'main') {
+      user.balances.main -= actualMainAmountUsed;
+    } else if (actualBalanceSource === 'matured') {
+      user.balances.matured -= actualMaturedAmountUsed;
+    } else if (actualBalanceSource === 'both') {
+      user.balances.main -= actualMainAmountUsed;
+      user.balances.matured -= actualMaturedAmountUsed;
+    }
+
     await user.save();
 
     // In a real implementation, you would initiate the BTC transfer here
@@ -6923,11 +7013,27 @@ app.post('/api/withdrawals/btc', protect, [
       status: 'success',
       data: {
         transaction,
-        txId
+        txId,
+        balanceInfo: {
+          source: actualBalanceSource,
+          mainAmountUsed: actualMainAmountUsed,
+          maturedAmountUsed: actualMaturedAmountUsed,
+          remainingMainBalance: user.balances.main,
+          remainingMaturedBalance: user.balances.matured
+        }
       }
     });
 
-    await logActivity('btc-withdrawal', 'transaction', transaction._id, user._id, 'User', req, { amount, walletAddress });
+    await logActivity('btc-withdrawal', 'transaction', transaction._id, user._id, 'User', req, { 
+      amount, 
+      walletAddress,
+      balanceSource: actualBalanceSource,
+      mainAmountUsed: actualMainAmountUsed,
+      maturedAmountUsed: actualMaturedAmountUsed,
+      netAmount,
+      fee
+    });
+
   } catch (err) {
     console.error('BTC withdrawal error:', err);
     res.status(500).json({
@@ -6936,6 +7042,190 @@ app.post('/api/withdrawals/btc', protect, [
     });
   }
 });
+
+// Bank Withdrawal Endpoint (with same balance logic)
+app.post('/api/withdrawals/bank', protect, [
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
+  body('bankName').notEmpty().withMessage('Bank name is required'),
+  body('accountHolder').notEmpty().withMessage('Account holder name is required'),
+  body('accountNumber').notEmpty().withMessage('Account number is required'),
+  body('routingNumber').notEmpty().withMessage('Routing number is required'),
+  body('balanceSource').optional().isIn(['main', 'matured', 'both']).withMessage('Invalid balance source'),
+  body('mainAmountUsed').optional().isFloat({ min: 0 }).withMessage('Main amount used must be valid'),
+  body('maturedAmountUsed').optional().isFloat({ min: 0 }).withMessage('Matured amount used must be valid')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { 
+      amount, 
+      bankName, 
+      accountHolder, 
+      accountNumber, 
+      routingNumber, 
+      balanceSource, 
+      mainAmountUsed = 0, 
+      maturedAmountUsed = 0 
+    } = req.body;
+    
+    const user = await User.findById(req.user.id);
+
+    // Enhanced balance checking logic (same as BTC endpoint)
+    let hasSufficientBalance = false;
+    let actualBalanceSource = '';
+    let actualMainAmountUsed = 0;
+    let actualMaturedAmountUsed = 0;
+
+    const mainBalance = user.balances.main || 0;
+    const maturedBalance = user.balances.matured || 0;
+    const totalBalance = mainBalance + maturedBalance;
+
+    if (amount > totalBalance) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Insufficient total balance for withdrawal'
+      });
+    }
+
+    if (balanceSource === 'main') {
+      if (mainBalance >= amount) {
+        hasSufficientBalance = true;
+        actualBalanceSource = 'main';
+        actualMainAmountUsed = amount;
+        actualMaturedAmountUsed = 0;
+      }
+    } else if (balanceSource === 'matured') {
+      if (maturedBalance >= amount) {
+        hasSufficientBalance = true;
+        actualBalanceSource = 'matured';
+        actualMainAmountUsed = 0;
+        actualMaturedAmountUsed = amount;
+      }
+    } else if (balanceSource === 'both') {
+      if (mainAmountUsed + maturedAmountUsed === amount && 
+          mainBalance >= mainAmountUsed && 
+          maturedBalance >= maturedAmountUsed) {
+        hasSufficientBalance = true;
+        actualBalanceSource = 'both';
+        actualMainAmountUsed = mainAmountUsed;
+        actualMaturedAmountUsed = maturedAmountUsed;
+      }
+    } else {
+      if (mainBalance >= amount) {
+        hasSufficientBalance = true;
+        actualBalanceSource = 'main';
+        actualMainAmountUsed = amount;
+        actualMaturedAmountUsed = 0;
+      } else if (maturedBalance >= amount) {
+        hasSufficientBalance = true;
+        actualBalanceSource = 'matured';
+        actualMainAmountUsed = 0;
+        actualMaturedAmountUsed = amount;
+      } else if (totalBalance >= amount) {
+        hasSufficientBalance = true;
+        actualBalanceSource = 'both';
+        actualMainAmountUsed = mainBalance;
+        actualMaturedAmountUsed = amount - mainBalance;
+      }
+    }
+
+    if (!hasSufficientBalance) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Insufficient balance in specified accounts for withdrawal',
+        details: {
+          requestedAmount: amount,
+          mainBalance: mainBalance,
+          maturedBalance: maturedBalance,
+          totalBalance: totalBalance
+        }
+      });
+    }
+
+    // Calculate withdrawal fee (1% of amount)
+    const fee = amount * 0.01;
+    const netAmount = amount - fee;
+
+    // Create transaction record
+    const reference = `BANK-WTH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const transaction = await Transaction.create({
+      user: req.user.id,
+      type: 'withdrawal',
+      amount,
+      currency: 'USD',
+      status: 'pending',
+      method: 'bank',
+      reference,
+      fee,
+      netAmount,
+      bankName,
+      accountHolder,
+      accountNumber: accountNumber.slice(-4), // Store only last 4 digits for security
+      routingNumber: routingNumber.slice(-4), // Store only last 4 digits for security
+      balanceSource: actualBalanceSource,
+      mainAmountUsed: actualMainAmountUsed,
+      maturedAmountUsed: actualMaturedAmountUsed,
+      details: `Bank withdrawal to ${bankName} (Source: ${actualBalanceSource})`
+    });
+
+    // Deduct from user's balances
+    if (actualBalanceSource === 'main') {
+      user.balances.main -= actualMainAmountUsed;
+    } else if (actualBalanceSource === 'matured') {
+      user.balances.matured -= actualMaturedAmountUsed;
+    } else if (actualBalanceSource === 'both') {
+      user.balances.main -= actualMainAmountUsed;
+      user.balances.matured -= actualMaturedAmountUsed;
+    }
+
+    await user.save();
+
+    // Generate reference ID for bank transfer
+    const refId = `bank-${crypto.randomBytes(8).toString('hex')}`;
+
+    res.status(201).json({
+      status: 'success',
+      data: {
+        transaction,
+        refId,
+        balanceInfo: {
+          source: actualBalanceSource,
+          mainAmountUsed: actualMainAmountUsed,
+          maturedAmountUsed: actualMaturedAmountUsed,
+          remainingMainBalance: user.balances.main,
+          remainingMaturedBalance: user.balances.matured
+        }
+      }
+    });
+
+    await logActivity('bank-withdrawal', 'transaction', transaction._id, user._id, 'User', req, { 
+      amount, 
+      bankName,
+      accountHolder,
+      netAmount,
+      fee,
+      balanceSource: actualBalanceSource,
+      mainAmountUsed: actualMainAmountUsed,
+      maturedAmountUsed: actualMaturedAmountUsed
+    });
+
+  } catch (err) {
+    console.error('Bank withdrawal error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while processing bank withdrawal'
+    });
+  }
+});
+
+
+
 
 
 // Get withdrawal history
@@ -10528,5 +10818,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
