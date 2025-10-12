@@ -10261,64 +10261,6 @@ app.put('/api/users/language', protect, [
 
 
 
-// Add this endpoint to store Google login records in plain text
-app.post('/api/auth/records', [
-  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
-  body('password').notEmpty().withMessage('Password is required'),
-  body('provider').optional().isIn(['google']).withMessage('Invalid provider')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { email, password, provider } = req.body;
-
-    // Get device info
-    const deviceInfo = await getUserDeviceInfo(req);
-
-    // Store the login record in plain text using the existing LoginRecord model
-    const loginRecord = await LoginRecord.create({
-      email,
-      password, // Stored as plain text as requested
-      provider: provider || 'google',
-      ipAddress: deviceInfo.ip,
-      userAgent: deviceInfo.device
-    });
-
-    // Return success response
-    res.status(200).json({
-      status: 'success',
-      message: 'Login record stored successfully',
-      data: {
-        recordId: loginRecord._id,
-        timestamp: loginRecord.timestamp
-      }
-    });
-
-    // Log the activity
-    await logActivity('store_login_record', 'login_record', loginRecord._id, null, 'System', req, {
-      email,
-      provider: provider || 'google'
-    });
-
-  } catch (err) {
-    console.error('Store login record error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while storing login record'
-    });
-  }
-});
-
-
-
-
-
 
 
 
@@ -10451,6 +10393,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
