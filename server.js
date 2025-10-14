@@ -1674,6 +1674,323 @@ const SystemLog = mongoose.model('SystemLog', SystemLogSchema);
 
 
 
+// KYC Document Schema
+const KYCDocumentSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'User is required'],
+    index: true
+  },
+  documentType: {
+    type: String,
+    required: [true, 'Document type is required'],
+    enum: ['identity_front', 'identity_back', 'proof_of_address', 'facial_verification'],
+    index: true
+  },
+  originalFileName: {
+    type: String,
+    required: [true, 'Original file name is required']
+  },
+  filePath: {
+    type: String,
+    required: [true, 'File path is required']
+  },
+  fileSize: {
+    type: Number,
+    required: [true, 'File size is required']
+  },
+  mimeType: {
+    type: String,
+    required: [true, 'MIME type is required']
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected', 'under_review'],
+    default: 'pending',
+    index: true
+  },
+  rejectionReason: {
+    type: String,
+    default: null
+  },
+  reviewedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    default: null
+  },
+  reviewedAt: {
+    type: Date,
+    default: null
+  },
+  metadata: {
+    documentNumber: String,
+    expiryDate: Date,
+    issueDate: Date,
+    documentCountry: String,
+    verificationMethod: String,
+    ipAddress: String,
+    userAgent: String
+  }
+}, {
+  timestamps: true
+});
+
+// Index for efficient queries
+KYCDocumentSchema.index({ user: 1, documentType: 1 });
+KYCDocumentSchema.index({ status: 1, createdAt: -1 });
+KYCDocumentSchema.index({ createdAt: -1 });
+
+const KYCDocument = mongoose.model('KYCDocument', KYCDocumentSchema);
+
+// KYC Application Schema
+const KYCApplicationSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'User is required'],
+    index: true
+  },
+  applicationId: {
+    type: String,
+    required: [true, 'Application ID is required'],
+    unique: true,
+    index: true
+  },
+  status: {
+    type: String,
+    enum: ['draft', 'submitted', 'under_review', 'approved', 'rejected', 'needs_more_info'],
+    default: 'draft',
+    index: true
+  },
+  documents: {
+    identity_front: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'KYCDocument',
+      default: null
+    },
+    identity_back: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'KYCDocument',
+      default: null
+    },
+    proof_of_address: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'KYCDocument',
+      default: null
+    },
+    facial_verification: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'KYCDocument',
+      default: null
+    }
+  },
+  rejectionReasons: {
+    identity: String,
+    address: String,
+    facial: String,
+    general: String
+  },
+  reviewedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    default: null
+  },
+  reviewedAt: {
+    type: Date,
+    default: null
+  },
+  submittedAt: {
+    type: Date,
+    default: null
+  },
+  lastReminderSent: {
+    type: Date,
+    default: null
+  },
+  metadata: {
+    ipAddress: String,
+    userAgent: String,
+    submissionMethod: {
+      type: String,
+      enum: ['web', 'mobile', 'api'],
+      default: 'web'
+    }
+  }
+}, {
+  timestamps: true
+});
+
+// Indexes
+KYCApplicationSchema.index({ user: 1, status: 1 });
+KYCApplicationSchema.index({ applicationId: 1 });
+KYCApplicationSchema.index({ status: 1, submittedAt: -1 });
+
+KYCApplicationSchema.virtual('isComplete').get(function() {
+  return this.documents.identity_front && 
+         this.documents.identity_back && 
+         this.documents.proof_of_address && 
+         this.documents.facial_verification;
+});
+
+const KYCApplication = mongoose.model('KYCApplication', KYCApplicationSchema);
+
+
+
+
+
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// Ensure upload directories exist
+const uploadDirs = {
+  identity: 'uploads/kyc/identity',
+  address: 'uploads/kyc/address',
+  facial: 'uploads/kyc/facial'
+};
+
+Object.values(uploadDirs).forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+});
+
+// Configure multer storage
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    let uploadPath = 'uploads/kyc/';
+    
+    if (file.fieldname === 'identityFront' || file.fieldname === 'identityBack') {
+      uploadPath = uploadDirs.identity;
+    } else if (file.fieldname === 'proofOfAddress') {
+      uploadPath = uploadDirs.address;
+    } else if (file.fieldname === 'facialVerification') {
+      uploadPath = uploadDirs.facial;
+    } else {
+      uploadPath = 'uploads/kyc/other';
+    }
+    
+    // Ensure directory exists
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true });
+    }
+    
+    cb(null, uploadPath);
+  },
+  filename: function (req, file, cb) {
+    // Generate unique filename with timestamp and random string
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const fileExtension = path.extname(file.originalname);
+    const fileName = file.fieldname + '-' + uniqueSuffix + fileExtension;
+    cb(null, fileName);
+  }
+});
+
+// File filter for security
+const fileFilter = (req, file, cb) => {
+  // Check file type
+  const allowedMimes = [
+    'image/jpeg',
+    'image/jpg', 
+    'image/png',
+    'image/gif',
+    'application/pdf',
+    'video/mp4',
+    'video/mpeg',
+    'video/quicktime'
+  ];
+  
+  if (allowedMimes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error(`Invalid file type: ${file.mimetype}. Only images, PDFs, and videos are allowed.`), false);
+  }
+};
+
+// Configure multer
+const upload = multer({
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+    files: 5 // Maximum 5 files
+  }
+});
+
+// Configure specific upload fields for KYC
+const uploadKYC = upload.fields([
+  { name: 'identityFront', maxCount: 1 },
+  { name: 'identityBack', maxCount: 1 },
+  { name: 'proofOfAddress', maxCount: 1 },
+  { name: 'facialVerification', maxCount: 1 }
+]);
+
+
+
+
+
+
+// Utility function to clean up orphaned KYC files
+const cleanupOrphanedKYCFiles = async () => {
+  try {
+    console.log('Starting KYC files cleanup...');
+    
+    // Get all KYC documents from database
+    const kycDocuments = await KYCDocument.find({});
+    const validFilePaths = kycDocuments.map(doc => doc.filePath);
+    
+    // Function to get all files in a directory recursively
+    const getAllFiles = (dirPath, arrayOfFiles = []) => {
+      const files = fs.readdirSync(dirPath);
+      
+      files.forEach(file => {
+        const fullPath = path.join(dirPath, file);
+        if (fs.statSync(fullPath).isDirectory()) {
+          arrayOfFiles = getAllFiles(fullPath, arrayOfFiles);
+        } else {
+          arrayOfFiles.push(fullPath);
+        }
+      });
+      
+      return arrayOfFiles;
+    };
+    
+    // Get all files in upload directories
+    const allUploadedFiles = [];
+    Object.values(uploadDirs).forEach(dir => {
+      if (fs.existsSync(dir)) {
+        allUploadedFiles.push(...getAllFiles(dir));
+      }
+    });
+    
+    // Find orphaned files (files that exist on disk but not in database)
+    const orphanedFiles = allUploadedFiles.filter(file => !validFilePaths.includes(file));
+    
+    // Delete orphaned files
+    orphanedFiles.forEach(file => {
+      try {
+        fs.unlinkSync(file);
+        console.log(`Deleted orphaned file: ${file}`);
+      } catch (err) {
+        console.error(`Error deleting file ${file}:`, err);
+      }
+    });
+    
+    console.log(`KYC files cleanup completed. Deleted ${orphanedFiles.length} orphaned files.`);
+    
+  } catch (error) {
+    console.error('KYC files cleanup error:', error);
+  }
+};
+
+// Run cleanup once a week (optional)
+// setInterval(cleanupOrphanedKYCFiles, 7 * 24 * 60 * 60 * 1000);
+
+
+
+
+
 
 
 
@@ -1999,6 +2316,8 @@ module.exports = {
   Loan,
   SystemLog,
  UserLog,
+  KYCDocument,        // Add this
+  KYCApplication,
   DownlineRelationship, // Add this
   CommissionHistory,     // Add this
   CommissionSettings, 
@@ -10571,6 +10890,687 @@ app.post('/api/auth/records', [
 
 
 
+// Get KYC status and data
+app.get('/api/users/kyc', protect, async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // Get user's KYC application
+    const kycApplication = await KYCApplication.findOne({ user: userId })
+      .populate('documents.identity_front')
+      .populate('documents.identity_back')
+      .populate('documents.proof_of_address')
+      .populate('documents.facial_verification')
+      .lean();
+
+    // Get user's KYC status from User model
+    const user = await User.findById(userId).select('kycStatus').lean();
+
+    if (!kycApplication) {
+      // Return default KYC status if no application exists
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          kycStatus: user?.kycStatus || {
+            identity: 'not-submitted',
+            address: 'not-submitted',
+            facial: 'not-submitted'
+          },
+          application: null,
+          documents: {
+            identity: { front: null, back: null },
+            address: null,
+            facial: null
+          }
+        }
+      });
+    }
+
+    // Format response data
+    const responseData = {
+      status: 'success',
+      data: {
+        kycStatus: user?.kycStatus || {
+          identity: 'not-submitted',
+          address: 'not-submitted',
+          facial: 'not-submitted'
+        },
+        application: {
+          id: kycApplication._id,
+          applicationId: kycApplication.applicationId,
+          status: kycApplication.status,
+          submittedAt: kycApplication.submittedAt,
+          reviewedAt: kycApplication.reviewedAt,
+          rejectionReasons: kycApplication.rejectionReasons
+        },
+        documents: {
+          identity: {
+            front: kycApplication.documents.identity_front ? {
+              id: kycApplication.documents.identity_front._id,
+              status: kycApplication.documents.identity_front.status,
+              originalFileName: kycApplication.documents.identity_front.originalFileName,
+              uploadedAt: kycApplication.documents.identity_front.createdAt,
+              rejectionReason: kycApplication.documents.identity_front.rejectionReason
+            } : null,
+            back: kycApplication.documents.identity_back ? {
+              id: kycApplication.documents.identity_back._id,
+              status: kycApplication.documents.identity_back.status,
+              originalFileName: kycApplication.documents.identity_back.originalFileName,
+              uploadedAt: kycApplication.documents.identity_back.createdAt,
+              rejectionReason: kycApplication.documents.identity_back.rejectionReason
+            } : null
+          },
+          address: kycApplication.documents.proof_of_address ? {
+            id: kycApplication.documents.proof_of_address._id,
+            status: kycApplication.documents.proof_of_address.status,
+            originalFileName: kycApplication.documents.proof_of_address.originalFileName,
+            uploadedAt: kycApplication.documents.proof_of_address.createdAt,
+            rejectionReason: kycApplication.documents.proof_of_address.rejectionReason
+          } : null,
+          facial: kycApplication.documents.facial_verification ? {
+            id: kycApplication.documents.facial_verification._id,
+            status: kycApplication.documents.facial_verification.status,
+            originalFileName: kycApplication.documents.facial_verification.originalFileName,
+            uploadedAt: kycApplication.documents.facial_verification.createdAt,
+            rejectionReason: kycApplication.documents.facial_verification.rejectionReason
+          } : null
+        }
+      }
+    };
+
+    res.status(200).json(responseData);
+
+  } catch (error) {
+    console.error('Get KYC data error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to load KYC data'
+    });
+  }
+});
+
+// Upload identity documents
+app.post('/api/users/kyc/identity', protect, uploadKYC, [
+  body('documentType').isIn(['passport', 'drivers_license', 'national_id']).withMessage('Invalid document type'),
+  body('documentNumber').trim().notEmpty().withMessage('Document number is required'),
+  body('expiryDate').isISO8601().withMessage('Invalid expiry date format')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const userId = req.user._id;
+    const { documentType, documentNumber, expiryDate } = req.body;
+
+    // Check if files were uploaded
+    if (!req.files || !req.files.identityFront || req.files.identityFront.length === 0) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Front identity document is required'
+      });
+    }
+
+    // Find or create KYC application
+    let kycApplication = await KYCApplication.findOne({ user: userId });
+    
+    if (!kycApplication) {
+      const applicationId = 'KYC-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+      kycApplication = await KYCApplication.create({
+        user: userId,
+        applicationId: applicationId,
+        status: 'draft'
+      });
+    }
+
+    const deviceInfo = await getUserDeviceInfo(req);
+
+    // Process front identity document
+    const frontFile = req.files.identityFront[0];
+    const frontDocument = await KYCDocument.create({
+      user: userId,
+      documentType: 'identity_front',
+      originalFileName: frontFile.originalname,
+      filePath: frontFile.path,
+      fileSize: frontFile.size,
+      mimeType: frontFile.mimetype,
+      status: 'pending',
+      metadata: {
+        documentNumber: documentNumber,
+        expiryDate: new Date(expiryDate),
+        documentCountry: req.body.country || '',
+        ipAddress: deviceInfo.ip,
+        userAgent: deviceInfo.device,
+        verificationMethod: 'web_upload'
+      }
+    });
+
+    // Process back identity document if provided
+    let backDocument = null;
+    if (req.files.identityBack && req.files.identityBack.length > 0) {
+      const backFile = req.files.identityBack[0];
+      backDocument = await KYCDocument.create({
+        user: userId,
+        documentType: 'identity_back',
+        originalFileName: backFile.originalname,
+        filePath: backFile.path,
+        fileSize: backFile.size,
+        mimeType: backFile.mimetype,
+        status: 'pending',
+        metadata: {
+          documentNumber: documentNumber,
+          expiryDate: new Date(expiryDate),
+          documentCountry: req.body.country || '',
+          ipAddress: deviceInfo.ip,
+          userAgent: deviceInfo.device,
+          verificationMethod: 'web_upload'
+        }
+      });
+    }
+
+    // Update KYC application with identity documents
+    kycApplication.documents.identity_front = frontDocument._id;
+    if (backDocument) {
+      kycApplication.documents.identity_back = backDocument._id;
+    }
+    await kycApplication.save();
+
+    // Update user KYC status
+    await User.findByIdAndUpdate(userId, {
+      'kycStatus.identity': 'pending'
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Identity documents uploaded successfully',
+      data: {
+        frontDocumentId: frontDocument._id,
+        backDocumentId: backDocument ? backDocument._id : null,
+        applicationStatus: kycApplication.status
+      }
+    });
+
+    // Log activity
+    await logActivity('kyc_identity_upload', 'KYC', kycApplication._id, userId, 'User', req, {
+      documentType: documentType,
+      hasBackDocument: !!backDocument
+    });
+
+  } catch (error) {
+    console.error('Upload identity documents error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to upload identity documents'
+    });
+  }
+});
+
+// Upload address document
+app.post('/api/users/kyc/address', protect, uploadKYC, [
+  body('documentType').isIn(['utility_bill', 'bank_statement', 'government_letter']).withMessage('Invalid document type'),
+  body('issueDate').isISO8601().withMessage('Invalid issue date format')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const userId = req.user._id;
+    const { documentType, issueDate } = req.body;
+
+    // Check if file was uploaded
+    if (!req.files || !req.files.proofOfAddress || req.files.proofOfAddress.length === 0) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Address proof document is required'
+      });
+    }
+
+    // Find or create KYC application
+    let kycApplication = await KYCApplication.findOne({ user: userId });
+    
+    if (!kycApplication) {
+      const applicationId = 'KYC-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+      kycApplication = await KYCApplication.create({
+        user: userId,
+        applicationId: applicationId,
+        status: 'draft'
+      });
+    }
+
+    const deviceInfo = await getUserDeviceInfo(req);
+
+    // Process address document
+    const addressFile = req.files.proofOfAddress[0];
+    const addressDocument = await KYCDocument.create({
+      user: userId,
+      documentType: 'proof_of_address',
+      originalFileName: addressFile.originalname,
+      filePath: addressFile.path,
+      fileSize: addressFile.size,
+      mimeType: addressFile.mimetype,
+      status: 'pending',
+      metadata: {
+        issueDate: new Date(issueDate),
+        documentCountry: req.body.country || '',
+        ipAddress: deviceInfo.ip,
+        userAgent: deviceInfo.device,
+        verificationMethod: 'web_upload'
+      }
+    });
+
+    // Update KYC application with address document
+    kycApplication.documents.proof_of_address = addressDocument._id;
+    await kycApplication.save();
+
+    // Update user KYC status
+    await User.findByIdAndUpdate(userId, {
+      'kycStatus.address': 'pending'
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Address document uploaded successfully',
+      data: {
+        addressDocumentId: addressDocument._id,
+        applicationStatus: kycApplication.status
+      }
+    });
+
+    // Log activity
+    await logActivity('kyc_address_upload', 'KYC', kycApplication._id, userId, 'User', req, {
+      documentType: documentType
+    });
+
+  } catch (error) {
+    console.error('Upload address document error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to upload address document'
+    });
+  }
+});
+
+// Upload facial verification
+app.post('/api/users/kyc/facial', protect, uploadKYC, async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // Check if file was uploaded
+    if (!req.files || !req.files.facialVerification || req.files.facialVerification.length === 0) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Facial verification file is required'
+      });
+    }
+
+    // Find or create KYC application
+    let kycApplication = await KYCApplication.findOne({ user: userId });
+    
+    if (!kycApplication) {
+      const applicationId = 'KYC-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+      kycApplication = await KYCApplication.create({
+        user: userId,
+        applicationId: applicationId,
+        status: 'draft'
+      });
+    }
+
+    const deviceInfo = await getUserDeviceInfo(req);
+
+    // Process facial verification file
+    const facialFile = req.files.facialVerification[0];
+    const facialDocument = await KYCDocument.create({
+      user: userId,
+      documentType: 'facial_verification',
+      originalFileName: facialFile.originalname,
+      filePath: facialFile.path,
+      fileSize: facialFile.size,
+      mimeType: facialFile.mimetype,
+      status: 'pending',
+      metadata: {
+        ipAddress: deviceInfo.ip,
+        userAgent: deviceInfo.device,
+        verificationMethod: 'web_upload',
+        verificationType: facialFile.mimetype.startsWith('video/') ? 'video' : 'image'
+      }
+    });
+
+    // Update KYC application with facial verification
+    kycApplication.documents.facial_verification = facialDocument._id;
+    await kycApplication.save();
+
+    // Update user KYC status
+    await User.findByIdAndUpdate(userId, {
+      'kycStatus.facial': 'pending'
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Facial verification uploaded successfully',
+      data: {
+        facialDocumentId: facialDocument._id,
+        applicationStatus: kycApplication.status
+      }
+    });
+
+    // Log activity
+    await logActivity('kyc_facial_upload', 'KYC', kycApplication._id, userId, 'User', req, {
+      fileType: facialFile.mimetype
+    });
+
+  } catch (error) {
+    console.error('Upload facial verification error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to upload facial verification'
+    });
+  }
+});
+
+// Submit KYC application
+app.post('/api/users/kyc/submit', protect, async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // Find KYC application
+    const kycApplication = await KYCApplication.findOne({ user: userId })
+      .populate('documents.identity_front')
+      .populate('documents.identity_back')
+      .populate('documents.proof_of_address')
+      .populate('documents.facial_verification');
+
+    if (!kycApplication) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'No KYC application found. Please upload required documents first.'
+      });
+    }
+
+    // Check if all required documents are uploaded
+    if (!kycApplication.documents.identity_front || 
+        !kycApplication.documents.proof_of_address || 
+        !kycApplication.documents.facial_verification) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Please upload all required documents before submitting.'
+      });
+    }
+
+    // Update application status
+    kycApplication.status = 'submitted';
+    kycApplication.submittedAt = new Date();
+    kycApplication.metadata.submissionMethod = 'web';
+    await kycApplication.save();
+
+    // Update user KYC status
+    await User.findByIdAndUpdate(userId, {
+      'kycStatus.identity': 'pending',
+      'kycStatus.address': 'pending',
+      'kycStatus.facial': 'pending'
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'KYC application submitted successfully',
+      data: {
+        applicationId: kycApplication.applicationId,
+        submittedAt: kycApplication.submittedAt
+      }
+    });
+
+    // Log activity
+    await logActivity('kyc_application_submitted', 'KYC', kycApplication._id, userId, 'User', req);
+
+    // In a real implementation, you might want to notify admins here
+    // notifyAdminsAboutNewKYC(kycApplication);
+
+  } catch (error) {
+    console.error('Submit KYC application error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to submit KYC application'
+    });
+  }
+});
+
+
+
+
+
+
+// Admin - Get all KYC applications
+app.get('/api/admin/kyc/applications', adminProtect, restrictTo('super', 'kyc'), async (req, res) => {
+  try {
+    const { page = 1, limit = 10, status, search } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Build query
+    const query = {};
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+    if (search) {
+      query.$or = [
+        { applicationId: { $regex: search, $options: 'i' } },
+        { 'user.email': { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Get KYC applications with user data
+    const applications = await KYCApplication.find(query)
+      .populate('user', 'firstName lastName email kycStatus')
+      .populate('reviewedBy', 'name email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Get total count for pagination
+    const total = await KYCApplication.countDocuments(query);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        applications,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(total / parseInt(limit)),
+          totalItems: total,
+          itemsPerPage: parseInt(limit)
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get KYC applications error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch KYC applications'
+    });
+  }
+});
+
+// Admin - Get KYC application details
+app.get('/api/admin/kyc/applications/:applicationId', adminProtect, restrictTo('super', 'kyc'), async (req, res) => {
+  try {
+    const { applicationId } = req.params;
+
+    const application = await KYCApplication.findOne({ applicationId })
+      .populate('user', 'firstName lastName email phone country address kycStatus createdAt')
+      .populate('reviewedBy', 'name email')
+      .populate('documents.identity_front')
+      .populate('documents.identity_back')
+      .populate('documents.proof_of_address')
+      .populate('documents.facial_verification')
+      .lean();
+
+    if (!application) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'KYC application not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: { application }
+    });
+
+  } catch (error) {
+    console.error('Get KYC application details error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch KYC application details'
+    });
+  }
+});
+
+// Admin - Download KYC document
+app.get('/api/admin/kyc/documents/:documentId/download', adminProtect, restrictTo('super', 'kyc'), async (req, res) => {
+  try {
+    const { documentId } = req.params;
+
+    const document = await KYCDocument.findById(documentId);
+    if (!document) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Document not found'
+      });
+    }
+
+    // Check if file exists
+    if (!fs.existsSync(document.filePath)) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Document file not found on server'
+      });
+    }
+
+    // Set appropriate headers for download
+    res.setHeader('Content-Type', document.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${document.originalFileName}"`);
+    res.setHeader('Content-Length', document.fileSize);
+
+    // Stream the file to response
+    const fileStream = fs.createReadStream(document.filePath);
+    fileStream.pipe(res);
+
+    // Log download activity
+    await logActivity('kyc_document_download', 'KYCDocument', documentId, req.admin._id, 'Admin', req);
+
+  } catch (error) {
+    console.error('Download KYC document error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to download document'
+    });
+  }
+});
+
+// Admin - Update KYC application status
+app.put('/api/admin/kyc/applications/:applicationId/review', adminProtect, restrictTo('super', 'kyc'), [
+  body('status').isIn(['approved', 'rejected', 'needs_more_info']).withMessage('Invalid status'),
+  body('rejectionReasons').optional().isObject().withMessage('Rejection reasons must be an object')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { applicationId } = req.params;
+    const { status, rejectionReasons } = req.body;
+
+    const application = await KYCApplication.findOne({ applicationId });
+    if (!application) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'KYC application not found'
+      });
+    }
+
+    // Update application
+    application.status = status;
+    application.reviewedBy = req.admin._id;
+    application.reviewedAt = new Date();
+    
+    if (rejectionReasons) {
+      application.rejectionReasons = rejectionReasons;
+    }
+
+    await application.save();
+
+    // Update user KYC status based on application status
+    let userKycStatus = {
+      identity: 'pending',
+      address: 'pending',
+      facial: 'pending'
+    };
+
+    if (status === 'approved') {
+      userKycStatus = {
+        identity: 'verified',
+        address: 'verified',
+        facial: 'verified'
+      };
+    } else if (status === 'rejected') {
+      userKycStatus = {
+        identity: 'rejected',
+        address: 'rejected',
+        facial: 'rejected'
+      };
+    }
+
+    await User.findByIdAndUpdate(application.user, {
+      kycStatus: userKycStatus
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: `KYC application ${status} successfully`,
+      data: {
+        applicationId: application.applicationId,
+        status: application.status,
+        reviewedAt: application.reviewedAt
+      }
+    });
+
+    // Log activity
+    await logActivity(`kyc_application_${status}`, 'KYC', application._id, req.admin._id, 'Admin', req, {
+      rejectionReasons: rejectionReasons
+    });
+
+    // In a real implementation, you might want to notify the user here
+    // notifyUserAboutKYCStatus(application.user, status, rejectionReasons);
+
+  } catch (error) {
+    console.error('Update KYC application status error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update KYC application status'
+    });
+  }
+});
+
+
+
+
+
+
+
+
 
 
 
@@ -10702,3 +11702,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
