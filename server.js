@@ -2191,7 +2191,6 @@ module.exports = {
   Investment,
   Transaction,
   Loan,
-  kyc,
   SystemLog,
  UserLog,
   DownlineRelationship, // Add this
@@ -11514,3 +11513,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
