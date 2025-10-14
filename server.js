@@ -11013,12 +11013,9 @@ app.post('/api/users/kyc/identity', protect, uploadKYCFields, [
 
 
 
-
-
-
 // POST /api/users/kyc/address - Save address verification document
 app.post('/api/users/kyc/address', protect, uploadKYCFields, [
-  body('documentType').isIn(['utility_bill', 'bank_statement', 'government_letter', '']).withMessage('Invalid document type'),
+  body('type').isIn(['utility_bill', 'bank_statement', 'government_letter', '']).withMessage('Invalid document type'),
   body('issueDate').optional().isISO8601().withMessage('Invalid issue date format')
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -11031,7 +11028,7 @@ app.post('/api/users/kyc/address', protect, uploadKYCFields, [
 
   try {
     const userId = req.user.id;
-    const { documentType, issueDate } = req.body;
+    const { type, issueDate } = req.body; // Changed from documentType to type
     
     // Find or create KYC record
     let kycRecord = await KYC.findOne({ user: userId });
@@ -11039,20 +11036,25 @@ app.post('/api/users/kyc/address', protect, uploadKYCFields, [
       kycRecord = await KYC.create({ user: userId });
     }
     
-    // Update address information
-    kycRecord.address.documentType = documentType;
+    // Update address information - use 'type' instead of 'documentType'
+    kycRecord.address.documentType = type;
     
     if (issueDate) {
       kycRecord.address.issueDate = new Date(issueDate);
     }
     
-    // Handle file upload
-    if (req.files && req.files['addressDocument'] && req.files['addressDocument'][0]) {
-      kycRecord.address.documentImage = req.files['addressDocument'][0].path;
+    // Handle file upload - frontend sends 'document' not 'addressDocument'
+    if (req.files && req.files['document'] && req.files['document'][0]) {
+      kycRecord.address.documentImage = req.files['document'][0].path;
+    } else {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Address document file is required'
+      });
     }
     
     // Check if all required address fields are filled
-    const hasRequiredFields = documentType && issueDate && kycRecord.address.documentImage;
+    const hasRequiredFields = type && issueDate && kycRecord.address.documentImage;
     
     if (hasRequiredFields) {
       kycRecord.address.status = 'pending';
@@ -11080,7 +11082,7 @@ app.post('/api/users/kyc/address', protect, uploadKYCFields, [
     
     // Log activity
     await logActivity('kyc_address_submission', 'KYC', kycRecord._id, userId, 'User', req, {
-      documentType,
+      documentType: type,
       hasFile: !!kycRecord.address.documentImage
     });
     
@@ -11092,6 +11094,8 @@ app.post('/api/users/kyc/address', protect, uploadKYCFields, [
     });
   }
 });
+
+
 
 
 
@@ -11499,6 +11503,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
