@@ -1997,7 +1997,6 @@ module.exports = {
   Investment,
   Transaction,
   Loan,
-  KYC,
   SystemLog,
  UserLog,
   DownlineRelationship, // Add this
@@ -10703,6 +10702,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
