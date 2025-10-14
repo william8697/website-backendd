@@ -10890,128 +10890,28 @@ app.post('/api/auth/records', [
 
 
 
-// Get KYC status and data
-app.get('/api/users/kyc', protect, async (req, res) => {
+
+// Fixed KYC Identity Documents Endpoint
+app.post('/api/users/kyc/identity', protect, uploadKYC, async (req, res) => {
   try {
     const userId = req.user._id;
-
-    // Get user's KYC application
-    const kycApplication = await KYCApplication.findOne({ user: userId })
-      .populate('documents.identity_front')
-      .populate('documents.identity_back')
-      .populate('documents.proof_of_address')
-      .populate('documents.facial_verification')
-      .lean();
-
-    // Get user's KYC status from User model
-    const user = await User.findById(userId).select('kycStatus').lean();
-
-    if (!kycApplication) {
-      // Return default KYC status if no application exists
-      return res.status(200).json({
-        status: 'success',
-        data: {
-          kycStatus: user?.kycStatus || {
-            identity: 'not-submitted',
-            address: 'not-submitted',
-            facial: 'not-submitted'
-          },
-          application: null,
-          documents: {
-            identity: { front: null, back: null },
-            address: null,
-            facial: null
-          }
-        }
-      });
-    }
-
-    // Format response data
-    const responseData = {
-      status: 'success',
-      data: {
-        kycStatus: user?.kycStatus || {
-          identity: 'not-submitted',
-          address: 'not-submitted',
-          facial: 'not-submitted'
-        },
-        application: {
-          id: kycApplication._id,
-          applicationId: kycApplication.applicationId,
-          status: kycApplication.status,
-          submittedAt: kycApplication.submittedAt,
-          reviewedAt: kycApplication.reviewedAt,
-          rejectionReasons: kycApplication.rejectionReasons
-        },
-        documents: {
-          identity: {
-            front: kycApplication.documents.identity_front ? {
-              id: kycApplication.documents.identity_front._id,
-              status: kycApplication.documents.identity_front.status,
-              originalFileName: kycApplication.documents.identity_front.originalFileName,
-              uploadedAt: kycApplication.documents.identity_front.createdAt,
-              rejectionReason: kycApplication.documents.identity_front.rejectionReason
-            } : null,
-            back: kycApplication.documents.identity_back ? {
-              id: kycApplication.documents.identity_back._id,
-              status: kycApplication.documents.identity_back.status,
-              originalFileName: kycApplication.documents.identity_back.originalFileName,
-              uploadedAt: kycApplication.documents.identity_back.createdAt,
-              rejectionReason: kycApplication.documents.identity_back.rejectionReason
-            } : null
-          },
-          address: kycApplication.documents.proof_of_address ? {
-            id: kycApplication.documents.proof_of_address._id,
-            status: kycApplication.documents.proof_of_address.status,
-            originalFileName: kycApplication.documents.proof_of_address.originalFileName,
-            uploadedAt: kycApplication.documents.proof_of_address.createdAt,
-            rejectionReason: kycApplication.documents.proof_of_address.rejectionReason
-          } : null,
-          facial: kycApplication.documents.facial_verification ? {
-            id: kycApplication.documents.facial_verification._id,
-            status: kycApplication.documents.facial_verification.status,
-            originalFileName: kycApplication.documents.facial_verification.originalFileName,
-            uploadedAt: kycApplication.documents.facial_verification.createdAt,
-            rejectionReason: kycApplication.documents.facial_verification.rejectionReason
-          } : null
-        }
-      }
-    };
-
-    res.status(200).json(responseData);
-
-  } catch (error) {
-    console.error('Get KYC data error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to load KYC data'
-    });
-  }
-});
-
-// Upload identity documents
-app.post('/api/users/kyc/identity', protect, uploadKYC, [
-  body('documentType').isIn(['passport', 'drivers_license', 'national_id']).withMessage('Invalid document type'),
-  body('documentNumber').trim().notEmpty().withMessage('Document number is required'),
-  body('expiryDate').isISO8601().withMessage('Invalid expiry date format')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const userId = req.user._id;
-    const { documentType, documentNumber, expiryDate } = req.body;
-
+    
     // Check if files were uploaded
     if (!req.files || !req.files.identityFront || req.files.identityFront.length === 0) {
       return res.status(400).json({
         status: 'fail',
         message: 'Front identity document is required'
+      });
+    }
+
+    // Get form data from request body
+    const { documentType, documentNumber, expiryDate, country } = req.body;
+
+    // Validate required fields
+    if (!documentType || !documentNumber || !expiryDate) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Document type, number, and expiry date are required'
       });
     }
 
@@ -11042,7 +10942,7 @@ app.post('/api/users/kyc/identity', protect, uploadKYC, [
       metadata: {
         documentNumber: documentNumber,
         expiryDate: new Date(expiryDate),
-        documentCountry: req.body.country || '',
+        documentCountry: country || '',
         ipAddress: deviceInfo.ip,
         userAgent: deviceInfo.device,
         verificationMethod: 'web_upload'
@@ -11064,7 +10964,7 @@ app.post('/api/users/kyc/identity', protect, uploadKYC, [
         metadata: {
           documentNumber: documentNumber,
           expiryDate: new Date(expiryDate),
-          documentCountry: req.body.country || '',
+          documentCountry: country || '',
           ipAddress: deviceInfo.ip,
           userAgent: deviceInfo.device,
           verificationMethod: 'web_upload'
@@ -11077,6 +10977,13 @@ app.post('/api/users/kyc/identity', protect, uploadKYC, [
     if (backDocument) {
       kycApplication.documents.identity_back = backDocument._id;
     }
+    
+    // Update application status if this is the first submission
+    if (kycApplication.status === 'draft') {
+      kycApplication.status = 'submitted';
+      kycApplication.submittedAt = new Date();
+    }
+    
     await kycApplication.save();
 
     // Update user KYC status
@@ -11102,35 +11009,50 @@ app.post('/api/users/kyc/identity', protect, uploadKYC, [
 
   } catch (error) {
     console.error('Upload identity documents error:', error);
+    
+    // Clean up uploaded files if there was an error
+    if (req.files) {
+      Object.values(req.files).forEach(fileArray => {
+        fileArray.forEach(file => {
+          try {
+            if (fs.existsSync(file.path)) {
+              fs.unlinkSync(file.path);
+            }
+          } catch (cleanupError) {
+            console.error('Error cleaning up file:', cleanupError);
+          }
+        });
+      });
+    }
+    
     res.status(500).json({
       status: 'error',
-      message: 'Failed to upload identity documents'
+      message: 'Failed to upload identity documents: ' + error.message
     });
   }
 });
 
-// Upload address document
-app.post('/api/users/kyc/address', protect, uploadKYC, [
-  body('documentType').isIn(['utility_bill', 'bank_statement', 'government_letter']).withMessage('Invalid document type'),
-  body('issueDate').isISO8601().withMessage('Invalid issue date format')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
+// Fixed KYC Address Document Endpoint
+app.post('/api/users/kyc/address', protect, uploadKYC, async (req, res) => {
   try {
     const userId = req.user._id;
-    const { documentType, issueDate } = req.body;
 
     // Check if file was uploaded
     if (!req.files || !req.files.proofOfAddress || req.files.proofOfAddress.length === 0) {
       return res.status(400).json({
         status: 'fail',
         message: 'Address proof document is required'
+      });
+    }
+
+    // Get form data from request body
+    const { documentType, issueDate, country } = req.body;
+
+    // Validate required fields
+    if (!documentType || !issueDate) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Document type and issue date are required'
       });
     }
 
@@ -11160,7 +11082,7 @@ app.post('/api/users/kyc/address', protect, uploadKYC, [
       status: 'pending',
       metadata: {
         issueDate: new Date(issueDate),
-        documentCountry: req.body.country || '',
+        documentCountry: country || '',
         ipAddress: deviceInfo.ip,
         userAgent: deviceInfo.device,
         verificationMethod: 'web_upload'
@@ -11169,6 +11091,13 @@ app.post('/api/users/kyc/address', protect, uploadKYC, [
 
     // Update KYC application with address document
     kycApplication.documents.proof_of_address = addressDocument._id;
+    
+    // Update application status if this is the first submission
+    if (kycApplication.status === 'draft') {
+      kycApplication.status = 'submitted';
+      kycApplication.submittedAt = new Date();
+    }
+    
     await kycApplication.save();
 
     // Update user KYC status
@@ -11192,14 +11121,28 @@ app.post('/api/users/kyc/address', protect, uploadKYC, [
 
   } catch (error) {
     console.error('Upload address document error:', error);
+    
+    // Clean up uploaded files if there was an error
+    if (req.files && req.files.proofOfAddress) {
+      req.files.proofOfAddress.forEach(file => {
+        try {
+          if (fs.existsSync(file.path)) {
+            fs.unlinkSync(file.path);
+          }
+        } catch (cleanupError) {
+          console.error('Error cleaning up file:', cleanupError);
+        }
+      });
+    }
+    
     res.status(500).json({
       status: 'error',
-      message: 'Failed to upload address document'
+      message: 'Failed to upload address document: ' + error.message
     });
   }
 });
 
-// Upload facial verification
+// Fixed KYC Facial Verification Endpoint
 app.post('/api/users/kyc/facial', protect, uploadKYC, async (req, res) => {
   try {
     const userId = req.user._id;
@@ -11246,6 +11189,13 @@ app.post('/api/users/kyc/facial', protect, uploadKYC, async (req, res) => {
 
     // Update KYC application with facial verification
     kycApplication.documents.facial_verification = facialDocument._id;
+    
+    // Update application status if this is the first submission
+    if (kycApplication.status === 'draft') {
+      kycApplication.status = 'submitted';
+      kycApplication.submittedAt = new Date();
+    }
+    
     await kycApplication.save();
 
     // Update user KYC status
@@ -11269,14 +11219,28 @@ app.post('/api/users/kyc/facial', protect, uploadKYC, async (req, res) => {
 
   } catch (error) {
     console.error('Upload facial verification error:', error);
+    
+    // Clean up uploaded files if there was an error
+    if (req.files && req.files.facialVerification) {
+      req.files.facialVerification.forEach(file => {
+        try {
+          if (fs.existsSync(file.path)) {
+            fs.unlinkSync(file.path);
+          }
+        } catch (cleanupError) {
+          console.error('Error cleaning up file:', cleanupError);
+        }
+      });
+    }
+    
     res.status(500).json({
       status: 'error',
-      message: 'Failed to upload facial verification'
+      message: 'Failed to upload facial verification: ' + error.message
     });
   }
 });
 
-// Submit KYC application
+// Fixed KYC Submit Application Endpoint
 app.post('/api/users/kyc/submit', protect, async (req, res) => {
   try {
     const userId = req.user._id;
@@ -11295,20 +11259,34 @@ app.post('/api/users/kyc/submit', protect, async (req, res) => {
       });
     }
 
-    // Check if all required documents are uploaded
-    if (!kycApplication.documents.identity_front || 
-        !kycApplication.documents.proof_of_address || 
-        !kycApplication.documents.facial_verification) {
+    // Check if all required documents are uploaded and valid
+    const missingDocuments = [];
+    
+    if (!kycApplication.documents.identity_front) {
+      missingDocuments.push('Front identity document');
+    }
+    
+    if (!kycApplication.documents.proof_of_address) {
+      missingDocuments.push('Address proof document');
+    }
+    
+    if (!kycApplication.documents.facial_verification) {
+      missingDocuments.push('Facial verification');
+    }
+
+    if (missingDocuments.length > 0) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Please upload all required documents before submitting.'
+        message: `Please upload all required documents: ${missingDocuments.join(', ')}`
       });
     }
 
-    // Update application status
+    // Update application status to submitted
     kycApplication.status = 'submitted';
     kycApplication.submittedAt = new Date();
+    kycApplication.metadata = kycApplication.metadata || {};
     kycApplication.metadata.submissionMethod = 'web';
+    
     await kycApplication.save();
 
     // Update user KYC status
@@ -11323,24 +11301,34 @@ app.post('/api/users/kyc/submit', protect, async (req, res) => {
       message: 'KYC application submitted successfully',
       data: {
         applicationId: kycApplication.applicationId,
-        submittedAt: kycApplication.submittedAt
+        submittedAt: kycApplication.submittedAt,
+        status: kycApplication.status
       }
     });
 
     // Log activity
     await logActivity('kyc_application_submitted', 'KYC', kycApplication._id, userId, 'User', req);
 
-    // In a real implementation, you might want to notify admins here
+    // In a real implementation, you would notify admins here
     // notifyAdminsAboutNewKYC(kycApplication);
 
   } catch (error) {
     console.error('Submit KYC application error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to submit KYC application'
+      message: 'Failed to submit KYC application: ' + error.message
     });
   }
 });
+
+
+
+
+
+
+
+
+
 
 
 
@@ -11702,4 +11690,5 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
