@@ -11081,7 +11081,11 @@ app.get('/api/users/kyc', protect, async (req, res) => {
   }
 });
 
-// Upload identity documents
+
+
+
+
+// Update the identity documents endpoint to match frontend expectations
 app.post('/api/users/kyc/identity', protect, upload.fields([
   { name: 'front', maxCount: 1 },
   { name: 'back', maxCount: 1 }
@@ -11089,17 +11093,39 @@ app.post('/api/users/kyc/identity', protect, upload.fields([
   try {
     const { documentType, documentNumber, documentExpiry } = req.body;
     
-    if (!documentType || !documentNumber || !documentExpiry) {
+    console.log('Received identity document data:', {
+      documentType,
+      documentNumber,
+      documentExpiry,
+      files: req.files
+    });
+    
+    // Enhanced validation with specific error messages
+    if (!documentType || !documentType.trim()) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Document type, number, and expiry are required'
+        message: 'Document type is required'
+      });
+    }
+    
+    if (!documentNumber || !documentNumber.trim()) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Document number is required'
+      });
+    }
+    
+    if (!documentExpiry || !documentExpiry.trim()) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Document expiry date is required'
       });
     }
 
     if (!req.files || (!req.files.front && !req.files.back)) {
       return res.status(400).json({
         status: 'fail',
-        message: 'At least one document image is required'
+        message: 'At least one document image (front or back) is required'
       });
     }
 
@@ -11121,10 +11147,14 @@ app.post('/api/users/kyc/identity', protect, upload.fields([
       kycRecord.identity.frontImage = {
         filename: frontFile.filename,
         originalName: frontFile.originalname,
-        mimeType: frontFile.mimetype,
-        size: frontFile.size,
+        mimeType: file.mimetype,
+        size: file.size,
         uploadedAt: new Date()
       };
+      
+      // Move file from temp to permanent location
+      const finalPath = `uploads/kyc/identity/${frontFile.filename}`;
+      fs.renameSync(frontFile.path, finalPath);
     }
 
     // Handle back image
@@ -11137,6 +11167,10 @@ app.post('/api/users/kyc/identity', protect, upload.fields([
         size: backFile.size,
         uploadedAt: new Date()
       };
+      
+      // Move file from temp to permanent location
+      const finalPath = `uploads/kyc/identity/${backFile.filename}`;
+      fs.renameSync(backFile.path, finalPath);
     }
 
     // Update overall status
@@ -11162,20 +11196,49 @@ app.post('/api/users/kyc/identity', protect, upload.fields([
     console.error('Upload identity documents error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to upload identity documents'
+      message: 'Failed to upload identity documents: ' + err.message
     });
   }
 });
 
-// Upload address document
+
+
+
+
+
+
+
+
+// Update the address document endpoint to match frontend expectations
 app.post('/api/users/kyc/address', protect, upload.single('document'), async (req, res) => {
   try {
     const { documentType, documentDate } = req.body;
     
-    if (!documentType || !documentDate || !req.file) {
+    console.log('Received address document data:', {
+      documentType,
+      documentDate,
+      file: req.file
+    });
+    
+    // Enhanced validation with specific error messages
+    if (!documentType || !documentType.trim()) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Document type, date, and file are required'
+        message: 'Document type is required'
+      });
+    }
+    
+    if (!documentDate || !documentDate.trim()) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Document date is required'
+      });
+    }
+    
+    if (!req.file) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Document file is required'
       });
     }
 
@@ -11198,6 +11261,10 @@ app.post('/api/users/kyc/address', protect, upload.single('document'), async (re
       size: req.file.size,
       uploadedAt: new Date()
     };
+    
+    // Move file from temp to permanent location
+    const finalPath = `uploads/kyc/address/${req.file.filename}`;
+    fs.renameSync(req.file.path, finalPath);
 
     // Update overall status
     kycRecord.overallStatus = 'in-progress';
@@ -11222,10 +11289,23 @@ app.post('/api/users/kyc/address', protect, upload.single('document'), async (re
     console.error('Upload address document error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to upload address document'
+      message: 'Failed to upload address document: ' + err.message
     });
   }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // Upload facial verification
 app.post('/api/users/kyc/facial', protect, upload.fields([
@@ -11580,3 +11660,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
