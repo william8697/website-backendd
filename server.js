@@ -11013,77 +11013,62 @@ app.post('/api/users/kyc/identity', protect, uploadKYCFields, [
 
 
 
+
 // POST /api/users/kyc/address - Save address verification document
 app.post('/api/users/kyc/address', protect, uploadKYCFields, [
-  body('type').isIn(['utility_bill', 'bank_statement', 'government_letter', '']).withMessage('Invalid document type'),
-  body('issueDate').optional().isISO8601().withMessage('Invalid issue date format')
+  body('type').isIn(['utility_bill', 'bank_statement', 'government_letter']).withMessage('Invalid document type'),
+  body('issueDate').isISO8601().withMessage('Invalid issue date format')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({
       status: 'fail',
+      message: 'Validation failed',
       errors: errors.array()
     });
   }
 
   try {
     const userId = req.user.id;
-    const { type, issueDate } = req.body; // Changed from documentType to type
+    const { type, issueDate } = req.body;
     
+    // Validate file exists
+    if (!req.files || !req.files['document'] || !req.files['document'][0]) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Address document file is required'
+      });
+    }
+
     // Find or create KYC record
     let kycRecord = await KYC.findOne({ user: userId });
     if (!kycRecord) {
       kycRecord = await KYC.create({ user: userId });
     }
     
-    // Update address information - use 'type' instead of 'documentType'
+    // Update address information - MATCHING FRONTEND FIELD NAMES
     kycRecord.address.documentType = type;
-    
-    if (issueDate) {
-      kycRecord.address.issueDate = new Date(issueDate);
-    }
-    
-    // Handle file upload - frontend sends 'document' not 'addressDocument'
-    if (req.files && req.files['document'] && req.files['document'][0]) {
-      kycRecord.address.documentImage = req.files['document'][0].path;
-    } else {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Address document file is required'
-      });
-    }
-    
-    // Check if all required address fields are filled
-    const hasRequiredFields = type && issueDate && kycRecord.address.documentImage;
-    
-    if (hasRequiredFields) {
-      kycRecord.address.status = 'pending';
-      kycRecord.address.submittedAt = new Date();
-    }
+    kycRecord.address.issueDate = new Date(issueDate);
+    kycRecord.address.documentImage = req.files['document'][0].path;
+    kycRecord.address.status = 'pending';
+    kycRecord.address.submittedAt = new Date();
     
     await kycRecord.save();
     
     // Update user's KYC status
     await User.findByIdAndUpdate(userId, {
-      'kycStatus.address': kycRecord.address.status
+      'kycStatus.address': 'pending'
     });
     
+    // SUCCESS RESPONSE - MATCHING FRONTEND EXPECTATIONS
     res.status(200).json({
       status: 'success',
-      message: 'Address document saved successfully',
-      data: {
-        address: {
-          status: kycRecord.address.status,
-          documentType: kycRecord.address.documentType,
-          submittedAt: kycRecord.address.submittedAt
-        }
-      }
+      message: 'Address document saved successfully'
     });
     
     // Log activity
     await logActivity('kyc_address_submission', 'KYC', kycRecord._id, userId, 'User', req, {
-      documentType: type,
-      hasFile: !!kycRecord.address.documentImage
+      documentType: type
     });
     
   } catch (error) {
@@ -11094,8 +11079,6 @@ app.post('/api/users/kyc/address', protect, uploadKYCFields, [
     });
   }
 });
-
-
 
 
 
@@ -11503,6 +11486,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
