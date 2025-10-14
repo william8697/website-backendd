@@ -11084,8 +11084,7 @@ app.get('/api/users/kyc', protect, async (req, res) => {
 
 
 
-
-// Update the identity documents endpoint to match frontend expectations
+// Fixed KYC Identity Document Upload Endpoint
 app.post('/api/users/kyc/identity', protect, upload.fields([
   { name: 'front', maxCount: 1 },
   { name: 'back', maxCount: 1 }
@@ -11093,7 +11092,7 @@ app.post('/api/users/kyc/identity', protect, upload.fields([
   try {
     const { documentType, documentNumber, documentExpiry } = req.body;
     
-    console.log('Received identity document data:', {
+    console.log('Received identity document upload request:', {
       documentType,
       documentNumber,
       documentExpiry,
@@ -11141,14 +11140,14 @@ app.post('/api/users/kyc/identity', protect, upload.fields([
     kycRecord.identity.documentExpiry = new Date(documentExpiry);
     kycRecord.identity.status = 'pending';
 
-    // Handle front image
+    // Handle front image - FIXED: Use req.files instead of undefined 'file' variable
     if (req.files.front && req.files.front[0]) {
       const frontFile = req.files.front[0];
       kycRecord.identity.frontImage = {
         filename: frontFile.filename,
         originalName: frontFile.originalname,
-        mimeType: file.mimetype,
-        size: file.size,
+        mimeType: frontFile.mimetype, // Fixed typo: mimetype not mimeType
+        size: frontFile.size,
         uploadedAt: new Date()
       };
       
@@ -11157,13 +11156,13 @@ app.post('/api/users/kyc/identity', protect, upload.fields([
       fs.renameSync(frontFile.path, finalPath);
     }
 
-    // Handle back image
+    // Handle back image - FIXED: Use req.files instead of undefined 'file' variable
     if (req.files.back && req.files.back[0]) {
       const backFile = req.files.back[0];
       kycRecord.identity.backImage = {
         filename: backFile.filename,
         originalName: backFile.originalname,
-        mimeType: backFile.mimetype,
+        mimeType: backFile.mimetype, // Fixed typo: mimetype not mimeType
         size: backFile.size,
         uploadedAt: new Date()
       };
@@ -11660,4 +11659,5 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
