@@ -1677,6 +1677,267 @@ const SystemLog = mongoose.model('SystemLog', SystemLogSchema);
 
 
 
+
+// Add this schema with your other schemas
+const KYCSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'User is required'],
+    index: true
+  },
+  identity: {
+    documentType: {
+      type: String,
+      enum: ['passport', 'drivers_license', 'national_id', ''],
+      default: ''
+    },
+    documentNumber: {
+      type: String,
+      trim: true
+    },
+    expiryDate: {
+      type: Date
+    },
+    frontImage: {
+      type: String, // File path
+      trim: true
+    },
+    backImage: {
+      type: String, // File path
+      trim: true
+    },
+    status: {
+      type: String,
+      enum: ['not-submitted', 'pending', 'verified', 'rejected'],
+      default: 'not-submitted'
+    },
+    submittedAt: {
+      type: Date
+    },
+    reviewedAt: {
+      type: Date
+    },
+    reviewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Admin'
+    },
+    rejectionReason: {
+      type: String,
+      trim: true
+    }
+  },
+  address: {
+    documentType: {
+      type: String,
+      enum: ['utility_bill', 'bank_statement', 'government_letter', ''],
+      default: ''
+    },
+    issueDate: {
+      type: Date
+    },
+    documentImage: {
+      type: String, // File path
+      trim: true
+    },
+    status: {
+      type: String,
+      enum: ['not-submitted', 'pending', 'verified', 'rejected'],
+      default: 'not-submitted'
+    },
+    submittedAt: {
+      type: Date
+    },
+    reviewedAt: {
+      type: Date
+    },
+    reviewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Admin'
+    },
+    rejectionReason: {
+      type: String,
+      trim: true
+    }
+  },
+  facial: {
+    verificationVideo: {
+      type: String, // File path
+      trim: true
+    },
+    verificationPhoto: {
+      type: String, // File path
+      trim: true
+    },
+    status: {
+      type: String,
+      enum: ['not-submitted', 'pending', 'verified', 'rejected'],
+      default: 'not-submitted'
+    },
+    submittedAt: {
+      type: Date
+    },
+    reviewedAt: {
+      type: Date
+    },
+    reviewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Admin'
+    },
+    rejectionReason: {
+      type: String,
+      trim: true
+    }
+  },
+  overallStatus: {
+    type: String,
+    enum: ['not-submitted', 'pending', 'verified', 'rejected', 'partially-verified'],
+    default: 'not-submitted',
+    index: true
+  },
+  submittedAt: {
+    type: Date
+  },
+  verifiedAt: {
+    type: Date
+  }
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+// Index for efficient queries
+KYCSchema.index({ user: 1 }, { unique: true });
+KYCSchema.index({ overallStatus: 1 });
+KYCSchema.index({ 'identity.status': 1 });
+KYCSchema.index({ 'address.status': 1 });
+KYCSchema.index({ 'facial.status': 1 });
+
+// Virtual for checking if KYC is complete
+KYCSchema.virtual('isComplete').get(function() {
+  return this.identity.status === 'verified' && 
+         this.address.status === 'verified' && 
+         this.facial.status === 'verified';
+});
+
+// Middleware to update overall status
+KYCSchema.pre('save', function(next) {
+  const identityStatus = this.identity.status;
+  const addressStatus = this.address.status;
+  const facialStatus = this.facial.status;
+  
+  if (identityStatus === 'verified' && addressStatus === 'verified' && facialStatus === 'verified') {
+    this.overallStatus = 'verified';
+    this.verifiedAt = new Date();
+  } else if (identityStatus === 'rejected' || addressStatus === 'rejected' || facialStatus === 'rejected') {
+    this.overallStatus = 'rejected';
+  } else if (identityStatus === 'pending' || addressStatus === 'pending' || facialStatus === 'pending') {
+    this.overallStatus = 'pending';
+  } else if (identityStatus === 'verified' || addressStatus === 'verified' || facialStatus === 'verified') {
+    this.overallStatus = 'partially-verified';
+  } else {
+    this.overallStatus = 'not-submitted';
+  }
+  
+  next();
+});
+
+const KYC = mongoose.model('KYC', KYCSchema);
+
+
+
+
+
+
+
+
+// File upload configuration
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// Ensure upload directories exist
+const uploadDirs = {
+  identity: 'uploads/kyc/identity',
+  address: 'uploads/kyc/address',
+  facial: 'uploads/kyc/facial'
+};
+
+Object.values(uploadDirs).forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+});
+
+// Configure multer for file storage
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    let uploadPath = 'uploads/kyc/';
+    
+    if (file.fieldname === 'front' || file.fieldname === 'back') {
+      uploadPath = uploadDirs.identity;
+    } else if (file.fieldname === 'addressDocument') {
+      uploadPath = uploadDirs.address;
+    } else if (file.fieldname === 'facialVideo' || file.fieldname === 'facialPhoto') {
+      uploadPath = uploadDirs.facial;
+    }
+    
+    cb(null, uploadPath);
+  },
+  filename: function (req, file, cb) {
+    // Generate unique filename: userId-timestamp-originalname
+    const user = req.user;
+    const timestamp = Date.now();
+    const originalName = file.originalname.replace(/\s+/g, '_');
+    const filename = `${user.id}-${timestamp}-${originalName}`;
+    cb(null, filename);
+  }
+});
+
+// File filter
+const fileFilter = (req, file, cb) => {
+  // Check file types
+  const allowedImageTypes = ['image/jpeg', 'image/png', 'image/jpg'];
+  const allowedVideoTypes = ['video/mp4', 'video/webm', 'video/ogg'];
+  const allowedPDFTypes = ['application/pdf'];
+  
+  const isImage = allowedImageTypes.includes(file.mimetype);
+  const isVideo = allowedVideoTypes.includes(file.mimetype);
+  const isPDF = allowedPDFTypes.includes(file.mimetype);
+  
+  if (isImage || isVideo || isPDF) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file type. Only images (JPEG, PNG), videos (MP4, WebM), and PDFs are allowed.'), false);
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+    files: 5 // Maximum 5 files
+  }
+});
+
+// Configure multiple upload fields
+const uploadKYCFields = upload.fields([
+  { name: 'front', maxCount: 1 },
+  { name: 'back', maxCount: 1 },
+  { name: 'addressDocument', maxCount: 1 },
+  { name: 'facialVideo', maxCount: 1 },
+  { name: 'facialPhoto', maxCount: 1 }
+]);
+
+
+
+
+
+
+
+
 // Replace the existing setupWebSocketServer function with this enhanced version
 const setupWebSocketServer = (server) => {
   const wss = new WebSocket.Server({ 
@@ -1985,6 +2246,25 @@ const setupWebSocketServer = (server) => {
 
   return wss;
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -10702,6 +10982,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
