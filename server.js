@@ -1600,41 +1600,7 @@ LoanSchema.virtual('daysRemaining').get(function() {
 
 const Loan = mongoose.model('Loan', LoanSchema);
 
-const KYCSchema = new mongoose.Schema({
-  user: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User', 
-    required: [true, 'User is required'],
-    index: true
-  },
-  type: { 
-    type: String, 
-    enum: ['identity', 'address', 'facial'], 
-    required: [true, 'KYC type is required'] 
-  },
-  documentFront: { type: String, required: [true, 'Front document is required'] },
-  documentBack: { type: String },
-  selfie: { type: String },
-  status: { 
-    type: String, 
-    enum: ['pending', 'approved', 'rejected'], 
-    default: 'pending',
-    index: true
-  },
-  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
-  reviewedAt: { type: Date },
-  rejectionReason: { type: String }
-}, { 
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
 
-KYCSchema.index({ user: 1 });
-KYCSchema.index({ status: 1 });
-KYCSchema.index({ type: 1 });
-
-const KYC = mongoose.model('KYC', KYCSchema);
 
 const PlatformRevenueSchema = new mongoose.Schema({
   source: {
@@ -3470,88 +3436,7 @@ app.get('/api/users/devices', protect, async (req, res) => {
   }
 });
 
-app.post('/api/users/kyc', protect, [
-  body('type').isIn(['identity', 'address', 'facial']).withMessage('Invalid KYC type'),
-  body('documentFront').notEmpty().withMessage('Front document is required'),
-  body('documentBack').if(body('type').equals('identity')).notEmpty().withMessage('Back document is required for identity verification'),
-  body('selfie').if(body('type').equals('facial')).notEmpty().withMessage('Selfie is required for facial verification')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
 
-  try {
-    const { type, documentFront, documentBack, selfie } = req.body;
-    const user = await User.findById(req.user.id);
-
-    // Check if KYC is already submitted
-    const existingKYC = await KYC.findOne({ user: user._id, type, status: 'pending' });
-    if (existingKYC) {
-      return res.status(400).json({
-        status: 'fail',
-        message: `You already have a pending ${type} verification`
-      });
-    }
-
-    // Create KYC record
-    const kyc = await KYC.create({
-      user: user._id,
-      type,
-      documentFront,
-      documentBack,
-      selfie
-    });
-
-    // Update user's KYC status
-    user.kycStatus[type] = 'pending';
-    
-    if (type === 'identity') {
-      user.kycDocuments.identityFront = documentFront;
-      user.kycDocuments.identityBack = documentBack;
-    } else if (type === 'address') {
-      user.kycDocuments.proofOfAddress = documentFront;
-    } else if (type === 'facial') {
-      user.kycDocuments.selfie = selfie;
-    }
-    
-    await user.save();
-
-    res.status(201).json({
-      status: 'success',
-      data: kyc
-    });
-
-    await logActivity('submit-kyc', 'kyc', kyc._id, user._id, 'User', req, { type });
-  } catch (err) {
-    console.error('Submit KYC error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while submitting KYC documents'
-    });
-  }
-});
-
-app.get('/api/users/kyc', protect, async (req, res) => {
-  try {
-    const kycSubmissions = await KYC.find({ user: req.user.id })
-      .sort({ createdAt: -1 });
-
-    res.status(200).json({
-      status: 'success',
-      data: kycSubmissions
-    });
-  } catch (err) {
-    console.error('Get KYC submissions error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while fetching KYC submissions'
-    });
-  }
-});
 
 app.put('/api/users/notifications', protect, [
   body('email').optional().isBoolean().withMessage('Email preference must be a boolean'),
@@ -10818,6 +10703,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
