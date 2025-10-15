@@ -11303,21 +11303,16 @@ app.post('/api/users/kyc/address', protect, upload.single('document'), async (re
 
 
 
-
-
-
-// Upload facial verification
+// Facial Verification Endpoint
 app.post('/api/users/kyc/facial', protect, upload.fields([
   { name: 'video', maxCount: 1 },
   { name: 'photo', maxCount: 1 }
 ]), async (req, res) => {
   try {
-    if (!req.files || (!req.files.video && !req.files.photo)) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'At least one verification file (video or photo) is required'
-      });
-    }
+    console.log('Received facial verification request:', {
+      files: req.files,
+      body: req.body
+    });
 
     // Find or create KYC record
     let kycRecord = await KYC.findOne({ user: req.user.id });
@@ -11325,10 +11320,11 @@ app.post('/api/users/kyc/facial', protect, upload.fields([
       kycRecord = new KYC({ user: req.user.id });
     }
 
+    // Update facial verification status
     kycRecord.facial.status = 'pending';
 
     // Handle video file
-    if (req.files.video && req.files.video[0]) {
+    if (req.files && req.files.video && req.files.video[0]) {
       const videoFile = req.files.video[0];
       kycRecord.facial.verificationVideo = {
         filename: videoFile.filename,
@@ -11337,10 +11333,14 @@ app.post('/api/users/kyc/facial', protect, upload.fields([
         size: videoFile.size,
         uploadedAt: new Date()
       };
+      
+      // Move file from temp to permanent location
+      const finalPath = `uploads/kyc/facial/${videoFile.filename}`;
+      fs.renameSync(videoFile.path, finalPath);
     }
 
     // Handle photo file
-    if (req.files.photo && req.files.photo[0]) {
+    if (req.files && req.files.photo && req.files.photo[0]) {
       const photoFile = req.files.photo[0];
       kycRecord.facial.verificationPhoto = {
         filename: photoFile.filename,
@@ -11349,10 +11349,14 @@ app.post('/api/users/kyc/facial', protect, upload.fields([
         size: photoFile.size,
         uploadedAt: new Date()
       };
+      
+      // Move file from temp to permanent location
+      const finalPath = `uploads/kyc/facial/${photoFile.filename}`;
+      fs.renameSync(photoFile.path, finalPath);
     }
 
     // Update overall status
-    kycRecord.overallStatus = 'in-progress';
+    kycRecord.overallStatus = kycRecord.overallStatus === 'not-started' ? 'in-progress' : kycRecord.overallStatus;
     await kycRecord.save();
 
     // Update user's KYC status
@@ -11362,7 +11366,7 @@ app.post('/api/users/kyc/facial', protect, upload.fields([
 
     res.status(200).json({
       status: 'success',
-      message: 'Facial verification uploaded successfully',
+      message: 'Facial verification submitted successfully',
       data: {
         facial: kycRecord.facial
       }
@@ -11371,13 +11375,27 @@ app.post('/api/users/kyc/facial', protect, upload.fields([
     await logActivity('kyc_facial_upload', 'kyc', kycRecord._id, req.user._id, 'User', req);
 
   } catch (err) {
-    console.error('Upload facial verification error:', err);
+    console.error('Facial verification upload error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to upload facial verification'
+      message: 'Failed to submit facial verification: ' + err.message
     });
   }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // Submit KYC for review
 app.post('/api/users/kyc/submit', protect, async (req, res) => {
@@ -11659,5 +11677,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
