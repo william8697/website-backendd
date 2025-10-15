@@ -7541,6 +7541,14 @@ app.get('/api/admin/stats', adminProtect, async (req, res) => {
     // System performance metrics (simulated)
     const backendResponseTime = Math.floor(Math.random() * 50) + 10; // 10-60ms
     const databaseQueryTime = Math.floor(Math.random() * 30) + 5; // 5-35ms
+
+    
+// Add this to your existing admin stats endpoint
+const pendingKycCount = await KYC.countDocuments({ overallStatus: 'pending' });
+
+// Include in your response
+pendingKycCount: pendingKycCount
+    
     
     // Get last transaction time
     const lastTransaction = await Transaction.findOne().sort({ createdAt: -1 });
@@ -11286,6 +11294,415 @@ app.get('/api/kyc/files/:type/:filename', protect, async (req, res) => {
 
 
 
+// =============================================
+// ADMIN KYC MANAGEMENT ENDPOINTS
+// =============================================
+
+// Get all KYC submissions with filtering and pagination
+app.get('/api/admin/kyc/submissions', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const status = req.query.status || 'all';
+    const skip = (page - 1) * limit;
+
+    console.log('Fetching KYC submissions with params:', { page, limit, status });
+
+    // Build query based on status filter
+    let query = {};
+    
+    if (status !== 'all') {
+      if (status === 'not-started') {
+        query.overallStatus = 'not-started';
+      } else if (status === 'pending') {
+        query.overallStatus = 'pending';
+      } else if (status === 'verified') {
+        query.overallStatus = 'verified';
+      } else if (status === 'rejected') {
+        query.overallStatus = 'rejected';
+      } else if (status === 'in-progress') {
+        query.overallStatus = 'in-progress';
+      }
+    }
+
+    // Get KYC submissions with user data
+    const submissions = await KYC.find(query)
+      .populate('user', 'firstName lastName email phone')
+      .populate('identity.verifiedBy', 'name email')
+      .populate('address.verifiedBy', 'name email')
+      .populate('facial.verifiedBy', 'name email')
+      .sort({ submittedAt: -1, createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Get total count for pagination
+    const totalCount = await KYC.countDocuments(query);
+    const totalPages = Math.ceil(totalCount / limit);
+
+    // Format response to match frontend expectations
+    const formattedSubmissions = submissions.map(submission => ({
+      _id: submission._id,
+      user: submission.user || {},
+      identity: submission.identity || { status: 'not-submitted' },
+      address: submission.address || { status: 'not-submitted' },
+      facial: submission.facial || { status: 'not-submitted' },
+      overallStatus: submission.overallStatus || 'not-started',
+      submittedAt: submission.submittedAt,
+      createdAt: submission.createdAt,
+      reviewedAt: submission.reviewedAt,
+      adminNotes: submission.adminNotes
+    }));
+
+    console.log(`Found ${formattedSubmissions.length} KYC submissions`);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        submissions: formattedSubmissions,
+        pagination: {
+          currentPage: page,
+          totalPages: totalPages,
+          totalItems: totalCount,
+          itemsPerPage: limit,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error('Get KYC submissions error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch KYC submissions'
+    });
+  }
+});
+
+// Get specific KYC submission details
+app.get('/api/admin/kyc/submissions/:submissionId', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const { submissionId } = req.params;
+
+    const submission = await KYC.findById(submissionId)
+      .populate('user', 'firstName lastName email phone country city address')
+      .populate('identity.verifiedBy', 'name email')
+      .populate('address.verifiedBy', 'name email')
+      .populate('facial.verifiedBy', 'name email')
+      .lean();
+
+    if (!submission) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'KYC submission not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        submission
+      }
+    });
+
+  } catch (err) {
+    console.error('Get KYC submission details error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch KYC submission details'
+    });
+  }
+});
+
+// Approve KYC submission
+app.post('/api/admin/kyc/submissions/:submissionId/approve', adminProtect, restrictTo('super', 'support'), [
+  body('notes').optional().trim()
+], async (req, res) => {
+  try {
+    const { submissionId } = req.params;
+    const { notes } = req.body;
+
+    const kycSubmission = await KYC.findById(submissionId)
+      .populate('user');
+
+    if (!kycSubmission) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'KYC submission not found'
+      });
+    }
+
+    // Update KYC status
+    kycSubmission.identity.status = 'verified';
+    kycSubmission.identity.verifiedAt = new Date();
+    kycSubmission.identity.verifiedBy = req.admin._id;
+
+    kycSubmission.address.status = 'verified';
+    kycSubmission.address.verifiedAt = new Date();
+    kycSubmission.address.verifiedBy = req.admin._id;
+
+    kycSubmission.facial.status = 'verified';
+    kycSubmission.facial.verifiedAt = new Date();
+    kycSubmission.facial.verifiedBy = req.admin._id;
+
+    kycSubmission.overallStatus = 'verified';
+    kycSubmission.reviewedAt = new Date();
+    kycSubmission.adminNotes = notes;
+
+    await kycSubmission.save();
+
+    // Update user's KYC status
+    await User.findByIdAndUpdate(kycSubmission.user._id, {
+      'kycStatus.identity': 'verified',
+      'kycStatus.address': 'verified',
+      'kycStatus.facial': 'verified'
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'KYC application approved successfully',
+      data: {
+        submission: kycSubmission
+      }
+    });
+
+    await logActivity('approve_kyc', 'kyc', kycSubmission._id, req.admin._id, 'Admin', req, {
+      userId: kycSubmission.user._id,
+      notes
+    });
+
+  } catch (err) {
+    console.error('Approve KYC error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to approve KYC application'
+    });
+  }
+});
+
+// Reject KYC submission
+app.post('/api/admin/kyc/submissions/:submissionId/reject', adminProtect, restrictTo('super', 'support'), [
+  body('reason').trim().notEmpty().withMessage('Rejection reason is required'),
+  body('section').optional().isIn(['all', 'identity', 'address', 'facial']).withMessage('Invalid section')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { submissionId } = req.params;
+    const { reason, section = 'all' } = req.body;
+
+    const kycSubmission = await KYC.findById(submissionId)
+      .populate('user');
+
+    if (!kycSubmission) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'KYC submission not found'
+      });
+    }
+
+    // Update status based on rejected section
+    if (section === 'all' || section === 'identity') {
+      kycSubmission.identity.status = 'rejected';
+      kycSubmission.identity.rejectionReason = reason;
+      kycSubmission.identity.verifiedAt = new Date();
+      kycSubmission.identity.verifiedBy = req.admin._id;
+    }
+
+    if (section === 'all' || section === 'address') {
+      kycSubmission.address.status = 'rejected';
+      kycSubmission.address.rejectionReason = reason;
+      kycSubmission.address.verifiedAt = new Date();
+      kycSubmission.address.verifiedBy = req.admin._id;
+    }
+
+    if (section === 'all' || section === 'facial') {
+      kycSubmission.facial.status = 'rejected';
+      kycSubmission.facial.rejectionReason = reason;
+      kycSubmission.facial.verifiedAt = new Date();
+      kycSubmission.facial.verifiedBy = req.admin._id;
+    }
+
+    // Update overall status
+    if (section === 'all') {
+      kycSubmission.overallStatus = 'rejected';
+    } else {
+      // If only specific section rejected, mark as in-progress for resubmission
+      kycSubmission.overallStatus = 'in-progress';
+    }
+
+    kycSubmission.reviewedAt = new Date();
+    kycSubmission.adminNotes = reason;
+
+    await kycSubmission.save();
+
+    // Update user's KYC status
+    const userUpdate = {};
+    if (section === 'all' || section === 'identity') {
+      userUpdate['kycStatus.identity'] = 'rejected';
+    }
+    if (section === 'all' || section === 'address') {
+      userUpdate['kycStatus.address'] = 'rejected';
+    }
+    if (section === 'all' || section === 'facial') {
+      userUpdate['kycStatus.facial'] = 'rejected';
+    }
+
+    await User.findByIdAndUpdate(kycSubmission.user._id, userUpdate);
+
+    res.status(200).json({
+      status: 'success',
+      message: 'KYC application rejected successfully',
+      data: {
+        submission: kycSubmission
+      }
+    });
+
+    await logActivity('reject_kyc', 'kyc', kycSubmission._id, req.admin._id, 'Admin', req, {
+      userId: kycSubmission.user._id,
+      reason,
+      section
+    });
+
+  } catch (err) {
+    console.error('Reject KYC error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to reject KYC application'
+    });
+  }
+});
+
+// Serve KYC files for admin (with authentication)
+app.get('/api/admin/kyc/files/:type/:filename', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const { type, filename } = req.params;
+    
+    let filePath;
+    switch (type) {
+      case 'identity-front':
+        filePath = path.join(__dirname, 'uploads/kyc/identity', filename);
+        break;
+      
+      case 'identity-back':
+        filePath = path.join(__dirname, 'uploads/kyc/identity', filename);
+        break;
+      
+      case 'address':
+        filePath = path.join(__dirname, 'uploads/kyc/address', filename);
+        break;
+      
+      case 'facial-video':
+        filePath = path.join(__dirname, 'uploads/kyc/facial', filename);
+        break;
+      
+      case 'facial-photo':
+        filePath = path.join(__dirname, 'uploads/kyc/facial', filename);
+        break;
+      
+      default:
+        return res.status(404).json({
+          status: 'fail',
+          message: 'File type not found'
+        });
+    }
+
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'File not found'
+      });
+    }
+
+    // Send file
+    res.sendFile(filePath);
+
+  } catch (err) {
+    console.error('Serve KYC file error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to serve file'
+    });
+  }
+});
+
+// Get KYC statistics for admin dashboard
+app.get('/api/admin/kyc/stats', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const stats = await KYC.aggregate([
+      {
+        $group: {
+          _id: '$overallStatus',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Format stats
+    const formattedStats = {
+      total: 0,
+      pending: 0,
+      verified: 0,
+      rejected: 0,
+      'in-progress': 0,
+      'not-started': 0
+    };
+
+    stats.forEach(stat => {
+      formattedStats.total += stat.count;
+      formattedStats[stat._id] = stat.count;
+    });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        stats: formattedStats
+      }
+    });
+
+  } catch (err) {
+    console.error('Get KYC stats error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch KYC statistics'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+// Helper function to update KYC badge counts (call this from your admin stats endpoint)
+const getKYCStats = async () => {
+  try {
+    const pendingCount = await KYC.countDocuments({ overallStatus: 'pending' });
+    return pendingCount;
+  } catch (err) {
+    console.error('Get KYC stats error:', err);
+    return 0;
+  }
+};
+
+
+
+
+
+
+
+
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -11414,6 +11831,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
