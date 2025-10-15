@@ -11629,13 +11629,6 @@ app.get('/api/admin/kyc/stats', adminProtect, restrictTo('super', 'support'), as
   }
 });
 
-
-
-
-
-
-
-
 // Helper function to update KYC badge counts (call this from your admin stats endpoint)
 const getKYCStats = async () => {
   try {
@@ -11650,7 +11643,207 @@ const getKYCStats = async () => {
 
 
 
+// Get KYC data for the current user
+app.get('/api/users/kyc', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Find KYC record for the user
+    const kycRecord = await KYC.findOne({ user: userId })
+      .populate('identity.verifiedBy', 'name email')
+      .populate('address.verifiedBy', 'name email')
+      .populate('facial.verifiedBy', 'name email')
+      .lean();
 
+    if (!kycRecord) {
+      // Return default KYC structure if no record exists
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          kyc: {
+            identity: {
+              documentType: '',
+              documentNumber: '',
+              documentExpiry: '',
+              frontImage: null,
+              backImage: null,
+              status: 'not-submitted',
+              verifiedAt: null,
+              verifiedBy: null,
+              rejectionReason: ''
+            },
+            address: {
+              documentType: '',
+              documentDate: '',
+              documentImage: null,
+              status: 'not-submitted',
+              verifiedAt: null,
+              verifiedBy: null,
+              rejectionReason: ''
+            },
+            facial: {
+              verificationVideo: null,
+              verificationPhoto: null,
+              status: 'not-submitted',
+              verifiedAt: null,
+              verifiedBy: null,
+              rejectionReason: ''
+            },
+            overallStatus: 'not-started',
+            submittedAt: null,
+            reviewedAt: null,
+            adminNotes: ''
+          },
+          isSubmitted: false
+        }
+      });
+    }
+
+    // Format the response to match frontend expectations
+    const responseData = {
+      status: 'success',
+      data: {
+        kyc: kycRecord,
+        isSubmitted: kycRecord.overallStatus === 'pending' || kycRecord.overallStatus === 'verified' || kycRecord.overallStatus === 'rejected'
+      }
+    };
+
+    res.status(200).json(responseData);
+
+  } catch (err) {
+    console.error('Get KYC data error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch KYC data'
+    });
+  }
+});
+
+// Get KYC status for the current user
+app.get('/api/users/kyc/status', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Find KYC record for the user
+    const kycRecord = await KYC.findOne({ user: userId }).lean();
+
+    if (!kycRecord) {
+      // Return default status if no record exists
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          status: {
+            identity: 'not-submitted',
+            address: 'not-submitted',
+            facial: 'not-submitted',
+            overall: 'not-started'
+          },
+          isSubmitted: false
+        }
+      });
+    }
+
+    // Format the status response
+    const responseData = {
+      status: 'success',
+      data: {
+        status: {
+          identity: kycRecord.identity.status || 'not-submitted',
+          address: kycRecord.address.status || 'not-submitted',
+          facial: kycRecord.facial.status || 'not-submitted',
+          overall: kycRecord.overallStatus || 'not-started'
+        },
+        isSubmitted: kycRecord.overallStatus === 'pending' || kycRecord.overallStatus === 'verified' || kycRecord.overallStatus === 'rejected',
+        rejectionReason: kycRecord.identity.rejectionReason || kycRecord.address.rejectionReason || kycRecord.facial.rejectionReason || null
+      }
+    };
+
+    res.status(200).json(responseData);
+
+  } catch (err) {
+    console.error('Get KYC status error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch KYC status'
+    });
+  }
+});
+
+// Submit KYC for review
+app.post('/api/users/kyc/submit', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Find the KYC record
+    const kycRecord = await KYC.findOne({ user: userId });
+    
+    if (!kycRecord) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'No KYC documents found. Please upload required documents first.'
+      });
+    }
+
+    // Check if all required documents are uploaded and pending
+    const hasIdentity = kycRecord.identity.status === 'pending';
+    const hasAddress = kycRecord.address.status === 'pending';
+    const hasFacial = kycRecord.facial.status === 'pending';
+
+    if (!hasIdentity || !hasAddress || !hasFacial) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Please complete all verification steps before submitting'
+      });
+    }
+
+    // Update KYC status to pending review
+    kycRecord.overallStatus = 'pending';
+    kycRecord.submittedAt = new Date();
+    await kycRecord.save();
+
+    // Update user's KYC status
+    await User.findByIdAndUpdate(userId, {
+      'kycStatus.identity': 'pending',
+      'kycStatus.address': 'pending',
+      'kycStatus.facial': 'pending'
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'KYC application submitted for review. You will be notified once it is processed.',
+      data: {
+        kyc: kycRecord
+      }
+    });
+
+    await logActivity('kyc_submitted', 'kyc', kycRecord._id, userId, 'User', req);
+
+  } catch (err) {
+    console.error('Submit KYC error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to submit KYC application'
+    });
+  }
+});
+
+
+
+// Helper function to update verification badge
+function updateVerificationBadge(elementId, status) {
+  const badge = document.getElementById(elementId);
+  if (!badge) return;
+  
+  badge.className = `verification-badge ${status}`;
+  
+  if (status === 'verified') {
+    badge.innerHTML = '<i class="fas fa-check-circle"></i> Verified';
+  } else if (status === 'pending') {
+    badge.innerHTML = '<i class="fas fa-clock"></i> Pending';
+  } else {
+    badge.innerHTML = '<i class="fas fa-times-circle"></i> Unverified';
+  }
+}
 
 
 
@@ -11783,6 +11976,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
