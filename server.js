@@ -10781,54 +10781,6 @@ app.post('/api/auth/records', [
 
 
 
-
-
-// =============================================
-// KYC ENDPOINTS
-// =============================================
-
-// Get KYC status and data
-app.get('/api/users/kyc', protect, async (req, res) => {
-  try {
-    const kycData = await KYC.findOne({ user: req.user.id })
-      .populate('identity.verifiedBy', 'name email')
-      .populate('address.verifiedBy', 'name email')
-      .populate('facial.verifiedBy', 'name email')
-      .lean();
-
-    if (!kycData) {
-      // Return default KYC structure if no KYC record exists
-      return res.status(200).json({
-        status: 'success',
-        data: {
-          kyc: {
-            identity: { status: 'not-submitted' },
-            address: { status: 'not-submitted' },
-            facial: { status: 'not-submitted' },
-            overallStatus: 'not-started'
-          }
-        }
-      });
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        kyc: kycData
-      }
-    });
-  } catch (err) {
-    console.error('Get KYC data error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch KYC data'
-    });
-  }
-});
-
-
-
-
 // Fixed KYC Identity Document Upload Endpoint
 app.post('/api/users/kyc/identity', protect, upload.fields([
   { name: 'front', maxCount: 1 },
@@ -11831,6 +11783,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
