@@ -10793,238 +10793,39 @@ app.post('/api/auth/records', [
 
 
 
-
-
-
-
-// =============================================
-// PRODUCTION-READY ENHANCED ADMIN KYC MANAGEMENT ENDPOINTS
-// =============================================
-
-const ExcelJS = require('exceljs');
-const path = require('path');
-const fs = require('fs');
-const { body, validationResult } = require('express-validator');
-
-// Get all KYC submissions with filtering and pagination
-app.get('/api/admin/kyc/submissions', adminProtect, restrictTo('super', 'support'), async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const status = req.query.status || 'all';
-    const search = req.query.search || '';
-    const skip = (page - 1) * limit;
-
-    console.log('Fetching KYC submissions with params:', { page, limit, status, search });
-
-    // Build query based on status filter and search
-    let query = {};
-    
-    if (status !== 'all') {
-      if (status === 'not-started') {
-        query.overallStatus = 'not-started';
-      } else if (status === 'pending') {
-        query.overallStatus = 'pending';
-      } else if (status === 'verified') {
-        query.overallStatus = 'verified';
-      } else if (status === 'rejected') {
-        query.overallStatus = 'rejected';
-      } else if (status === 'in-progress') {
-        query.overallStatus = 'in-progress';
-      }
-    }
-
-    // Add search functionality
-    if (search) {
-      const userSearch = await User.find({
-        $or: [
-          { firstName: { $regex: search, $options: 'i' } },
-          { lastName: { $regex: search, $options: 'i' } },
-          { email: { $regex: search, $options: 'i' } }
-        ]
-      }).select('_id');
-
-      const userIds = userSearch.map(user => user._id);
-      
-      query.$or = [
-        { 'user': { $in: userIds } },
-        { 'identity.documentNumber': { $regex: search, $options: 'i' } }
-      ];
-    }
-
-    // Get KYC submissions with user data
-    const submissions = await KYC.find(query)
-      .populate('user', 'firstName lastName email phone')
-      .populate('identity.verifiedBy', 'name email')
-      .populate('address.verifiedBy', 'name email')
-      .populate('facial.verifiedBy', 'name email')
-      .sort({ submittedAt: -1, createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
-
-    // Get total count for pagination
-    const totalCount = await KYC.countDocuments(query);
-    const totalPages = Math.ceil(totalCount / limit);
-
-    // Format response to match frontend expectations with enhanced media URLs
-    const formattedSubmissions = submissions.map(submission => ({
-      _id: submission._id,
-      user: submission.user || {},
-      identity: {
-        ...submission.identity,
-        frontImageUrl: submission.identity.frontImage ? `/api/admin/kyc/files/identity-front/${submission.identity.frontImage.filename}` : null,
-        backImageUrl: submission.identity.backImage ? `/api/admin/kyc/files/identity-back/${submission.identity.backImage.filename}` : null,
-        frontImagePreview: submission.identity.frontImage ? `/api/admin/kyc/preview/identity-front/${submission.identity.frontImage.filename}` : null,
-        backImagePreview: submission.identity.backImage ? `/api/admin/kyc/preview/identity-back/${submission.identity.backImage.filename}` : null
-      },
-      address: {
-        ...submission.address,
-        documentImageUrl: submission.address.documentImage ? `/api/admin/kyc/files/address/${submission.address.documentImage.filename}` : null,
-        documentImagePreview: submission.address.documentImage ? `/api/admin/kyc/preview/address/${submission.address.documentImage.filename}` : null
-      },
-      facial: {
-        ...submission.facial,
-        verificationPhotoUrl: submission.facial.verificationPhoto ? `/api/admin/kyc/files/facial-photo/${submission.facial.verificationPhoto.filename}` : null,
-        verificationVideoUrl: submission.facial.verificationVideo ? `/api/admin/kyc/files/facial-video/${submission.facial.verificationVideo.filename}` : null,
-        verificationPhotoPreview: submission.facial.verificationPhoto ? `/api/admin/kyc/preview/facial-photo/${submission.facial.verificationPhoto.filename}` : null,
-        verificationVideoPreview: submission.facial.verificationVideo ? `/api/admin/kyc/preview/facial-video/${submission.facial.verificationVideo.filename}` : null
-      },
-      overallStatus: submission.overallStatus || 'not-started',
-      submittedAt: submission.submittedAt,
-      createdAt: submission.createdAt,
-      reviewedAt: submission.reviewedAt,
-      adminNotes: submission.adminNotes
-    }));
-
-    console.log(`Found ${formattedSubmissions.length} KYC submissions`);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        submissions: formattedSubmissions,
-        pagination: {
-          currentPage: page,
-          totalPages: totalPages,
-          totalItems: totalCount,
-          itemsPerPage: limit,
-          hasNextPage: page < totalPages,
-          hasPrevPage: page > 1
-        }
-      }
-    });
-
-  } catch (err) {
-    console.error('Get KYC submissions error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch KYC submissions'
-    });
-  }
-});
-
-// Get specific KYC submission details with enhanced media URLs
-app.get('/api/admin/kyc/submissions/:submissionId', adminProtect, restrictTo('super', 'support'), async (req, res) => {
-  try {
-    const { submissionId } = req.params;
-
-    const submission = await KYC.findById(submissionId)
-      .populate('user', 'firstName lastName email phone country city address')
-      .populate('identity.verifiedBy', 'name email')
-      .populate('address.verifiedBy', 'name email')
-      .populate('facial.verifiedBy', 'name email')
-      .populate('history.admin', 'name email')
-      .lean();
-
-    if (!submission) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'KYC submission not found'
-      });
-    }
-
-    // Enhance submission with media URLs for direct viewing
-    const enhancedSubmission = {
-      ...submission,
-      identity: {
-        ...submission.identity,
-        frontImageUrl: submission.identity.frontImage ? `/api/admin/kyc/files/identity-front/${submission.identity.frontImage.filename}` : null,
-        backImageUrl: submission.identity.backImage ? `/api/admin/kyc/files/identity-back/${submission.identity.backImage.filename}` : null,
-        frontImagePreview: submission.identity.frontImage ? `/api/admin/kyc/preview/identity-front/${submission.identity.frontImage.filename}` : null,
-        backImagePreview: submission.identity.backImage ? `/api/admin/kyc/preview/identity-back/${submission.identity.backImage.filename}` : null
-      },
-      address: {
-        ...submission.address,
-        documentImageUrl: submission.address.documentImage ? `/api/admin/kyc/files/address/${submission.address.documentImage.filename}` : null,
-        documentImagePreview: submission.address.documentImage ? `/api/admin/kyc/preview/address/${submission.address.documentImage.filename}` : null
-      },
-      facial: {
-        ...submission.facial,
-        verificationPhotoUrl: submission.facial.verificationPhoto ? `/api/admin/kyc/files/facial-photo/${submission.facial.verificationPhoto.filename}` : null,
-        verificationVideoUrl: submission.facial.verificationVideo ? `/api/admin/kyc/files/facial-video/${submission.facial.verificationVideo.filename}` : null,
-        verificationPhotoPreview: submission.facial.verificationPhoto ? `/api/admin/kyc/preview/facial-photo/${submission.facial.verificationPhoto.filename}` : null,
-        verificationVideoPreview: submission.facial.verificationVideo ? `/api/admin/kyc/preview/facial-video/${submission.facial.verificationVideo.filename}` : null
-      }
-    };
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        submission: enhancedSubmission
-      }
-    });
-
-  } catch (err) {
-    console.error('Get KYC submission details error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch KYC submission details'
-    });
-  }
-});
-
-// Enhanced KYC file serving with inline viewing support
+// Serve KYC files for admin with enhanced media preview capability
 app.get('/api/admin/kyc/files/:type/:filename', adminProtect, restrictTo('super', 'support'), async (req, res) => {
   try {
     const { type, filename } = req.params;
-    const { download } = req.query;
     
-    // Validate filename to prevent directory traversal
-    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
-      return res.status(400).json({
+    // Validate file type
+    const validTypes = ['identity-front', 'identity-back', 'address', 'facial-video', 'facial-photo'];
+    if (!validTypes.includes(type)) {
+      return res.status(404).json({
         status: 'fail',
-        message: 'Invalid filename'
+        message: 'File type not found'
       });
     }
 
+    // Determine file path based on type
     let filePath;
+    let baseDir;
+    
     switch (type) {
       case 'identity-front':
-        filePath = path.join(__dirname, '../uploads/kyc/identity', filename);
-        break;
-      
       case 'identity-back':
-        filePath = path.join(__dirname, '../uploads/kyc/identity', filename);
+        baseDir = 'uploads/kyc/identity';
         break;
-      
       case 'address':
-        filePath = path.join(__dirname, '../uploads/kyc/address', filename);
+        baseDir = 'uploads/kyc/address';
         break;
-      
       case 'facial-video':
-        filePath = path.join(__dirname, '../uploads/kyc/facial', filename);
-        break;
-      
       case 'facial-photo':
-        filePath = path.join(__dirname, '../uploads/kyc/facial', filename);
+        baseDir = 'uploads/kyc/facial';
         break;
-      
-      default:
-        return res.status(404).json({
-          status: 'fail',
-          message: 'File type not found'
-        });
     }
+    
+    filePath = path.join(__dirname, baseDir, filename);
 
     // Check if file exists
     if (!fs.existsSync(filePath)) {
@@ -11035,93 +10836,121 @@ app.get('/api/admin/kyc/files/:type/:filename', adminProtect, restrictTo('super'
     }
 
     // Get file stats
-    const stat = fs.statSync(filePath);
-    const fileSize = stat.size;
+    const stats = fs.statSync(filePath);
+    const fileSize = stats.size;
     const fileExt = path.extname(filename).toLowerCase();
 
-    // Set appropriate headers for inline viewing or download
-    if (download === 'true') {
-      // Force download
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
-    } else {
-      // Determine content type for inline viewing
-      const contentType = getMimeType(fileExt);
-      res.setHeader('Content-Type', contentType);
+    // Set appropriate headers for media preview
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'];
+    const videoExtensions = ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
+    
+    if (imageExtensions.includes(fileExt)) {
+      // Serve images with inline disposition for preview
+      res.setHeader('Content-Type', getMimeType(fileExt));
+      res.setHeader('Content-Length', fileSize);
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Cache-Control', 'private, max-age=3600'); // Cache for 1 hour
+    } else if (videoExtensions.includes(fileExt)) {
+      // Handle video streaming for preview
+      const range = req.headers.range;
       
-      // For images, videos and PDFs, allow inline viewing
-      if (fileExt.match(/\.(jpg|jpeg|png|gif|pdf)$/) || fileExt.match(/\.(mp4|avi|mov|webm)$/)) {
-        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(filename)}"`);
+      if (range) {
+        // Parse range header
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunksize = (end - start) + 1;
+
+        // Create read stream for the specific range
+        const fileStream = fs.createReadStream(filePath, { start, end });
+        
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': chunksize,
+          'Content-Type': getMimeType(fileExt),
+          'Content-Disposition': `inline; filename="${filename}"`,
+          'Cache-Control': 'private, max-age=3600'
+        });
+
+        fileStream.pipe(res);
+        return;
       } else {
-        // For other file types, force download
-        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+        // Serve full video
+        res.setHeader('Content-Type', getMimeType(fileExt));
+        res.setHeader('Content-Length', fileSize);
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Cache-Control', 'private, max-age=3600');
       }
+    } else {
+      // For other file types (PDF, documents), offer download
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Length', fileSize);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     }
 
-    res.setHeader('Content-Length', fileSize);
-    res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-
-    // Create read stream and pipe to response
+    // Stream the file
     const fileStream = fs.createReadStream(filePath);
     
-    fileStream.on('error', (err) => {
-      console.error('File stream error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({
-          status: 'error',
-          message: 'Error streaming file'
-        });
-      }
+    fileStream.on('error', (error) => {
+      console.error('File stream error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Error streaming file'
+      });
     });
 
     fileStream.pipe(res);
 
   } catch (err) {
     console.error('Serve KYC file error:', err);
-    if (!res.headersSent) {
-      res.status(500).json({
-        status: 'error',
-        message: 'Failed to serve file'
-      });
-    }
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to serve file'
+    });
   }
 });
 
-// Enhanced media preview with optimized delivery
-app.get('/api/admin/kyc/preview/:type/:filename', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+// Helper function to get MIME type from file extension
+function getMimeType(extension) {
+  const mimeTypes = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.bmp': 'image/bmp',
+    '.webp': 'image/webp',
+    '.mp4': 'video/mp4',
+    '.avi': 'video/x-msvideo',
+    '.mov': 'video/quicktime',
+    '.wmv': 'video/x-ms-wmv',
+    '.flv': 'video/x-flv',
+    '.webm': 'video/webm',
+    '.pdf': 'application/pdf'
+  };
+  
+  return mimeTypes[extension] || 'application/octet-stream';
+}
+
+// Additional endpoint to get file information for preview
+app.get('/api/admin/kyc/files/:type/:filename/info', adminProtect, restrictTo('super', 'support'), async (req, res) => {
   try {
     const { type, filename } = req.params;
     
-    // Validate filename to prevent directory traversal
-    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Invalid filename'
-      });
-    }
-
     let filePath;
     switch (type) {
       case 'identity-front':
-        filePath = path.join(__dirname, '../uploads/kyc/identity', filename);
-        break;
-      
       case 'identity-back':
-        filePath = path.join(__dirname, '../uploads/kyc/identity', filename);
+        filePath = path.join(__dirname, 'uploads/kyc/identity', filename);
         break;
-      
       case 'address':
-        filePath = path.join(__dirname, '../uploads/kyc/address', filename);
+        filePath = path.join(__dirname, 'uploads/kyc/address', filename);
         break;
-      
       case 'facial-video':
-        filePath = path.join(__dirname, '../uploads/kyc/facial', filename);
-        break;
-      
       case 'facial-photo':
-        filePath = path.join(__dirname, '../uploads/kyc/facial', filename);
+        filePath = path.join(__dirname, 'uploads/kyc/facial', filename);
         break;
-      
       default:
         return res.status(404).json({
           status: 'fail',
@@ -11137,534 +10966,47 @@ app.get('/api/admin/kyc/preview/:type/:filename', adminProtect, restrictTo('supe
       });
     }
 
+    const stats = fs.statSync(filePath);
     const fileExt = path.extname(filename).toLowerCase();
-    const stat = fs.statSync(filePath);
-
-    // Set optimized headers for preview
-    res.setHeader('Content-Type', getMimeType(fileExt));
-    res.setHeader('Content-Length', stat.size);
-    res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
-    res.setHeader('Content-Disposition', `inline; filename="preview-${encodeURIComponent(filename)}"`);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-
-    // Stream file for preview
-    const fileStream = fs.createReadStream(filePath);
     
-    fileStream.on('error', (err) => {
-      console.error('Preview file stream error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({
-          status: 'error',
-          message: 'Error streaming preview file'
-        });
+    res.status(200).json({
+      status: 'success',
+      data: {
+        filename: filename,
+        size: stats.size,
+        modified: stats.mtime,
+        type: getFileType(fileExt),
+        mimeType: getMimeType(fileExt),
+        previewable: isPreviewable(fileExt)
       }
     });
 
-    fileStream.pipe(res);
-
   } catch (err) {
-    console.error('Serve KYC preview error:', err);
-    if (!res.headersSent) {
-      res.status(500).json({
-        status: 'error',
-        message: 'Failed to serve preview'
-      });
-    }
+    console.error('Get file info error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to get file information'
+    });
   }
 });
 
-// Production-ready Excel export endpoint
-app.get('/api/admin/kyc/export', adminProtect, restrictTo('super', 'support'), async (req, res) => {
-  try {
-    const { status, format = 'excel' } = req.query;
-    
-    // Build query based on status filter
-    let query = {};
-    if (status && status !== 'all') {
-      query.overallStatus = status;
-    }
-
-    const submissions = await KYC.find(query)
-      .populate('user', 'firstName lastName email phone')
-      .populate('identity.verifiedBy', 'name')
-      .populate('address.verifiedBy', 'name')
-      .populate('facial.verifiedBy', 'name')
-      .sort({ submittedAt: -1, createdAt: -1 })
-      .lean();
-
-    if (format === 'excel') {
-      // Create Excel workbook
-      const workbook = new ExcelJS.Workbook();
-      workbook.creator = 'BitHash LLC Admin';
-      workbook.lastModifiedBy = 'BitHash LLC Admin';
-      workbook.created = new Date();
-      workbook.modified = new Date();
-
-      // Add worksheet
-      const worksheet = workbook.addWorksheet('KYC Submissions', {
-        pageSetup: { 
-          fitToPage: true, 
-          fitToHeight: 5, 
-          fitToWidth: 7 
-        }
-      });
-
-      // Define columns
-      worksheet.columns = [
-        { header: 'User Name', key: 'userName', width: 25 },
-        { header: 'Email', key: 'email', width: 30 },
-        { header: 'Phone', key: 'phone', width: 20 },
-        { header: 'Identity Status', key: 'identityStatus', width: 15 },
-        { header: 'Identity Document Type', key: 'identityDocType', width: 20 },
-        { header: 'Identity Document Number', key: 'identityDocNumber', width: 25 },
-        { header: 'Address Status', key: 'addressStatus', width: 15 },
-        { header: 'Address Document Type', key: 'addressDocType', width: 20 },
-        { header: 'Facial Status', key: 'facialStatus', width: 15 },
-        { header: 'Overall Status', key: 'overallStatus', width: 15 },
-        { header: 'Submitted Date', key: 'submittedAt', width: 20 },
-        { header: 'Reviewed Date', key: 'reviewedAt', width: 20 },
-        { header: 'Verified By (Identity)', key: 'identityVerifiedBy', width: 25 },
-        { header: 'Verified By (Address)', key: 'addressVerifiedBy', width: 25 },
-        { header: 'Verified By (Facial)', key: 'facialVerifiedBy', width: 25 },
-        { header: 'Admin Notes', key: 'adminNotes', width: 40 }
-      ];
-
-      // Style the header row
-      worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-      worksheet.getRow(1).fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FF2E5AA7' }
-      };
-      worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
-
-      // Add data rows
-      submissions.forEach((submission, index) => {
-        const row = worksheet.addRow({
-          userName: `${submission.user?.firstName || ''} ${submission.user?.lastName || ''}`.trim(),
-          email: submission.user?.email || 'N/A',
-          phone: submission.user?.phone || 'N/A',
-          identityStatus: submission.identity?.status || 'not-submitted',
-          identityDocType: submission.identity?.documentType || 'N/A',
-          identityDocNumber: submission.identity?.documentNumber || 'N/A',
-          addressStatus: submission.address?.status || 'not-submitted',
-          addressDocType: submission.address?.documentType || 'N/A',
-          facialStatus: submission.facial?.status || 'not-submitted',
-          overallStatus: submission.overallStatus || 'not-started',
-          submittedAt: submission.submittedAt ? new Date(submission.submittedAt).toLocaleDateString('en-US') : 'Not submitted',
-          reviewedAt: submission.reviewedAt ? new Date(submission.reviewedAt).toLocaleDateString('en-US') : 'Not reviewed',
-          identityVerifiedBy: submission.identity?.verifiedBy?.name || 'N/A',
-          addressVerifiedBy: submission.address?.verifiedBy?.name || 'N/A',
-          facialVerifiedBy: submission.facial?.verifiedBy?.name || 'N/A',
-          adminNotes: submission.adminNotes || ''
-        });
-
-        // Alternate row coloring for better readability
-        if (index % 2 === 0) {
-          row.fill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: 'FFF0F0F0' }
-          };
-        }
-
-        row.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
-        row.height = 25;
-      });
-
-      // Auto-filter
-      worksheet.autoFilter = {
-        from: 'A1',
-        to: `P${submissions.length + 1}`
-      };
-
-      // Freeze header row
-      worksheet.views = [
-        { state: 'frozen', xSplit: 0, ySplit: 1 }
-      ];
-
-      // Set response headers for Excel file download
-      const timestamp = new Date().toISOString().split('T')[0];
-      const filename = `kyc-submissions-${timestamp}-${status || 'all'}.xlsx`;
-      
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('Cache-Control', 'no-cache');
-
-      // Write to response
-      await workbook.xlsx.write(res);
-      res.end();
-
-    } else {
-      // JSON format fallback
-      const exportData = submissions.map(submission => ({
-        userName: `${submission.user?.firstName || ''} ${submission.user?.lastName || ''}`.trim(),
-        email: submission.user?.email || 'N/A',
-        phone: submission.user?.phone || 'N/A',
-        identityStatus: submission.identity?.status || 'not-submitted',
-        identityDocumentType: submission.identity?.documentType || 'N/A',
-        identityDocumentNumber: submission.identity?.documentNumber || 'N/A',
-        addressStatus: submission.address?.status || 'not-submitted',
-        addressDocumentType: submission.address?.documentType || 'N/A',
-        facialStatus: submission.facial?.status || 'not-submitted',
-        overallStatus: submission.overallStatus || 'not-started',
-        submittedAt: submission.submittedAt,
-        reviewedAt: submission.reviewedAt,
-        identityVerifiedBy: submission.identity?.verifiedBy?.name || 'N/A',
-        addressVerifiedBy: submission.address?.verifiedBy?.name || 'N/A',
-        facialVerifiedBy: submission.facial?.verifiedBy?.name || 'N/A',
-        adminNotes: submission.adminNotes || ''
-      }));
-
-      res.status(200).json({
-        status: 'success',
-        data: {
-          submissions: exportData,
-          total: exportData.length,
-          exportedAt: new Date().toISOString(),
-          format: 'json'
-        }
-      });
-    }
-
-  } catch (err) {
-    console.error('Export KYC data error:', err);
-    if (!res.headersSent) {
-      res.status(500).json({
-        status: 'error',
-        message: 'Failed to export KYC data'
-      });
-    }
-  }
-});
-
-// Helper function to get MIME type
-function getMimeType(fileExt) {
-  const mimeTypes = {
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.png': 'image/png',
-    '.gif': 'image/gif',
-    '.pdf': 'application/pdf',
-    '.mp4': 'video/mp4',
-    '.avi': 'video/x-msvideo',
-    '.mov': 'video/quicktime',
-    '.webm': 'video/webm',
-    '.mp3': 'audio/mpeg',
-    '.wav': 'audio/wav'
-  };
-  return mimeTypes[fileExt] || 'application/octet-stream';
+// Helper function to determine file type
+function getFileType(extension) {
+  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'];
+  const videoExtensions = ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
+  const documentExtensions = ['.pdf', '.doc', '.docx', '.txt'];
+  
+  if (imageExtensions.includes(extension)) return 'image';
+  if (videoExtensions.includes(extension)) return 'video';
+  if (documentExtensions.includes(extension)) return 'document';
+  return 'other';
 }
 
-// Approve KYC submission
-app.post('/api/admin/kyc/submissions/:submissionId/approve', adminProtect, restrictTo('super', 'support'), [
-  body('notes').optional().trim()
-], async (req, res) => {
-  try {
-    const { submissionId } = req.params;
-    const { notes } = req.body;
-
-    const kycSubmission = await KYC.findById(submissionId)
-      .populate('user');
-
-    if (!kycSubmission) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'KYC submission not found'
-      });
-    }
-
-    // Update KYC status
-    kycSubmission.identity.status = 'verified';
-    kycSubmission.identity.verifiedAt = new Date();
-    kycSubmission.identity.verifiedBy = req.admin._id;
-
-    kycSubmission.address.status = 'verified';
-    kycSubmission.address.verifiedAt = new Date();
-    kycSubmission.address.verifiedBy = req.admin._id;
-
-    kycSubmission.facial.status = 'verified';
-    kycSubmission.facial.verifiedAt = new Date();
-    kycSubmission.facial.verifiedBy = req.admin._id;
-
-    kycSubmission.overallStatus = 'verified';
-    kycSubmission.reviewedAt = new Date();
-    kycSubmission.adminNotes = notes;
-
-    // Add to history
-    if (!kycSubmission.history) {
-      kycSubmission.history = [];
-    }
-    
-    kycSubmission.history.push({
-      action: 'approved',
-      description: 'KYC application approved by admin',
-      admin: req.admin._id,
-      timestamp: new Date(),
-      notes: notes
-    });
-
-    await kycSubmission.save();
-
-    // Update user's KYC status
-    await User.findByIdAndUpdate(kycSubmission.user._id, {
-      'kycStatus.identity': 'verified',
-      'kycStatus.address': 'verified',
-      'kycStatus.facial': 'verified',
-      isKycVerified: true,
-      kycVerifiedAt: new Date()
-    });
-
-    res.status(200).json({
-      status: 'success',
-      message: 'KYC application approved successfully',
-      data: {
-        submission: kycSubmission
-      }
-    });
-
-    await logActivity('approve_kyc', 'kyc', kycSubmission._id, req.admin._id, 'Admin', req, {
-      userId: kycSubmission.user._id,
-      notes
-    });
-
-  } catch (err) {
-    console.error('Approve KYC error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to approve KYC application'
-    });
-  }
-});
-
-// Reject KYC submission
-app.post('/api/admin/kyc/submissions/:submissionId/reject', adminProtect, restrictTo('super', 'support'), [
-  body('reason').trim().notEmpty().withMessage('Rejection reason is required'),
-  body('section').optional().isIn(['all', 'identity', 'address', 'facial']).withMessage('Invalid section')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { submissionId } = req.params;
-    const { reason, section = 'all' } = req.body;
-
-    const kycSubmission = await KYC.findById(submissionId)
-      .populate('user');
-
-    if (!kycSubmission) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'KYC submission not found'
-      });
-    }
-
-    // Update status based on rejected section
-    if (section === 'all' || section === 'identity') {
-      kycSubmission.identity.status = 'rejected';
-      kycSubmission.identity.rejectionReason = reason;
-      kycSubmission.identity.verifiedAt = new Date();
-      kycSubmission.identity.verifiedBy = req.admin._id;
-    }
-
-    if (section === 'all' || section === 'address') {
-      kycSubmission.address.status = 'rejected';
-      kycSubmission.address.rejectionReason = reason;
-      kycSubmission.address.verifiedAt = new Date();
-      kycSubmission.address.verifiedBy = req.admin._id;
-    }
-
-    if (section === 'all' || section === 'facial') {
-      kycSubmission.facial.status = 'rejected';
-      kycSubmission.facial.rejectionReason = reason;
-      kycSubmission.facial.verifiedAt = new Date();
-      kycSubmission.facial.verifiedBy = req.admin._id;
-    }
-
-    // Update overall status
-    if (section === 'all') {
-      kycSubmission.overallStatus = 'rejected';
-    } else {
-      // If only specific section rejected, mark as in-progress for resubmission
-      kycSubmission.overallStatus = 'in-progress';
-    }
-
-    kycSubmission.reviewedAt = new Date();
-    kycSubmission.adminNotes = reason;
-
-    // Add to history
-    if (!kycSubmission.history) {
-      kycSubmission.history = [];
-    }
-    
-    kycSubmission.history.push({
-      action: 'rejected',
-      description: `KYC application ${section === 'all' ? 'rejected' : `section ${section} rejected`} by admin`,
-      admin: req.admin._id,
-      timestamp: new Date(),
-      notes: reason,
-      section: section
-    });
-
-    await kycSubmission.save();
-
-    // Update user's KYC status
-    const userUpdate = {};
-    if (section === 'all' || section === 'identity') {
-      userUpdate['kycStatus.identity'] = 'rejected';
-    }
-    if (section === 'all' || section === 'address') {
-      userUpdate['kycStatus.address'] = 'rejected';
-    }
-    if (section === 'all' || section === 'facial') {
-      userUpdate['kycStatus.facial'] = 'rejected';
-    }
-
-    if (section === 'all') {
-      userUpdate.isKycVerified = false;
-    }
-
-    await User.findByIdAndUpdate(kycSubmission.user._id, userUpdate);
-
-    res.status(200).json({
-      status: 'success',
-      message: 'KYC application rejected successfully',
-      data: {
-        submission: kycSubmission
-      }
-    });
-
-    await logActivity('reject_kyc', 'kyc', kycSubmission._id, req.admin._id, 'Admin', req, {
-      userId: kycSubmission.user._id,
-      reason,
-      section
-    });
-
-  } catch (err) {
-    console.error('Reject KYC error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to reject KYC application'
-    });
-  }
-});
-
-// Re-open KYC submission for review
-app.post('/api/admin/kyc/submissions/:submissionId/reopen', adminProtect, restrictTo('super', 'support'), async (req, res) => {
-  try {
-    const { submissionId } = req.params;
-
-    const kycSubmission = await KYC.findById(submissionId)
-      .populate('user');
-
-    if (!kycSubmission) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'KYC submission not found'
-      });
-    }
-
-    // Reset status to pending for review
-    kycSubmission.overallStatus = 'pending';
-    kycSubmission.reviewedAt = null;
-    kycSubmission.adminNotes = `${kycSubmission.adminNotes || ''}\n\nRe-opened for review on ${new Date().toISOString()}`.trim();
-
-    // Add to history
-    if (!kycSubmission.history) {
-      kycSubmission.history = [];
-    }
-    
-    kycSubmission.history.push({
-      action: 'reopened',
-      description: 'KYC application re-opened for review by admin',
-      admin: req.admin._id,
-      timestamp: new Date(),
-      notes: 'Application re-opened for additional review'
-    });
-
-    await kycSubmission.save();
-
-    res.status(200).json({
-      status: 'success',
-      message: 'KYC submission re-opened for review successfully',
-      data: {
-        submission: kycSubmission
-      }
-    });
-
-    await logActivity('reopen_kyc', 'kyc', kycSubmission._id, req.admin._id, 'Admin', req, {
-      userId: kycSubmission.user._id
-    });
-
-  } catch (err) {
-    console.error('Re-open KYC error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to re-open KYC submission'
-    });
-  }
-});
-
-// Get KYC statistics for admin dashboard
-app.get('/api/admin/kyc/stats', adminProtect, restrictTo('super', 'support'), async (req, res) => {
-  try {
-    const stats = await KYC.aggregate([
-      {
-        $group: {
-          _id: '$overallStatus',
-          count: { $sum: 1 }
-        }
-      }
-    ]);
-
-    // Format stats
-    const formattedStats = {
-      total: 0,
-      pending: 0,
-      verified: 0,
-      rejected: 0,
-      'in-progress': 0,
-      'not-started': 0
-    };
-
-    stats.forEach(stat => {
-      formattedStats.total += stat.count;
-      formattedStats[stat._id] = stat.count;
-    });
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        stats: formattedStats
-      }
-    });
-
-  } catch (err) {
-    console.error('Get KYC stats error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch KYC statistics'
-    });
-  }
-});
-
-// Helper function to update KYC badge counts
-const getKYCStats = async () => {
-  try {
-    const pendingCount = await KYC.countDocuments({ overallStatus: 'pending' });
-    return pendingCount;
-  } catch (err) {
-    console.error('Get KYC stats error:', err);
-    return 0;
-  }
-};
-
-
+// Helper function to check if file is previewable
+function isPreviewable(extension) {
+  const previewableExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
+  return previewableExtensions.includes(extension);
+}
 
 
 
@@ -12403,6 +11745,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
