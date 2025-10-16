@@ -10786,6 +10786,13 @@ app.post('/api/auth/records', [
 
 
 
+
+
+
+
+
+
+
 // =============================================
 // ADMIN KYC MANAGEMENT ENDPOINTS
 // =============================================
@@ -11072,7 +11079,7 @@ app.post('/api/admin/kyc/submissions/:submissionId/reject', adminProtect, restri
   }
 });
 
-// Serve KYC files for admin (with authentication) - ENHANCED FOR MEDIA PREVIEW
+// Serve KYC files for admin (with authentication) - ENHANCED FOR MEDIA PREVIEW WITH TOKEN SUPPORT
 app.get('/api/admin/kyc/files/:type/:filename', adminProtect, restrictTo('super', 'support'), async (req, res) => {
   try {
     const { type, filename } = req.params;
@@ -11119,18 +11126,39 @@ app.get('/api/admin/kyc/files/:type/:filename', adminProtect, restrictTo('super'
     let contentType = 'application/octet-stream';
     
     // Set appropriate content types for media preview
-    if (['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'].includes(ext)) {
-      contentType = `image/${ext === '.jpg' ? 'jpeg' : ext.slice(1)}`;
-    } else if (['.mp4', '.avi', '.mov', '.wmv', '.webm'].includes(ext)) {
-      contentType = `video/${ext.slice(1)}`;
+    if (['.jpg', '.jpeg'].includes(ext)) {
+      contentType = 'image/jpeg';
+    } else if (ext === '.png') {
+      contentType = 'image/png';
+    } else if (ext === '.gif') {
+      contentType = 'image/gif';
+    } else if (ext === '.bmp') {
+      contentType = 'image/bmp';
+    } else if (ext === '.webp') {
+      contentType = 'image/webp';
+    } else if (['.mp4'].includes(ext)) {
+      contentType = 'video/mp4';
+    } else if (ext === '.avi') {
+      contentType = 'video/x-msvideo';
+    } else if (ext === '.mov') {
+      contentType = 'video/quicktime';
+    } else if (ext === '.wmv') {
+      contentType = 'video/x-ms-wmv';
+    } else if (ext === '.webm') {
+      contentType = 'video/webm';
     } else if (ext === '.pdf') {
       contentType = 'application/pdf';
     }
 
+    // Set CORS headers to allow cross-origin requests from the same domain
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    
     // Set headers for proper media display in browser
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', 'inline; filename="' + filename + '"');
     res.setHeader('Cache-Control', 'private, max-age=3600'); // Cache for 1 hour
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     
     // For videos, support range requests for seeking
     if (contentType.startsWith('video/')) {
@@ -11170,6 +11198,176 @@ app.get('/api/admin/kyc/files/:type/:filename', adminProtect, restrictTo('super'
 
   } catch (err) {
     console.error('Serve KYC file error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to serve file'
+    });
+  }
+});
+
+// NEW ENDPOINT: Generate secure preview URLs with tokens
+app.get('/api/admin/kyc/files/secure/:type/:filename', adminProtect, restrictTo('super', 'support'), async (req, res) => {
+  try {
+    const { type, filename } = req.params;
+    
+    // Generate a short-lived token for secure access
+    const token = jwt.sign(
+      { 
+        file: `${type}/${filename}`,
+        adminId: req.admin._id,
+        timestamp: Date.now()
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' } // Token valid for 1 hour
+    );
+
+    // Return the secure URL
+    res.status(200).json({
+      status: 'success',
+      data: {
+        secureUrl: `/api/admin/kyc/files/preview/${token}/${type}/${filename}`,
+        token: token
+      }
+    });
+
+  } catch (err) {
+    console.error('Generate secure URL error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to generate secure URL'
+    });
+  }
+});
+
+// NEW ENDPOINT: Serve files with token authentication for browser preview
+app.get('/api/admin/kyc/files/preview/:token/:type/:filename', async (req, res) => {
+  try {
+    const { token, type, filename } = req.params;
+
+    // Verify the token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Invalid or expired token'
+      });
+    }
+
+    let filePath;
+    switch (type) {
+      case 'identity-front':
+        filePath = path.join(__dirname, 'uploads/kyc/identity', filename);
+        break;
+      
+      case 'identity-back':
+        filePath = path.join(__dirname, 'uploads/kyc/identity', filename);
+        break;
+      
+      case 'address':
+        filePath = path.join(__dirname, 'uploads/kyc/address', filename);
+        break;
+      
+      case 'facial-video':
+        filePath = path.join(__dirname, 'uploads/kyc/facial', filename);
+        break;
+      
+      case 'facial-photo':
+        filePath = path.join(__dirname, 'uploads/kyc/facial', filename);
+        break;
+      
+      default:
+        return res.status(404).json({
+          status: 'fail',
+          message: 'File type not found'
+        });
+    }
+
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'File not found'
+      });
+    }
+
+    // Get file extension and determine content type
+    const ext = path.extname(filename).toLowerCase();
+    let contentType = 'application/octet-stream';
+    
+    // Set appropriate content types for media preview
+    if (['.jpg', '.jpeg'].includes(ext)) {
+      contentType = 'image/jpeg';
+    } else if (ext === '.png') {
+      contentType = 'image/png';
+    } else if (ext === '.gif') {
+      contentType = 'image/gif';
+    } else if (ext === '.bmp') {
+      contentType = 'image/bmp';
+    } else if (ext === '.webp') {
+      contentType = 'image/webp';
+    } else if (['.mp4'].includes(ext)) {
+      contentType = 'video/mp4';
+    } else if (ext === '.avi') {
+      contentType = 'video/x-msvideo';
+    } else if (ext === '.mov') {
+      contentType = 'video/quicktime';
+    } else if (ext === '.wmv') {
+      contentType = 'video/x-ms-wmv';
+    } else if (ext === '.webm') {
+      contentType = 'video/webm';
+    } else if (ext === '.pdf') {
+      contentType = 'application/pdf';
+    }
+
+    // Set CORS headers to allow cross-origin requests
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    
+    // Set headers for proper media display in browser
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', 'inline; filename="' + filename + '"');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    
+    // For videos, support range requests for seeking
+    if (contentType.startsWith('video/')) {
+      const stat = fs.statSync(filePath);
+      const fileSize = stat.size;
+      const range = req.headers.range;
+      
+      if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunksize = (end - start) + 1;
+        
+        const file = fs.createReadStream(filePath, { start, end });
+        const head = {
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': chunksize,
+          'Content-Type': contentType,
+        };
+        
+        res.writeHead(206, head);
+        file.pipe(res);
+      } else {
+        const head = {
+          'Content-Length': fileSize,
+          'Content-Type': contentType,
+        };
+        res.writeHead(200, head);
+        fs.createReadStream(filePath).pipe(res);
+      }
+    } else {
+      // For images and other files, stream directly
+      const fileStream = fs.createReadStream(filePath);
+      fileStream.pipe(res);
+    }
+
+  } catch (err) {
+    console.error('Serve KYC preview file error:', err);
     res.status(500).json({
       status: 'error',
       message: 'Failed to serve file'
@@ -11230,6 +11428,10 @@ const getKYCStats = async () => {
     return 0;
   }
 };
+
+
+
+
 
 
 
@@ -11965,6 +12167,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
