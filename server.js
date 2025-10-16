@@ -11725,7 +11725,78 @@ app.post('/api/users/kyc/submit', protect, async (req, res) => {
 
 
 
+// KYC Data Endpoint - Frontend Integration
+app.get('/api/users/kyc', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const kycRecord = await KYC.findOne({ user: userId })
+      .populate('identity.verifiedBy', 'name email')
+      .populate('address.verifiedBy', 'name email')
+      .populate('facial.verifiedBy', 'name email')
+      .lean();
 
+    if (!kycRecord) {
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          kyc: {
+            identity: {
+              documentType: '',
+              documentNumber: '',
+              documentExpiry: '',
+              frontImage: null,
+              backImage: null,
+              status: 'unverified',
+              verifiedAt: null,
+              verifiedBy: null,
+              rejectionReason: ''
+            },
+            address: {
+              documentType: '',
+              documentDate: '',
+              documentImage: null,
+              status: 'unverified',
+              verifiedAt: null,
+              verifiedBy: null,
+              rejectionReason: ''
+            },
+            facial: {
+              verificationVideo: null,
+              verificationPhoto: null,
+              status: 'unverified',
+              verifiedAt: null,
+              verifiedBy: null,
+              rejectionReason: ''
+            },
+            overallStatus: 'unverified',
+            submittedAt: null,
+            reviewedAt: null,
+            adminNotes: ''
+          },
+          isSubmitted: false
+        }
+      });
+    }
+
+    const responseData = {
+      status: 'success',
+      data: {
+        kyc: kycRecord,
+        isSubmitted: kycRecord.overallStatus === 'pending' || kycRecord.overallStatus === 'verified' || kycRecord.overallStatus === 'rejected'
+      }
+    };
+
+    res.status(200).json(responseData);
+
+  } catch (err) {
+    console.error('Get KYC data error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch KYC data'
+    });
+  }
+});
 
 
 
@@ -11864,6 +11935,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
