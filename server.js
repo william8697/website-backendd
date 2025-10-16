@@ -11437,11 +11437,6 @@ const getKYCStats = async () => {
 
 
 
-
-
-
-
-
 // Enhanced KYC Identity Document Upload Endpoint
 app.post('/api/users/kyc/identity', protect, upload.fields([
   { name: 'front', maxCount: 1 },
@@ -12002,19 +11997,6 @@ app.post('/api/users/kyc/submit', protect, async (req, res) => {
   }
 });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 // KYC Data Endpoint - Frontend Integration
 app.get('/api/users/kyc', protect, async (req, res) => {
   try {
@@ -12084,6 +12066,489 @@ app.get('/api/users/kyc', protect, async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Failed to fetch KYC data'
+    });
+  }
+});
+
+// =============================================
+// MESSAGING AND NOTIFICATION ENDPOINTS
+// =============================================
+
+// Get User Messages and Notifications
+app.get('/api/users/messages', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const messages = await Message.find({ 
+      user: userId,
+      status: 'active'
+    })
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .lean();
+
+    const notifications = await Notification.find({
+      user: userId,
+      status: 'unread'
+    })
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .lean();
+
+    const announcements = await Announcement.find({
+      $or: [
+        { targetUsers: userId },
+        { targetUsers: { $size: 0 } }
+      ],
+      status: 'active',
+      startDate: { $lte: new Date() },
+      endDate: { $gte: new Date() }
+    })
+    .sort({ priority: -1, createdAt: -1 })
+    .limit(10)
+    .lean();
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        messages: messages || [],
+        notifications: notifications || [],
+        announcements: announcements || [],
+        unreadCount: notifications.length
+      }
+    });
+
+  } catch (err) {
+    console.error('Get messages error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch messages and notifications'
+    });
+  }
+});
+
+// Mark Message as Read
+app.patch('/api/users/messages/:messageId/read', protect, async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const userId = req.user.id;
+
+    const message = await Message.findOneAndUpdate(
+      { 
+        _id: messageId, 
+        user: userId 
+      },
+      { 
+        status: 'read',
+        readAt: new Date()
+      },
+      { new: true }
+    );
+
+    if (!message) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Message not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Message marked as read',
+      data: { message }
+    });
+
+  } catch (err) {
+    console.error('Mark message as read error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to mark message as read'
+    });
+  }
+});
+
+// Mark Notification as Read
+app.patch('/api/users/notifications/:notificationId/read', protect, async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    const userId = req.user.id;
+
+    const notification = await Notification.findOneAndUpdate(
+      { 
+        _id: notificationId, 
+        user: userId 
+      },
+      { 
+        status: 'read',
+        readAt: new Date()
+      },
+      { new: true }
+    );
+
+    if (!notification) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Notification not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Notification marked as read',
+      data: { notification }
+    });
+
+  } catch (err) {
+    console.error('Mark notification as read error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to mark notification as read'
+    });
+  }
+});
+
+// Mark All Notifications as Read
+app.patch('/api/users/notifications/read-all', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const result = await Notification.updateMany(
+      { 
+        user: userId,
+        status: 'unread'
+      },
+      { 
+        status: 'read',
+        readAt: new Date()
+      }
+    );
+
+    res.status(200).json({
+      status: 'success',
+      message: 'All notifications marked as read',
+      data: {
+        modifiedCount: result.modifiedCount
+      }
+    });
+
+  } catch (err) {
+    console.error('Mark all notifications as read error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to mark notifications as read'
+    });
+  }
+});
+
+// Get Notification Preferences
+app.get('/api/users/notification-preferences', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    let preferences = await NotificationPreference.findOne({ user: userId });
+    
+    if (!preferences) {
+      preferences = new NotificationPreference({
+        user: userId,
+        email: {
+          accountActivity: true,
+          investmentUpdates: true,
+          promotionalOffers: false,
+          kycStatus: true,
+          securityAlerts: true
+        },
+        sms: {
+          securityAlerts: true,
+          withdrawalConfirmations: true,
+          marketingMessages: false
+        },
+        push: {
+          accountActivity: true,
+          investmentUpdates: true,
+          marketAlerts: false,
+          kycStatus: true
+        }
+      });
+      await preferences.save();
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: { preferences }
+    });
+
+  } catch (err) {
+    console.error('Get notification preferences error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch notification preferences'
+    });
+  }
+});
+
+// Update Notification Preferences
+app.put('/api/users/notification-preferences', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { email, sms, push } = req.body;
+
+    const preferences = await NotificationPreference.findOneAndUpdate(
+      { user: userId },
+      {
+        email: email || {},
+        sms: sms || {},
+        push: push || {},
+        updatedAt: new Date()
+      },
+      { new: true, upsert: true }
+    );
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Notification preferences updated successfully',
+      data: { preferences }
+    });
+
+  } catch (err) {
+    console.error('Update notification preferences error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update notification preferences'
+    });
+  }
+});
+
+// Send Message to User (Admin Only)
+app.post('/api/admin/messages', protect, async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'Access denied. Admin privileges required.'
+      });
+    }
+
+    const { userId, title, content, type, priority } = req.body;
+
+    // Validate required fields
+    if (!userId || !title || !content) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'User ID, title, and content are required'
+      });
+    }
+
+    const message = new Message({
+      user: userId,
+      title: title.trim(),
+      content: content.trim(),
+      type: type || 'info',
+      priority: priority || 'medium',
+      status: 'active',
+      createdBy: req.user.id
+    });
+
+    await message.save();
+
+    // Emit real-time notification
+    req.app.get('io')?.to(userId).emit('newMessage', {
+      id: message._id,
+      title: message.title,
+      content: message.content,
+      type: message.type,
+      createdAt: message.createdAt
+    });
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Message sent successfully',
+      data: { message }
+    });
+
+  } catch (err) {
+    console.error('Send message error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to send message'
+    });
+  }
+});
+
+// Create Announcement (Admin Only)
+app.post('/api/admin/announcements', protect, async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'Access denied. Admin privileges required.'
+      });
+    }
+
+    const { title, content, type, priority, targetUsers, startDate, endDate } = req.body;
+
+    // Validate required fields
+    if (!title || !content) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Title and content are required'
+      });
+    }
+
+    const announcement = new Announcement({
+      title: title.trim(),
+      content: content.trim(),
+      type: type || 'info',
+      priority: priority || 'medium',
+      targetUsers: targetUsers || [],
+      startDate: startDate ? new Date(startDate) : new Date(),
+      endDate: endDate ? new Date(endDate) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Default 7 days
+      status: 'active',
+      createdBy: req.user.id
+    });
+
+    await announcement.save();
+
+    // Emit real-time announcement to all users or specific users
+    if (targetUsers && targetUsers.length > 0) {
+      targetUsers.forEach(userId => {
+        req.app.get('io')?.to(userId).emit('newAnnouncement', {
+          id: announcement._id,
+          title: announcement.title,
+          content: announcement.content,
+          type: announcement.type,
+          priority: announcement.priority
+        });
+      });
+    } else {
+      // Broadcast to all users
+      req.app.get('io')?.emit('newAnnouncement', {
+        id: announcement._id,
+        title: announcement.title,
+        content: announcement.content,
+        type: announcement.type,
+        priority: announcement.priority
+      });
+    }
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Announcement created successfully',
+      data: { announcement }
+    });
+
+  } catch (err) {
+    console.error('Create announcement error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to create announcement'
+    });
+  }
+});
+
+// Add Comment to KYC (Admin Only)
+app.post('/api/admin/kyc/:kycId/comments', protect, async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'Access denied. Admin privileges required.'
+      });
+    }
+
+    const { kycId } = req.params;
+    const { comment, section } = req.body;
+
+    // Validate required fields
+    if (!comment?.trim()) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Comment is required'
+      });
+    }
+
+    const kycRecord = await KYC.findById(kycId);
+    if (!kycRecord) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'KYC record not found'
+      });
+    }
+
+    // Add comment to KYC record
+    const newComment = {
+      comment: comment.trim(),
+      section: section || 'general',
+      commentedBy: req.user.id,
+      createdAt: new Date()
+    };
+
+    kycRecord.comments = kycRecord.comments || [];
+    kycRecord.comments.push(newComment);
+    kycRecord.updatedAt = new Date();
+
+    await kycRecord.save();
+
+    // Create notification for the user
+    const notification = new Notification({
+      user: kycRecord.user,
+      title: 'KYC Update',
+      content: `Admin has added a comment to your KYC application: "${comment.substring(0, 100)}..."`,
+      type: 'kyc_update',
+      relatedId: kycRecord._id,
+      status: 'unread'
+    });
+
+    await notification.save();
+
+    // Emit real-time notification
+    req.app.get('io')?.to(kycRecord.user.toString()).emit('newNotification', {
+      id: notification._id,
+      title: notification.title,
+      content: notification.content,
+      type: notification.type,
+      createdAt: notification.createdAt
+    });
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Comment added successfully',
+      data: { comment: newComment }
+    });
+
+  } catch (err) {
+    console.error('Add KYC comment error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to add comment'
+    });
+  }
+});
+
+// Get KYC Comments
+app.get('/api/users/kyc/comments', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const kycRecord = await KYC.findOne({ user: userId })
+      .populate('comments.commentedBy', 'name email')
+      .select('comments')
+      .lean();
+
+    const comments = kycRecord?.comments || [];
+
+    res.status(200).json({
+      status: 'success',
+      data: { comments }
+    });
+
+  } catch (err) {
+    console.error('Get KYC comments error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch KYC comments'
     });
   }
 });
@@ -12225,6 +12690,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
