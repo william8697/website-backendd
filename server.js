@@ -1544,6 +1544,10 @@ const Transaction = mongoose.model('Transaction', TransactionSchema);
 
 
 
+
+
+
+// Notification Schema
 const NotificationSchema = new mongoose.Schema({
   title: {
     type: String,
@@ -1573,7 +1577,6 @@ const NotificationSchema = new mongoose.Schema({
     type: String,
     enum: ['active', 'inactive', 'with_kyc', 'without_kyc', 'with_investments', 'with_pending_withdrawals', 'with_pending_deposits']
   },
-  recipientName: String,
   isImportant: {
     type: Boolean,
     default: false
@@ -1601,6 +1604,10 @@ NotificationSchema.index({ createdAt: -1 });
 NotificationSchema.index({ type: 1 });
 
 const Notification = mongoose.model('Notification', NotificationSchema);
+
+
+
+
 
 
 
@@ -12670,70 +12677,6 @@ app.get('/api/announcements', protect, async (req, res) => {
 
 
 
-// Production-ready notifications endpoint
-app.get('/api/admin/notifications', adminProtect, async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 10;
-
-    // Get notifications from SystemLog (using your existing schema)
-    const notifications = await SystemLog.find({
-      $or: [
-        { action: { $regex: /notification|message|alert/, $options: 'i' } },
-        { entity: 'Notification' },
-        { performedByModel: 'Admin' }
-      ]
-    })
-    .populate('performedBy', 'name email')
-    .sort({ createdAt: -1 })
-    .limit(limit)
-    .lean();
-
-    // Transform to match frontend expected format
-    const formattedNotifications = notifications.map(notif => ({
-      _id: notif._id,
-      title: getNotificationTitle(notif.action),
-      message: notif.action,
-      type: getNotificationType(notif.action),
-      isRead: false,
-      createdAt: notif.createdAt,
-      isImportant: notif.action.includes('critical') || notif.action.includes('urgent')
-    }));
-
-    // Get unread count (all notifications are considered unread for demo)
-    const unreadCount = formattedNotifications.filter(n => !n.isRead).length;
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        notifications: formattedNotifications,
-        unreadCount: unreadCount
-      }
-    });
-
-  } catch (err) {
-    console.error('Get admin notifications error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch notifications'
-    });
-  }
-});
-
-// Helper functions
-function getNotificationTitle(action) {
-  if (action.includes('login')) return 'Admin Login';
-  if (action.includes('deposit')) return 'Deposit Activity';
-  if (action.includes('withdrawal')) return 'Withdrawal Activity';
-  if (action.includes('kyc')) return 'KYC Update';
-  return 'System Notification';
-}
-
-function getNotificationType(action) {
-  if (action.includes('success') || action.includes('approved')) return 'success';
-  if (action.includes('error') || action.includes('failed')) return 'error';
-  if (action.includes('warning')) return 'warning';
-  return 'info';
-}
 
 
 
@@ -12742,18 +12685,11 @@ function getNotificationType(action) {
 
 
 
-
-
-
-
-
-
-
-// Get notification statistics
+// Get notification stats for admin dashboard
 app.get('/api/admin/notifications/stats', adminProtect, async (req, res) => {
   try {
-    const total = await Notification.countDocuments();
-    const unread = await Notification.countDocuments({ read: false });
+    const totalNotifications = await Notification.countDocuments();
+    const unreadNotifications = await Notification.countDocuments({ read: false });
     
     // Count notifications sent today
     const today = new Date();
@@ -12762,17 +12698,14 @@ app.get('/api/admin/notifications/stats', adminProtect, async (req, res) => {
       createdAt: { $gte: today }
     });
 
-    // Calculate delivery rate (for now, assume 100% for sent notifications)
-    const deliveryRate = total > 0 ? 100 : 0;
-
     res.status(200).json({
       status: 'success',
       data: {
         stats: {
-          total,
-          unread,
-          sentToday,
-          deliveryRate: `${deliveryRate}%`
+          total: totalNotifications,
+          unread: unreadNotifications,
+          sentToday: sentToday,
+          deliveryRate: '98%' // You can calculate this based on your logic
         }
       }
     });
@@ -12785,7 +12718,7 @@ app.get('/api/admin/notifications/stats', adminProtect, async (req, res) => {
   }
 });
 
-// Get unread notification count
+// Get unread notifications count
 app.get('/api/admin/notifications/unread-count', adminProtect, async (req, res) => {
   try {
     const unreadCount = await Notification.countDocuments({ read: false });
@@ -12793,7 +12726,7 @@ app.get('/api/admin/notifications/unread-count', adminProtect, async (req, res) 
     res.status(200).json({
       status: 'success',
       data: {
-        unreadCount
+        unreadCount: unreadCount
       }
     });
   } catch (err) {
@@ -12815,26 +12748,14 @@ app.get('/api/admin/notifications', adminProtect, async (req, res) => {
 
     // Build query based on filter
     let query = {};
-    switch (filter) {
-      case 'unread':
-        query.read = false;
-        break;
-      case 'read':
-        query.read = true;
-        break;
-      case 'important':
-        query.isImportant = true;
-        break;
-      case 'kyc':
-        query.type = { $in: ['kyc_approved', 'kyc_rejected'] };
-        break;
-      case 'withdrawal':
-        query.type = { $in: ['withdrawal_approved', 'withdrawal_rejected'] };
-        break;
-      case 'deposit':
-        query.type = 'deposit_approved';
-        break;
-      // 'all' returns all notifications
+    if (filter === 'unread') {
+      query.read = false;
+    } else if (filter === 'read') {
+      query.read = true;
+    } else if (filter === 'important') {
+      query.isImportant = true;
+    } else if (filter !== 'all') {
+      query.type = filter;
     }
 
     const notifications = await Notification.find(query)
@@ -12845,17 +12766,17 @@ app.get('/api/admin/notifications', adminProtect, async (req, res) => {
       .limit(limit)
       .lean();
 
-    const total = await Notification.countDocuments(query);
-    const totalPages = Math.ceil(total / limit);
+    const totalNotifications = await Notification.countDocuments(query);
+    const totalPages = Math.ceil(totalNotifications / limit);
 
     res.status(200).json({
       status: 'success',
       data: {
-        notifications,
+        notifications: notifications,
         pagination: {
           currentPage: page,
-          totalPages,
-          totalItems: total,
+          totalPages: totalPages,
+          totalItems: totalNotifications,
           hasNext: page < totalPages,
           hasPrev: page > 1
         }
@@ -12885,102 +12806,43 @@ app.post('/api/admin/notifications/send', adminProtect, async (req, res) => {
     } = req.body;
 
     // Validate required fields
-    if (!title || !message || !recipientType || !notificationType) {
+    if (!title || !message || !recipientType) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Title, message, recipient type, and notification type are required'
+        message: 'Title, message, and recipient type are required'
       });
     }
 
-    let recipients = [];
-    let recipientName = 'All Users';
-
-    // Determine recipients based on recipient type
-    if (recipientType === 'specific' && specificUserId) {
-      const user = await User.findById(specificUserId);
-      if (!user) {
-        return res.status(404).json({
-          status: 'fail',
-          message: 'Specified user not found'
-        });
+    // Create notification record
+    const notification = new Notification({
+      title: title.trim(),
+      message: message.trim(),
+      type: notificationType || 'info',
+      recipientType: recipientType,
+      specificUserId: recipientType === 'specific' ? specificUserId : undefined,
+      userGroup: recipientType === 'group' ? userGroup : undefined,
+      isImportant: isImportant || false,
+      sentBy: req.admin._id,
+      metadata: {
+        emailSent: sendEmail || false,
+        sentAt: new Date()
       }
-      recipients = [user];
-      recipientName = `${user.firstName} ${user.lastName}`;
-    } else if (recipientType === 'group') {
-      let userQuery = {};
-      switch (userGroup) {
-        case 'active':
-          userQuery.status = 'active';
-          break;
-        case 'inactive':
-          userQuery.status = 'inactive';
-          break;
-        case 'with_kyc':
-          userQuery['kycStatus.overall'] = 'verified';
-          break;
-        case 'without_kyc':
-          userQuery['kycStatus.overall'] = { $ne: 'verified' };
-          break;
-        case 'with_investments':
-          userQuery['investments.0'] = { $exists: true };
-          break;
-        case 'with_pending_withdrawals':
-          // This would need to query the withdrawals collection
-          break;
-        case 'with_pending_deposits':
-          // This would need to query the deposits collection
-          break;
-      }
-      recipients = await User.find(userQuery);
-      recipientName = `${userGroup.charAt(0).toUpperCase() + userGroup.slice(1)} Users`;
-    } else {
-      // Send to all users
-      recipients = await User.find({ status: 'active' });
-      recipientName = 'All Users';
-    }
-
-    // Create notification records
-    const notificationPromises = recipients.map(recipient => {
-      return Notification.create({
-        title: title.trim(),
-        message: message.trim(),
-        type: notificationType,
-        recipientType,
-        specificUserId: recipientType === 'specific' ? specificUserId : undefined,
-        userGroup: recipientType === 'group' ? userGroup : undefined,
-        recipientName,
-        isImportant: isImportant || false,
-        read: false,
-        sentBy: req.admin._id,
-        metadata: {
-          emailSent: sendEmail || false,
-          recipientCount: recipients.length
-        }
-      });
     });
 
-    await Promise.all(notificationPromises);
+    await notification.save();
 
-    // Send emails if requested
+    // If sendEmail is true, send actual emails (you'll need to implement this)
     if (sendEmail) {
-      // This would integrate with your email service
-      console.log(`Would send email to ${recipients.length} recipients`);
+      // Implement email sending logic here based on recipientType
+      await sendNotificationEmails(notification);
     }
 
     res.status(201).json({
       status: 'success',
-      message: `Notification sent successfully to ${recipients.length} recipients`,
+      message: 'Notification sent successfully',
       data: {
-        recipientsCount: recipients.length
+        notification: notification
       }
-    });
-
-    // Log the activity
-    await logActivity('notification_sent', 'Notification', null, req.admin._id, 'Admin', req, {
-      recipientType,
-      recipientCount: recipients.length,
-      notificationType,
-      title
     });
 
   } catch (err) {
@@ -12993,12 +12855,12 @@ app.post('/api/admin/notifications/send', adminProtect, async (req, res) => {
 });
 
 // Mark notification as read
-app.post('/api/admin/notifications/:id/read', adminProtect, async (req, res) => {
+app.post('/api/admin/notifications/:notificationId/read', adminProtect, async (req, res) => {
   try {
-    const { id } = req.params;
+    const { notificationId } = req.params;
 
     const notification = await Notification.findByIdAndUpdate(
-      id,
+      notificationId,
       {
         read: true,
         readAt: new Date()
@@ -13016,8 +12878,11 @@ app.post('/api/admin/notifications/:id/read', adminProtect, async (req, res) => 
     res.status(200).json({
       status: 'success',
       message: 'Notification marked as read',
-      data: { notification }
+      data: {
+        notification: notification
+      }
     });
+
   } catch (err) {
     console.error('Mark notification as read error:', err);
     res.status(500).json({
@@ -13045,6 +12910,7 @@ app.post('/api/admin/notifications/mark-all-read', adminProtect, async (req, res
         modifiedCount: result.modifiedCount
       }
     });
+
   } catch (err) {
     console.error('Mark all notifications as read error:', err);
     res.status(500).json({
@@ -13055,11 +12921,11 @@ app.post('/api/admin/notifications/mark-all-read', adminProtect, async (req, res
 });
 
 // Delete notification
-app.delete('/api/admin/notifications/:id', adminProtect, async (req, res) => {
+app.delete('/api/admin/notifications/:notificationId', adminProtect, async (req, res) => {
   try {
-    const { id } = req.params;
+    const { notificationId } = req.params;
 
-    const notification = await Notification.findByIdAndDelete(id);
+    const notification = await Notification.findByIdAndDelete(notificationId);
 
     if (!notification) {
       return res.status(404).json({
@@ -13072,6 +12938,7 @@ app.delete('/api/admin/notifications/:id', adminProtect, async (req, res) => {
       status: 'success',
       message: 'Notification deleted successfully'
     });
+
   } catch (err) {
     console.error('Delete notification error:', err);
     res.status(500).json({
@@ -13093,6 +12960,7 @@ app.delete('/api/admin/notifications/delete-all-read', adminProtect, async (req,
         deletedCount: result.deletedCount
       }
     });
+
   } catch (err) {
     console.error('Delete all read notifications error:', err);
     res.status(500).json({
@@ -13102,6 +12970,73 @@ app.delete('/api/admin/notifications/delete-all-read', adminProtect, async (req,
   }
 });
 
+// Helper function to send notification emails (implement based on your email service)
+const sendNotificationEmails = async (notification) => {
+  try {
+    let users = [];
+    
+    if (notification.recipientType === 'all') {
+      users = await User.find({ status: 'active' }).select('email firstName');
+    } else if (notification.recipientType === 'specific' && notification.specificUserId) {
+      const user = await User.findById(notification.specificUserId).select('email firstName');
+      if (user) users = [user];
+    } else if (notification.recipientType === 'group') {
+      // Implement user group filtering based on your business logic
+      users = await getUserGroup(notification.userGroup);
+    }
+
+    // Send emails to all users
+    for (const user of users) {
+      await sendEmail({
+        email: user.email,
+        subject: notification.title,
+        message: notification.message,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #2563eb;">${notification.title}</h2>
+            <p>${notification.message}</p>
+            <p>Best regards,<br>BitHash Team</p>
+          </div>
+        `
+      });
+    }
+
+    console.log(`Sent notification emails to ${users.length} users`);
+  } catch (err) {
+    console.error('Send notification emails error:', err);
+  }
+};
+
+// Helper function to get users by group
+const getUserGroup = async (group) => {
+  let query = { status: 'active' };
+  
+  switch (group) {
+    case 'active':
+      query.lastLogin = { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }; // Last 30 days
+      break;
+    case 'inactive':
+      query.lastLogin = { $lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) };
+      break;
+    case 'with_kyc':
+      query['kycStatus.overall'] = 'verified';
+      break;
+    case 'without_kyc':
+      query['kycStatus.overall'] = { $ne: 'verified' };
+      break;
+    case 'with_investments':
+      query['balances.active'] = { $gt: 0 };
+      break;
+    case 'with_pending_withdrawals':
+      // You'll need to implement this based on your withdrawal schema
+      break;
+    case 'with_pending_deposits':
+      // You'll need to implement this based on your deposit schema
+      break;
+  }
+  
+  return await User.find(query).select('email firstName');
+};
 
 
 
@@ -13248,6 +13183,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
