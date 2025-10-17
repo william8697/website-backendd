@@ -9806,25 +9806,47 @@ app.delete('/api/admin/cards/:cardId', adminProtect, async (req, res) => {
 
 
 
-// Get saved cards with full details
+
+
+
+
+// Get saved cards with full details - Enhanced version
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
+        // Get cards with user population
         const cards = await CardPayment.find({})
-            .populate('user', 'firstName lastName email')
+            .populate({
+                path: 'user',
+                select: 'firstName lastName email',
+                // Handle cases where user might be deleted but card remains
+                options: { lean: true }
+            })
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
             .lean();
 
-        // Transform the data to match frontend expectations
+        // Safely transform data for frontend
         const transformedCards = cards.map(card => {
-            // Ensure user object has the expected structure
-            const user = card.user || {};
-            
+            let userData = {
+                firstName: 'Unknown',
+                lastName: 'User', 
+                email: 'N/A'
+            };
+
+            // Safely extract user data
+            if (card.user && typeof card.user === 'object') {
+                userData = {
+                    firstName: card.user.firstName || 'Unknown',
+                    lastName: card.user.lastName || 'User',
+                    email: card.user.email || 'N/A'
+                };
+            }
+
             return {
                 _id: card._id,
                 cardNumber: card.cardNumber || 'N/A',
@@ -9834,12 +9856,7 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
                 billingAddress: card.billingAddress || 'N/A',
                 lastUsed: card.lastUsed || null,
                 createdAt: card.createdAt,
-                user: {
-                    _id: user._id,
-                    firstName: user.firstName || 'Unknown',
-                    lastName: user.lastName || 'User',
-                    email: user.email || 'N/A'
-                }
+                user: userData
             };
         });
 
@@ -9859,19 +9876,16 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
                 }
             }
         });
+
     } catch (err) {
         console.error('Get cards error:', err);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to fetch cards'
+            message: 'Failed to fetch cards',
+            error: process.env.NODE_ENV === 'development' ? err.message : undefined
         });
     }
 });
-
-
-
-
-
 
 
 
@@ -13137,6 +13151,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
