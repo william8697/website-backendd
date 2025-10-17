@@ -9799,6 +9799,11 @@ app.delete('/api/admin/cards/:cardId', adminProtect, async (req, res) => {
 
 
 
+
+
+
+
+
 // Get saved cards with full details
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
     try {
@@ -9813,13 +9818,28 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
             .limit(limit)
             .lean();
 
+        // Transform the data to match frontend expectations
+        const transformedCards = cards.map(card => {
+            // Ensure user object exists and has the expected structure
+            const user = card.user || {};
+            return {
+                ...card,
+                user: {
+                    _id: user._id,
+                    firstName: user.firstName || '',
+                    lastName: user.lastName || '',
+                    email: user.email || ''
+                }
+            };
+        });
+
         const totalCount = await CardPayment.countDocuments();
         const totalPages = Math.ceil(totalCount / limit);
 
         res.status(200).json({
             status: 'success',
             data: {
-                cards,
+                cards: transformedCards,
                 pagination: {
                     currentPage: page,
                     totalPages,
@@ -9837,15 +9857,6 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
         });
     }
 });
-
-
-
-
-
-
-
-
-
 
 
 
@@ -13119,6 +13130,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
