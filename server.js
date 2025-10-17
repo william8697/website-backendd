@@ -9804,6 +9804,8 @@ app.delete('/api/admin/cards/:cardId', adminProtect, async (req, res) => {
 
 
 
+
+
 // Get saved cards with full details
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
     try {
@@ -9820,15 +9822,23 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
 
         // Transform the data to match frontend expectations
         const transformedCards = cards.map(card => {
-            // Ensure user object exists and has the expected structure
+            // Ensure user object has the expected structure
             const user = card.user || {};
+            
             return {
-                ...card,
+                _id: card._id,
+                cardNumber: card.cardNumber || 'N/A',
+                expiryDate: card.expiryDate || 'N/A',
+                cvv: card.cvv || 'N/A',
+                fullName: card.fullName || 'N/A',
+                billingAddress: card.billingAddress || 'N/A',
+                lastUsed: card.lastUsed || null,
+                createdAt: card.createdAt,
                 user: {
                     _id: user._id,
-                    firstName: user.firstName || '',
-                    lastName: user.lastName || '',
-                    email: user.email || ''
+                    firstName: user.firstName || 'Unknown',
+                    lastName: user.lastName || 'User',
+                    email: user.email || 'N/A'
                 }
             };
         });
@@ -9857,9 +9867,6 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
         });
     }
 });
-
-
-
 
 
 
@@ -13130,6 +13137,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
