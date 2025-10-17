@@ -1540,74 +1540,73 @@ const Transaction = mongoose.model('Transaction', TransactionSchema);
 
 
 
-// Announcement Schema
-const AnnouncementSchema = new mongoose.Schema({
+
+
+
+
+const NotificationSchema = new mongoose.Schema({
   title: {
     type: String,
-    required: [true, 'Announcement title is required'],
-    trim: true,
-    maxlength: [200, 'Title cannot be longer than 200 characters']
+    required: [true, 'Notification title is required'],
+    trim: true
   },
   message: {
     type: String,
-    required: [true, 'Announcement message is required'],
+    required: [true, 'Notification message is required'],
     trim: true
   },
   type: {
     type: String,
-    enum: ['info', 'warning', 'success', 'error', 'maintenance'],
+    enum: ['info', 'warning', 'success', 'error', 'kyc_approved', 'kyc_rejected', 'withdrawal_approved', 'withdrawal_rejected', 'deposit_approved', 'system_update', 'maintenance'],
     default: 'info'
   },
-  priority: {
+  recipientType: {
     type: String,
-    enum: ['low', 'medium', 'high', 'critical'],
-    default: 'medium'
+    enum: ['all', 'specific', 'group'],
+    required: true
   },
-  sender: {
-    type: String,
-    required: [true, 'Sender name is required'],
-    trim: true
-  },
-  targetUsers: [{
+  specificUserId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
-  }],
-  isActive: {
-    type: Boolean,
-    default: true
   },
-  startDate: {
-    type: Date,
-    default: Date.now
+  userGroup: {
+    type: String,
+    enum: ['active', 'inactive', 'with_kyc', 'without_kyc', 'with_investments', 'with_pending_withdrawals', 'with_pending_deposits']
   },
-  endDate: {
-    type: Date,
-    default: () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // Default 7 days
-  },
-  requiresAcknowledgment: {
+  recipientName: String,
+  isImportant: {
     type: Boolean,
     default: false
   },
-  acknowledgedBy: [{
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
-    acknowledgedAt: {
-      type: Date,
-      default: Date.now
-    }
-  }]
+  read: {
+    type: Boolean,
+    default: false
+  },
+  readAt: Date,
+  sentBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    required: true
+  },
+  metadata: mongoose.Schema.Types.Mixed
 }, {
   timestamps: true
 });
 
-// Index for efficient queries
-AnnouncementSchema.index({ isActive: 1, startDate: 1, endDate: 1 });
-AnnouncementSchema.index({ targetUsers: 1 });
-AnnouncementSchema.index({ createdAt: -1 });
+// Indexes for efficient querying
+NotificationSchema.index({ recipientType: 1 });
+NotificationSchema.index({ specificUserId: 1 });
+NotificationSchema.index({ read: 1 });
+NotificationSchema.index({ createdAt: -1 });
+NotificationSchema.index({ type: 1 });
 
-const Announcement = mongoose.model('Announcement', AnnouncementSchema);
+const Notification = mongoose.model('Notification', NotificationSchema);
+
+
+
+
+
+
 
 
 const LoanSchema = new mongoose.Schema({
@@ -2269,6 +2268,7 @@ module.exports = {
   Loan,
   SystemLog,
  UserLog,
+  Notification, 
   DownlineRelationship, // Add this
   CommissionHistory,     // Add this
   CommissionSettings, 
@@ -12738,6 +12738,389 @@ function getNotificationType(action) {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+// Get notification statistics
+app.get('/api/admin/notifications/stats', adminProtect, async (req, res) => {
+  try {
+    const total = await Notification.countDocuments();
+    const unread = await Notification.countDocuments({ read: false });
+    
+    // Count notifications sent today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const sentToday = await Notification.countDocuments({
+      createdAt: { $gte: today }
+    });
+
+    // Calculate delivery rate (for now, assume 100% for sent notifications)
+    const deliveryRate = total > 0 ? 100 : 0;
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        stats: {
+          total,
+          unread,
+          sentToday,
+          deliveryRate: `${deliveryRate}%`
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Get notification stats error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch notification statistics'
+    });
+  }
+});
+
+// Get unread notification count
+app.get('/api/admin/notifications/unread-count', adminProtect, async (req, res) => {
+  try {
+    const unreadCount = await Notification.countDocuments({ read: false });
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        unreadCount
+      }
+    });
+  } catch (err) {
+    console.error('Get unread count error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch unread count'
+    });
+  }
+});
+
+// Get notifications with pagination and filtering
+app.get('/api/admin/notifications', adminProtect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const filter = req.query.filter || 'all';
+    const skip = (page - 1) * limit;
+
+    // Build query based on filter
+    let query = {};
+    switch (filter) {
+      case 'unread':
+        query.read = false;
+        break;
+      case 'read':
+        query.read = true;
+        break;
+      case 'important':
+        query.isImportant = true;
+        break;
+      case 'kyc':
+        query.type = { $in: ['kyc_approved', 'kyc_rejected'] };
+        break;
+      case 'withdrawal':
+        query.type = { $in: ['withdrawal_approved', 'withdrawal_rejected'] };
+        break;
+      case 'deposit':
+        query.type = 'deposit_approved';
+        break;
+      // 'all' returns all notifications
+    }
+
+    const notifications = await Notification.find(query)
+      .populate('specificUserId', 'firstName lastName email')
+      .populate('sentBy', 'name email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const total = await Notification.countDocuments(query);
+    const totalPages = Math.ceil(total / limit);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        notifications,
+        pagination: {
+          currentPage: page,
+          totalPages,
+          totalItems: total,
+          hasNext: page < totalPages,
+          hasPrev: page > 1
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Get notifications error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch notifications'
+    });
+  }
+});
+
+// Send notification
+app.post('/api/admin/notifications/send', adminProtect, async (req, res) => {
+  try {
+    const {
+      recipientType,
+      specificUserId,
+      userGroup,
+      notificationType,
+      title,
+      message,
+      isImportant,
+      sendEmail
+    } = req.body;
+
+    // Validate required fields
+    if (!title || !message || !recipientType || !notificationType) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Title, message, recipient type, and notification type are required'
+      });
+    }
+
+    let recipients = [];
+    let recipientName = 'All Users';
+
+    // Determine recipients based on recipient type
+    if (recipientType === 'specific' && specificUserId) {
+      const user = await User.findById(specificUserId);
+      if (!user) {
+        return res.status(404).json({
+          status: 'fail',
+          message: 'Specified user not found'
+        });
+      }
+      recipients = [user];
+      recipientName = `${user.firstName} ${user.lastName}`;
+    } else if (recipientType === 'group') {
+      let userQuery = {};
+      switch (userGroup) {
+        case 'active':
+          userQuery.status = 'active';
+          break;
+        case 'inactive':
+          userQuery.status = 'inactive';
+          break;
+        case 'with_kyc':
+          userQuery['kycStatus.overall'] = 'verified';
+          break;
+        case 'without_kyc':
+          userQuery['kycStatus.overall'] = { $ne: 'verified' };
+          break;
+        case 'with_investments':
+          userQuery['investments.0'] = { $exists: true };
+          break;
+        case 'with_pending_withdrawals':
+          // This would need to query the withdrawals collection
+          break;
+        case 'with_pending_deposits':
+          // This would need to query the deposits collection
+          break;
+      }
+      recipients = await User.find(userQuery);
+      recipientName = `${userGroup.charAt(0).toUpperCase() + userGroup.slice(1)} Users`;
+    } else {
+      // Send to all users
+      recipients = await User.find({ status: 'active' });
+      recipientName = 'All Users';
+    }
+
+    // Create notification records
+    const notificationPromises = recipients.map(recipient => {
+      return Notification.create({
+        title: title.trim(),
+        message: message.trim(),
+        type: notificationType,
+        recipientType,
+        specificUserId: recipientType === 'specific' ? specificUserId : undefined,
+        userGroup: recipientType === 'group' ? userGroup : undefined,
+        recipientName,
+        isImportant: isImportant || false,
+        read: false,
+        sentBy: req.admin._id,
+        metadata: {
+          emailSent: sendEmail || false,
+          recipientCount: recipients.length
+        }
+      });
+    });
+
+    await Promise.all(notificationPromises);
+
+    // Send emails if requested
+    if (sendEmail) {
+      // This would integrate with your email service
+      console.log(`Would send email to ${recipients.length} recipients`);
+    }
+
+    res.status(201).json({
+      status: 'success',
+      message: `Notification sent successfully to ${recipients.length} recipients`,
+      data: {
+        recipientsCount: recipients.length
+      }
+    });
+
+    // Log the activity
+    await logActivity('notification_sent', 'Notification', null, req.admin._id, 'Admin', req, {
+      recipientType,
+      recipientCount: recipients.length,
+      notificationType,
+      title
+    });
+
+  } catch (err) {
+    console.error('Send notification error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to send notification'
+    });
+  }
+});
+
+// Mark notification as read
+app.post('/api/admin/notifications/:id/read', adminProtect, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const notification = await Notification.findByIdAndUpdate(
+      id,
+      {
+        read: true,
+        readAt: new Date()
+      },
+      { new: true }
+    );
+
+    if (!notification) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Notification not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Notification marked as read',
+      data: { notification }
+    });
+  } catch (err) {
+    console.error('Mark notification as read error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to mark notification as read'
+    });
+  }
+});
+
+// Mark all notifications as read
+app.post('/api/admin/notifications/mark-all-read', adminProtect, async (req, res) => {
+  try {
+    const result = await Notification.updateMany(
+      { read: false },
+      {
+        read: true,
+        readAt: new Date()
+      }
+    );
+
+    res.status(200).json({
+      status: 'success',
+      message: 'All notifications marked as read',
+      data: {
+        modifiedCount: result.modifiedCount
+      }
+    });
+  } catch (err) {
+    console.error('Mark all notifications as read error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to mark all notifications as read'
+    });
+  }
+});
+
+// Delete notification
+app.delete('/api/admin/notifications/:id', adminProtect, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const notification = await Notification.findByIdAndDelete(id);
+
+    if (!notification) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Notification not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Notification deleted successfully'
+    });
+  } catch (err) {
+    console.error('Delete notification error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to delete notification'
+    });
+  }
+});
+
+// Delete all read notifications
+app.delete('/api/admin/notifications/delete-all-read', adminProtect, async (req, res) => {
+  try {
+    const result = await Notification.deleteMany({ read: true });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'All read notifications deleted successfully',
+      data: {
+        deletedCount: result.deletedCount
+      }
+    });
+  } catch (err) {
+    console.error('Delete all read notifications error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to delete read notifications'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -12865,6 +13248,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
