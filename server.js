@@ -1546,65 +1546,311 @@ const Transaction = mongoose.model('Transaction', TransactionSchema);
 
 
 
-
-// Notification Schema
+// Enhanced Notification Schema with Real-time Messaging
 const NotificationSchema = new mongoose.Schema({
   title: {
     type: String,
     required: [true, 'Notification title is required'],
-    trim: true
+    trim: true,
+    maxlength: [200, 'Title cannot exceed 200 characters']
   },
   message: {
     type: String,
     required: [true, 'Notification message is required'],
-    trim: true
+    trim: true,
+    maxlength: [1000, 'Message cannot exceed 1000 characters']
   },
   type: {
     type: String,
-    enum: ['info', 'warning', 'success', 'error', 'kyc_approved', 'kyc_rejected', 'withdrawal_approved', 'withdrawal_rejected', 'deposit_approved', 'system_update', 'maintenance'],
+    enum: [
+      'info', 'warning', 'success', 'error', 
+      'kyc_approved', 'kyc_rejected', 'kyc_pending',
+      'withdrawal_approved', 'withdrawal_rejected', 
+      'deposit_approved', 'deposit_rejected',
+      'system_update', 'maintenance', 'security_alert',
+      'investment_matured', 'referral_bonus', 'commission_paid'
+    ],
     default: 'info'
   },
   recipientType: {
     type: String,
-    enum: ['all', 'specific', 'group'],
+    enum: ['all', 'specific', 'group', 'multiple'],
     required: true
   },
+  // For specific user
   specificUserId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
+  // For multiple specific users
+  specificUserIds: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  // For user groups
   userGroup: {
     type: String,
-    enum: ['active', 'inactive', 'with_kyc', 'without_kyc', 'with_investments', 'with_pending_withdrawals', 'with_pending_deposits']
+    enum: [
+      'active', 'inactive', 'with_kyc', 'without_kyc', 
+      'with_investments', 'with_pending_withdrawals', 
+      'with_pending_deposits', 'new_users', 'vip_users'
+    ]
+  },
+  // Message priority and importance
+  priority: {
+    type: String,
+    enum: ['low', 'medium', 'high', 'urgent'],
+    default: 'medium'
   },
   isImportant: {
     type: Boolean,
     default: false
   },
+  // Read status tracking
   read: {
     type: Boolean,
     default: false
   },
+  readBy: [{
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    readAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
   readAt: Date,
+  
+  // Delivery tracking
+  delivered: {
+    type: Boolean,
+    default: false
+  },
+  deliveredTo: [{
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    deliveredAt: {
+      type: Date,
+      default: Date.now
+    },
+    deliveryMethod: {
+      type: String,
+      enum: ['websocket', 'push', 'email', 'in_app']
+    }
+  }],
+  
+  // Sender information
   sentBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Admin',
     required: true
   },
-  metadata: mongoose.Schema.Types.Mixed
+  
+  // Actionable notifications
+  actions: [{
+    label: String,
+    type: {
+      type: String,
+      enum: ['link', 'button', 'dismiss']
+    },
+    url: String,
+    method: String,
+    color: String
+  }],
+  
+  // Expiration and scheduling
+  expiresAt: Date,
+  scheduleFor: Date,
+  
+  // Metadata for enhanced functionality
+  metadata: {
+    category: {
+      type: String,
+      enum: ['system', 'financial', 'kyc', 'security', 'marketing', 'support'],
+      default: 'system'
+    },
+    relatedEntity: {
+      type: mongoose.Schema.Types.ObjectId,
+      refPath: 'metadata.relatedEntityModel'
+    },
+    relatedEntityModel: {
+      type: String,
+      enum: ['User', 'Transaction', 'Investment', 'KYC', 'Withdrawal', 'Deposit']
+    },
+    emailSent: {
+      type: Boolean,
+      default: false
+    },
+    pushSent: {
+      type: Boolean,
+      default: false
+    },
+    smsSent: {
+      type: Boolean,
+      default: false
+    },
+    inAppSent: {
+      type: Boolean,
+      default: true
+    },
+    sentAt: {
+      type: Date,
+      default: Date.now
+    },
+    clickCount: {
+      type: Number,
+      default: 0
+    },
+    dismissCount: {
+      type: Number,
+      default: 0
+    }
+  }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+// Virtual for unread count per user
+NotificationSchema.virtual('isUnread').get(function() {
+  return !this.read;
 });
 
 // Indexes for efficient querying
 NotificationSchema.index({ recipientType: 1 });
 NotificationSchema.index({ specificUserId: 1 });
+NotificationSchema.index({ specificUserIds: 1 });
 NotificationSchema.index({ read: 1 });
 NotificationSchema.index({ createdAt: -1 });
 NotificationSchema.index({ type: 1 });
+NotificationSchema.index({ priority: 1 });
+NotificationSchema.index({ 'metadata.category': 1 });
+NotificationSchema.index({ expiresAt: 1 });
+NotificationSchema.index({ scheduleFor: 1 });
+NotificationSchema.index({ 'readBy.userId': 1 });
+NotificationSchema.index({ 'deliveredTo.userId': 1 });
+
+// Compound indexes for common queries
+NotificationSchema.index({ recipientType: 1, createdAt: -1 });
+NotificationSchema.index({ specificUserId: 1, read: 1 });
+NotificationSchema.index({ type: 1, createdAt: -1 });
+
+// Pre-save middleware
+NotificationSchema.pre('save', function(next) {
+  // Set default expiration (30 days from creation)
+  if (!this.expiresAt) {
+    this.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  }
+  
+  // Auto-set priority based on type
+  if (this.type.includes('rejected') || this.type === 'security_alert') {
+    this.priority = 'high';
+  }
+  
+  if (this.type === 'error' || this.isImportant) {
+    this.priority = 'urgent';
+  }
+  
+  next();
+});
+
+// Static methods
+NotificationSchema.statics.getUserNotifications = function(userId, options = {}) {
+  const { limit = 20, page = 1, unreadOnly = false } = options;
+  const skip = (page - 1) * limit;
+  
+  const query = {
+    $or: [
+      { recipientType: 'all' },
+      { recipientType: 'specific', specificUserId: userId },
+      { recipientType: 'multiple', specificUserIds: userId },
+      { 
+        recipientType: 'group', 
+        userGroup: await this.getUserGroup(userId) 
+      }
+    ],
+    $or: [
+      { expiresAt: { $exists: false } },
+      { expiresAt: { $gt: new Date() } }
+    ]
+  };
+  
+  if (unreadOnly) {
+    query.read = false;
+  }
+  
+  return this.find(query)
+    .populate('sentBy', 'name email')
+    .sort({ createdAt: -1, priority: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+};
+
+NotificationSchema.statics.getUserGroup = async function(userId) {
+  const user = await mongoose.model('User').findById(userId).select('kycStatus balances lastLogin');
+  if (!user) return 'inactive';
+  
+  // Determine user group based on user data
+  if (user.kycStatus?.overall === 'verified') return 'with_kyc';
+  if (user.balances?.active > 0) return 'with_investments';
+  if (user.lastLogin > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)) return 'active';
+  return 'inactive';
+};
+
+// Instance methods
+NotificationSchema.methods.markAsRead = function(userId) {
+  if (!this.readBy.some(entry => entry.userId.equals(userId))) {
+    this.readBy.push({
+      userId: userId,
+      readAt: new Date()
+    });
+  }
+  
+  // Mark as fully read if all recipients have read it
+  const totalRecipients = this.getRecipientCount();
+  if (this.readBy.length >= totalRecipients) {
+    this.read = true;
+    this.readAt = new Date();
+  }
+  
+  return this.save();
+};
+
+NotificationSchema.methods.markAsDelivered = function(userId, method = 'websocket') {
+  if (!this.deliveredTo.some(entry => entry.userId.equals(userId))) {
+    this.deliveredTo.push({
+      userId: userId,
+      deliveredAt: new Date(),
+      deliveryMethod: method
+    });
+  }
+  
+  return this.save();
+};
+
+NotificationSchema.methods.getRecipientCount = function() {
+  switch (this.recipientType) {
+    case 'all':
+      return mongoose.model('User').countDocuments({ status: 'active' });
+    case 'specific':
+      return 1;
+    case 'multiple':
+      return this.specificUserIds.length;
+    case 'group':
+      // This would need to be calculated based on the group
+      return 'variable';
+    default:
+      return 0;
+  }
+};
 
 const Notification = mongoose.model('Notification', NotificationSchema);
-
 
 
 
@@ -12633,58 +12879,6 @@ app.get('/api/users/kyc/comments', protect, async (req, res) => {
 
 
 
-
-
-// Get announcements for user - SOLVES THE 404 ERROR
-app.get('/api/announcements', protect, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const now = new Date();
-
-    // Build query for active announcements targeting this user
-    const query = {
-      isActive: true,
-      startDate: { $lte: now },
-      endDate: { $gte: now },
-      $or: [
-        { targetUsers: { $size: 0 } }, // Broadcast to all users
-        { targetUsers: userId } // Specifically targeted to this user
-      ]
-    };
-
-    // Get active announcements
-    const announcements = await Announcement.find(query)
-      .select('title message type priority sender createdAt')
-      .sort({ priority: -1, createdAt: -1 })
-      .limit(10)
-      .lean();
-
-    res.status(200).json({
-      status: 'success',
-      data: announcements
-    });
-
-  } catch (err) {
-    console.error('Get announcements error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch announcements'
-    });
-  }
-});
-
-
-
-
-
-
-
-
-
-
-
-
-
 // Get notification stats for admin dashboard
 app.get('/api/admin/notifications/stats', adminProtect, async (req, res) => {
   try {
@@ -12698,6 +12892,16 @@ app.get('/api/admin/notifications/stats', adminProtect, async (req, res) => {
       createdAt: { $gte: today }
     });
 
+    // Count delivered notifications
+    const deliveredCount = await Notification.countDocuments({
+      'deliveredTo.0': { $exists: true }
+    });
+
+    // Calculate delivery rate
+    const deliveryRate = totalNotifications > 0 
+      ? Math.round((deliveredCount / totalNotifications) * 100) 
+      : 0;
+
     res.status(200).json({
       status: 'success',
       data: {
@@ -12705,7 +12909,8 @@ app.get('/api/admin/notifications/stats', adminProtect, async (req, res) => {
           total: totalNotifications,
           unread: unreadNotifications,
           sentToday: sentToday,
-          deliveryRate: '98%' // You can calculate this based on your logic
+          delivered: deliveredCount,
+          deliveryRate: `${deliveryRate}%`
         }
       }
     });
@@ -12754,13 +12959,18 @@ app.get('/api/admin/notifications', adminProtect, async (req, res) => {
       query.read = true;
     } else if (filter === 'important') {
       query.isImportant = true;
+    } else if (filter === 'undelivered') {
+      query.delivered = false;
     } else if (filter !== 'all') {
       query.type = filter;
     }
 
     const notifications = await Notification.find(query)
       .populate('specificUserId', 'firstName lastName email')
+      .populate('specificUserIds', 'firstName lastName email')
       .populate('sentBy', 'name email')
+      .populate('readBy.userId', 'firstName lastName email')
+      .populate('deliveredTo.userId', 'firstName lastName email')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -12791,18 +13001,24 @@ app.get('/api/admin/notifications', adminProtect, async (req, res) => {
   }
 });
 
-// Send notification
+// Enhanced Send notification with WebSocket delivery
 app.post('/api/admin/notifications/send', adminProtect, async (req, res) => {
   try {
     const {
       recipientType,
       specificUserId,
+      specificUserIds,
       userGroup,
       notificationType,
       title,
       message,
       isImportant,
-      sendEmail
+      priority,
+      sendEmail,
+      actions,
+      category,
+      relatedEntity,
+      relatedEntityModel
     } = req.body;
 
     // Validate required fields
@@ -12813,6 +13029,28 @@ app.post('/api/admin/notifications/send', adminProtect, async (req, res) => {
       });
     }
 
+    // Validate recipient-specific fields
+    if (recipientType === 'specific' && !specificUserId) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Specific user ID is required for specific recipient type'
+      });
+    }
+
+    if (recipientType === 'multiple' && (!specificUserIds || specificUserIds.length === 0)) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'User IDs are required for multiple recipient type'
+      });
+    }
+
+    if (recipientType === 'group' && !userGroup) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'User group is required for group recipient type'
+      });
+    }
+
     // Create notification record
     const notification = new Notification({
       title: title.trim(),
@@ -12820,10 +13058,16 @@ app.post('/api/admin/notifications/send', adminProtect, async (req, res) => {
       type: notificationType || 'info',
       recipientType: recipientType,
       specificUserId: recipientType === 'specific' ? specificUserId : undefined,
+      specificUserIds: recipientType === 'multiple' ? specificUserIds : undefined,
       userGroup: recipientType === 'group' ? userGroup : undefined,
       isImportant: isImportant || false,
+      priority: priority || 'medium',
       sentBy: req.admin._id,
+      actions: actions || [],
       metadata: {
+        category: category || 'system',
+        relatedEntity: relatedEntity,
+        relatedEntityModel: relatedEntityModel,
         emailSent: sendEmail || false,
         sentAt: new Date()
       }
@@ -12831,9 +13075,16 @@ app.post('/api/admin/notifications/send', adminProtect, async (req, res) => {
 
     await notification.save();
 
-    // If sendEmail is true, send actual emails (you'll need to implement this)
+    // Populate for WebSocket delivery
+    const populatedNotification = await Notification.findById(notification._id)
+      .populate('sentBy', 'name email')
+      .lean();
+
+    // Deliver via WebSocket in real-time
+    await deliverNotificationViaWebSocket(populatedNotification);
+
+    // If sendEmail is true, send actual emails
     if (sendEmail) {
-      // Implement email sending logic here based on recipientType
       await sendNotificationEmails(notification);
     }
 
@@ -12841,7 +13092,7 @@ app.post('/api/admin/notifications/send', adminProtect, async (req, res) => {
       status: 'success',
       message: 'Notification sent successfully',
       data: {
-        notification: notification
+        notification: populatedNotification
       }
     });
 
@@ -12970,50 +13221,99 @@ app.delete('/api/admin/notifications/delete-all-read', adminProtect, async (req,
   }
 });
 
-// Helper function to send notification emails (implement based on your email service)
-const sendNotificationEmails = async (notification) => {
+
+
+
+
+// Enhanced WebSocket notification delivery
+const deliverNotificationViaWebSocket = async (notification) => {
   try {
+    const io = req.app.get('io');
+    if (!io) {
+      console.log('WebSocket server not available');
+      return;
+    }
+
     let users = [];
     
-    if (notification.recipientType === 'all') {
-      users = await User.find({ status: 'active' }).select('email firstName');
-    } else if (notification.recipientType === 'specific' && notification.specificUserId) {
-      const user = await User.findById(notification.specificUserId).select('email firstName');
-      if (user) users = [user];
-    } else if (notification.recipientType === 'group') {
-      // Implement user group filtering based on your business logic
-      users = await getUserGroup(notification.userGroup);
+    // Get recipients based on notification type
+    switch (notification.recipientType) {
+      case 'all':
+        users = await User.find({ status: 'active' }).select('_id');
+        break;
+        
+      case 'specific':
+        if (notification.specificUserId) {
+          users = await User.find({ _id: notification.specificUserId }).select('_id');
+        }
+        break;
+        
+      case 'multiple':
+        if (notification.specificUserIds && notification.specificUserIds.length > 0) {
+          users = await User.find({ _id: { $in: notification.specificUserIds } }).select('_id');
+        }
+        break;
+        
+      case 'group':
+        users = await getUserGroup(notification.userGroup);
+        break;
     }
 
-    // Send emails to all users
+    // Deliver to each user via WebSocket
     for (const user of users) {
-      await sendEmail({
-        email: user.email,
-        subject: notification.title,
-        message: notification.message,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #2563eb;">${notification.title}</h2>
-            <p>${notification.message}</p>
-            <p>Best regards,<br>BitHash Team</p>
-          </div>
-        `
+      const userId = user._id.toString();
+      
+      // Emit to specific user room
+      io.to(`user:${userId}`).emit('new_notification', {
+        type: 'NEW_NOTIFICATION',
+        data: {
+          notification: {
+            ...notification,
+            // Mark as delivered for this user
+            delivered: true,
+            deliveredAt: new Date()
+          }
+        },
+        timestamp: new Date().toISOString()
       });
+
+      // Update delivery status in database
+      await Notification.findByIdAndUpdate(notification._id, {
+        $push: {
+          deliveredTo: {
+            userId: user._id,
+            deliveredAt: new Date(),
+            deliveryMethod: 'websocket'
+          }
+        }
+      });
+
+      console.log(`Notification delivered via WebSocket to user ${userId}`);
     }
 
-    console.log(`Sent notification emails to ${users.length} users`);
+    // Broadcast to admin dashboard for real-time updates
+    io.to('admin_dashboard').emit('notification_sent', {
+      type: 'NOTIFICATION_SENT',
+      data: {
+        notification,
+        deliveredCount: users.length,
+        totalRecipients: users.length
+      },
+      timestamp: new Date().toISOString()
+    });
+
   } catch (err) {
-    console.error('Send notification emails error:', err);
+    console.error('WebSocket delivery error:', err);
   }
 };
 
-// Helper function to get users by group
+// Enhanced getUserGroup function
 const getUserGroup = async (group) => {
   let query = { status: 'active' };
   
   switch (group) {
     case 'active':
-      query.lastLogin = { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }; // Last 30 days
+      query.lastLogin = { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) };
       break;
     case 'inactive':
       query.lastLogin = { $lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) };
@@ -13028,27 +13328,252 @@ const getUserGroup = async (group) => {
       query['balances.active'] = { $gt: 0 };
       break;
     case 'with_pending_withdrawals':
-      // You'll need to implement this based on your withdrawal schema
+      query['withdrawals.status'] = 'pending';
       break;
     case 'with_pending_deposits':
-      // You'll need to implement this based on your deposit schema
+      query['deposits.status'] = 'pending';
+      break;
+    case 'new_users':
+      query.createdAt = { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) };
+      break;
+    case 'vip_users':
+      query['balances.main'] = { $gte: 10000 }; // Example VIP threshold
       break;
   }
   
-  return await User.find(query).select('email firstName');
+  return await User.find(query).select('_id');
+};
+
+// Enhanced email sending function
+const sendNotificationEmails = async (notification) => {
+  try {
+    let users = [];
+    
+    if (notification.recipientType === 'all') {
+      users = await User.find({ status: 'active' }).select('email firstName');
+    } else if (notification.recipientType === 'specific' && notification.specificUserId) {
+      const user = await User.findById(notification.specificUserId).select('email firstName');
+      if (user) users = [user];
+    } else if (notification.recipientType === 'multiple' && notification.specificUserIds) {
+      users = await User.find({ _id: { $in: notification.specificUserIds } }).select('email firstName');
+    } else if (notification.recipientType === 'group') {
+      users = await getUserGroup(notification.userGroup);
+    }
+
+    // Send emails to all users
+    for (const user of users) {
+      await sendEmail({
+        email: user.email,
+        subject: `[${notification.priority?.toUpperCase()}] ${notification.title}`,
+        message: notification.message,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 8px 8px 0 0; color: white; text-align: center;">
+              <h2 style="margin: 0; font-size: 24px;">BitHash Capital</h2>
+              <p style="margin: 5px 0 0 0; opacity: 0.9;">Notification Center</p>
+            </div>
+            <div style="padding: 30px 20px;">
+              <h3 style="color: #333; margin-bottom: 15px;">${notification.title}</h3>
+              <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${notification.message}</p>
+              
+              ${notification.actions && notification.actions.length > 0 ? `
+              <div style="margin: 25px 0; text-align: center;">
+                ${notification.actions.map(action => `
+                  <a href="${action.url || '#'}" 
+                     style="display: inline-block; padding: 12px 24px; margin: 5px; 
+                            background: ${action.color || '#667eea'}; color: white; 
+                            text-decoration: none; border-radius: 5px; font-weight: bold;">
+                    ${action.label}
+                  </a>
+                `).join('')}
+              </div>
+              ` : ''}
+              
+              <div style="border-top: 1px solid #e0e0e0; padding-top: 20px; margin-top: 20px;">
+                <p style="color: #999; font-size: 12px; margin: 5px 0;">
+                  Notification Type: ${notification.type} | Priority: ${notification.priority}
+                </p>
+                <p style="color: #999; font-size: 12px; margin: 5px 0;">
+                  Sent: ${new Date(notification.createdAt).toLocaleString()}
+                </p>
+              </div>
+            </div>
+            <div style="background: #f8f9fa; padding: 15px 20px; border-radius: 0 0 8px 8px; text-align: center;">
+              <p style="margin: 0; color: #666; font-size: 12px;">
+                This is an automated message from BitHash Capital. Please do not reply to this email.
+              </p>
+            </div>
+          </div>
+        `
+      });
+    }
+
+    // Update email sent status
+    await Notification.findByIdAndUpdate(notification._id, {
+      'metadata.emailSent': true
+    });
+
+    console.log(`Sent notification emails to ${users.length} users`);
+  } catch (err) {
+    console.error('Send notification emails error:', err);
+  }
 };
 
 
 
 
 
+// Get user notifications
+app.get('/api/users/notifications', protect, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const unreadOnly = req.query.unreadOnly === 'true';
 
+    const notifications = await Notification.getUserNotifications(req.user.id, {
+      page,
+      limit,
+      unreadOnly
+    });
 
+    const unreadCount = await Notification.countDocuments({
+      $or: [
+        { recipientType: 'all' },
+        { recipientType: 'specific', specificUserId: req.user.id },
+        { recipientType: 'multiple', specificUserIds: req.user.id },
+        { 
+          recipientType: 'group', 
+          userGroup: await Notification.getUserGroup(req.user.id) 
+        }
+      ],
+      read: false,
+      $or: [
+        { expiresAt: { $exists: false } },
+        { expiresAt: { $gt: new Date() } }
+      ]
+    });
 
+    res.status(200).json({
+      status: 'success',
+      data: {
+        notifications,
+        unreadCount,
+        pagination: {
+          currentPage: page,
+          hasNext: notifications.length === limit
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Get user notifications error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch notifications'
+    });
+  }
+});
 
+// Mark notification as read for user
+app.post('/api/users/notifications/:notificationId/read', protect, async (req, res) => {
+  try {
+    const { notificationId } = req.params;
 
+    const notification = await Notification.findById(notificationId);
+    
+    if (!notification) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Notification not found'
+      });
+    }
 
+    // Check if user is a recipient
+    const isRecipient = await checkUserIsRecipient(notification, req.user.id);
+    if (!isRecipient) {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'Access denied to this notification'
+      });
+    }
 
+    await notification.markAsRead(req.user.id);
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Notification marked as read',
+      data: {
+        notification
+      }
+    });
+  } catch (err) {
+    console.error('Mark notification as read error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to mark notification as read'
+    });
+  }
+});
+
+// Mark all user notifications as read
+app.post('/api/users/notifications/mark-all-read', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Get all unread notifications for user
+    const unreadNotifications = await Notification.find({
+      $or: [
+        { recipientType: 'all' },
+        { recipientType: 'specific', specificUserId: userId },
+        { recipientType: 'multiple', specificUserIds: userId },
+        { 
+          recipientType: 'group', 
+          userGroup: await Notification.getUserGroup(userId) 
+        }
+      ],
+      read: false,
+      $or: [
+        { expiresAt: { $exists: false } },
+        { expiresAt: { $gt: new Date() } }
+      ]
+    });
+
+    // Mark each as read
+    for (const notification of unreadNotifications) {
+      await notification.markAsRead(userId);
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'All notifications marked as read',
+      data: {
+        markedCount: unreadNotifications.length
+      }
+    });
+  } catch (err) {
+    console.error('Mark all notifications as read error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to mark all notifications as read'
+    });
+  }
+});
+
+// Helper function to check if user is recipient
+const checkUserIsRecipient = async (notification, userId) => {
+  switch (notification.recipientType) {
+    case 'all':
+      return true;
+    case 'specific':
+      return notification.specificUserId?.toString() === userId.toString();
+    case 'multiple':
+      return notification.specificUserIds?.some(id => id.toString() === userId.toString());
+    case 'group':
+      const userGroup = await Notification.getUserGroup(userId);
+      return notification.userGroup === userGroup;
+    default:
+      return false;
+  }
+};
 
 
 
@@ -13183,6 +13708,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
