@@ -1540,7 +1540,74 @@ const Transaction = mongoose.model('Transaction', TransactionSchema);
 
 
 
+// Announcement Schema
+const AnnouncementSchema = new mongoose.Schema({
+  title: {
+    type: String,
+    required: [true, 'Announcement title is required'],
+    trim: true,
+    maxlength: [200, 'Title cannot be longer than 200 characters']
+  },
+  message: {
+    type: String,
+    required: [true, 'Announcement message is required'],
+    trim: true
+  },
+  type: {
+    type: String,
+    enum: ['info', 'warning', 'success', 'error', 'maintenance'],
+    default: 'info'
+  },
+  priority: {
+    type: String,
+    enum: ['low', 'medium', 'high', 'critical'],
+    default: 'medium'
+  },
+  sender: {
+    type: String,
+    required: [true, 'Sender name is required'],
+    trim: true
+  },
+  targetUsers: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  startDate: {
+    type: Date,
+    default: Date.now
+  },
+  endDate: {
+    type: Date,
+    default: () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // Default 7 days
+  },
+  requiresAcknowledgment: {
+    type: Boolean,
+    default: false
+  },
+  acknowledgedBy: [{
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    acknowledgedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }]
+}, {
+  timestamps: true
+});
 
+// Index for efficient queries
+AnnouncementSchema.index({ isActive: 1, startDate: 1, endDate: 1 });
+AnnouncementSchema.index({ targetUsers: 1 });
+AnnouncementSchema.index({ createdAt: -1 });
+
+const Announcement = mongoose.model('Announcement', AnnouncementSchema);
 
 
 const LoanSchema = new mongoose.Schema({
@@ -12561,6 +12628,56 @@ app.get('/api/users/kyc/comments', protect, async (req, res) => {
 
 
 
+// Get announcements for user - SOLVES THE 404 ERROR
+app.get('/api/announcements', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const now = new Date();
+
+    // Build query for active announcements targeting this user
+    const query = {
+      isActive: true,
+      startDate: { $lte: now },
+      endDate: { $gte: now },
+      $or: [
+        { targetUsers: { $size: 0 } }, // Broadcast to all users
+        { targetUsers: userId } // Specifically targeted to this user
+      ]
+    };
+
+    // Get active announcements
+    const announcements = await Announcement.find(query)
+      .select('title message type priority sender createdAt')
+      .sort({ priority: -1, createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    res.status(200).json({
+      status: 'success',
+      data: announcements
+    });
+
+  } catch (err) {
+    console.error('Get announcements error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch announcements'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 // Error handling middleware
@@ -12690,6 +12807,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
