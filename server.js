@@ -9796,69 +9796,81 @@ app.delete('/api/admin/cards/:cardId', adminProtect, async (req, res) => {
 
 
 
-
-// Get saved cards with full details - Enhanced version
+// Get saved cards with full details - CORRECTED VERSION
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
+        // Get cards with proper user population and error handling
         const cards = await CardPayment.find({})
             .populate({
                 path: 'user',
                 select: 'firstName lastName email',
-                // Ensure we still get the card even if user population fails
-                options: { allowNull: true }
+                // Add match condition to ensure we only get valid users
+                match: { firstName: { $exists: true }, lastName: { $exists: true } }
             })
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
             .lean();
 
-        // Safe transformation with comprehensive fallbacks
+        // Transform cards with safe fallbacks for missing user data
         const transformedCards = cards.map(card => {
+            // Handle cases where user might be null or missing properties
             const user = card.user || {};
             
-            // Create a safe user object
+            // Create safe user object with fallbacks
             const safeUser = {
-                _id: user._id || 'unknown',
+                _id: user._id || 'unknown-user-id',
                 firstName: user.firstName || 'Unknown',
-                lastName: user.lastName || 'User',
-                email: user.email || 'No email',
-                name: `${user.firstName || 'Unknown'} ${user.lastName || 'User'}`.trim()
+                lastName: user.lastName || 'User', 
+                email: user.email || 'No email available',
+                // Add fullName property that frontend might be looking for
+                fullName: `${user.firstName || 'Unknown'} ${user.lastName || 'User'}`.trim()
             };
 
+            // Return the exact structure frontend expects
             return {
                 _id: card._id,
                 user: safeUser,
-                cardNumber: card.cardNumber || 'N/A',
-                expiryDate: card.expiryDate || 'N/A',
-                cvv: card.cvv || 'N/A',
                 fullName: card.fullName || 'N/A',
+                cardNumber: card.cardNumber || 'N/A',
+                expiryDate: card.expiryDate || 'N/A', 
+                cvv: card.cvv || 'N/A',
+                cardholderName: card.fullName || 'N/A', // Map fullName to cardholderName
                 billingAddress: card.billingAddress || 'N/A',
                 lastUsed: card.lastUsed || null,
                 createdAt: card.createdAt,
-                updatedAt: card.updatedAt
+                updatedAt: card.updatedAt,
+                // Include any other fields that might be needed
+                city: card.city || 'N/A',
+                state: card.state || 'N/A',
+                postalCode: card.postalCode || 'N/A',
+                country: card.country || 'N/A',
+                cardType: card.cardType || 'unknown'
             };
         });
 
         const totalCount = await CardPayment.countDocuments();
         const totalPages = Math.ceil(totalCount / limit);
 
+        // Return the exact response structure frontend expects
         res.status(200).json({
             status: 'success',
             data: {
                 cards: transformedCards,
                 pagination: {
                     currentPage: page,
-                    totalPages,
-                    totalCount,
+                    totalPages: totalPages,
+                    totalCount: totalCount,
                     hasNext: page < totalPages,
                     hasPrev: page > 1
                 }
             }
         });
+
     } catch (err) {
         console.error('Get cards error:', err);
         res.status(500).json({
@@ -9868,10 +9880,6 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
         });
     }
 });
-
-
-
-
 
 
 
@@ -13145,6 +13153,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
