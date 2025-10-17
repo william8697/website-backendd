@@ -9794,41 +9794,44 @@ app.delete('/api/admin/cards/:cardId', adminProtect, async (req, res) => {
 
 
 
-// Get saved cards with full details - DEBUG VERSION
+
+
+
+// Get saved cards with full details - Enhanced version
 app.get('/api/admin/cards', adminProtect, async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
-        console.log('Fetching cards with pagination:', { page, limit, skip });
-
-        // Get cards with multiple population strategies
         const cards = await CardPayment.find({})
             .populate({
                 path: 'user',
                 select: 'firstName lastName email',
-                model: 'User'
+                // Ensure we still get the card even if user population fails
+                options: { allowNull: true }
             })
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(limit);
+            .limit(limit)
+            .lean();
 
-        console.log('Raw cards data:', JSON.stringify(cards, null, 2));
-
-        // Transform the data
-        const transformedCards = cards.map((card, index) => {
-            console.log(`Card ${index} user data:`, card.user);
+        // Safe transformation with comprehensive fallbacks
+        const transformedCards = cards.map(card => {
+            const user = card.user || {};
             
-            let userData = {
-                _id: card.user?._id || `unknown-${index}`,
-                firstName: card.user?.firstName || 'Unknown',
-                lastName: card.user?.lastName || 'User',
-                email: card.user?.email || 'N/A'
+            // Create a safe user object
+            const safeUser = {
+                _id: user._id || 'unknown',
+                firstName: user.firstName || 'Unknown',
+                lastName: user.lastName || 'User',
+                email: user.email || 'No email',
+                name: `${user.firstName || 'Unknown'} ${user.lastName || 'User'}`.trim()
             };
 
             return {
                 _id: card._id,
+                user: safeUser,
                 cardNumber: card.cardNumber || 'N/A',
                 expiryDate: card.expiryDate || 'N/A',
                 cvv: card.cvv || 'N/A',
@@ -9836,14 +9839,12 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
                 billingAddress: card.billingAddress || 'N/A',
                 lastUsed: card.lastUsed || null,
                 createdAt: card.createdAt,
-                user: userData
+                updatedAt: card.updatedAt
             };
         });
 
         const totalCount = await CardPayment.countDocuments();
         const totalPages = Math.ceil(totalCount / limit);
-
-        console.log('Transformed cards:', JSON.stringify(transformedCards, null, 2));
 
         res.status(200).json({
             status: 'success',
@@ -9858,7 +9859,6 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
                 }
             }
         });
-
     } catch (err) {
         console.error('Get cards error:', err);
         res.status(500).json({
@@ -9868,9 +9868,6 @@ app.get('/api/admin/cards', adminProtect, async (req, res) => {
         });
     }
 });
-
-
-
 
 
 
@@ -13148,6 +13145,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
