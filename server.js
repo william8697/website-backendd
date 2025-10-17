@@ -12818,28 +12818,6 @@ app.post('/api/admin/notifications/send', adminProtect, async (req, res) => {
 
     await notification.save();
 
-    // REAL-TIME DELIVERY VIA WEBSOCKET FOR ANNOUNCEMENTS
-    // Safe WebSocket check to prevent 500 errors
-    try {
-      if (recipientType === 'all') {
-        const io = req.app.get('io');
-        if (io) {
-          io.emit('new_announcement', {
-            id: notification._id,
-            title: notification.title,
-            message: notification.message,
-            type: notification.type,
-            isImportant: notification.isImportant,
-            createdAt: notification.createdAt
-          });
-          console.log('📢 Real-time announcement delivered to all users');
-        }
-      }
-    } catch (wsError) {
-      console.log('WebSocket not available, continuing without real-time delivery');
-      // Don't fail the request if WebSocket fails
-    }
-
     // If sendEmail is true, send actual emails (you'll need to implement this)
     if (sendEmail) {
       // Implement email sending logic here based on recipientType
@@ -13113,6 +13091,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
