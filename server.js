@@ -8160,110 +8160,89 @@ app.get('/api/admin/transactions/transfers', adminProtect, async (req, res) => {
 
 
 
-// Admin Active Investments Endpoint - REWRITTEN TO MATCH FRONTEND EXPECTATIONS
+
+// DEBUG VERSION - Admin Active Investments Endpoint
 app.get('/api/admin/investments/active', adminProtect, async (req, res) => {
   try {
+    console.log('=== ACTIVE INVESTMENTS ENDPOINT HIT ===');
+    console.log('Query params:', req.query);
+    
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
-    
-    console.log(`Fetching active investments - Page: ${page}, Limit: ${limit}`);
-    
-    // Get active investments with user and plan info
-    const investments = await Investment.find({
-      status: 'active'
-    })
-    .populate('user', 'firstName lastName email')
-    .populate('plan', 'name minAmount maxAmount duration dailyProfit totalProfit')
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(limit)
-    .lean();
-    
-    console.log(`Found ${investments.length} active investments`);
-    
-    // Calculate additional fields to match frontend expectations
+
+    // Get active investments
+    const investments = await Investment.find({ status: 'active' })
+      .populate('user', 'firstName lastName')
+      .populate('plan', 'name dailyProfit totalProfit')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    console.log('Found investments:', investments.length);
+
+    // Simple transformation - ensure no undefined values
     const investmentsWithDetails = investments.map(investment => {
-      const startDate = new Date(investment.startDate);
-      const endDate = new Date(investment.endDate);
-      const now = new Date();
+      const user = investment.user || { firstName: 'Unknown', lastName: 'User' };
+      const plan = investment.plan || { name: 'Unknown Plan', dailyProfit: 0, totalProfit: 0 };
       
-      // Calculate days remaining
-      const daysRemaining = Math.max(0, Math.ceil((endDate - now) / (1000 * 60 * 60 * 24)));
-      
-      // Calculate daily profit - use plan's dailyProfit percentage
-      const dailyProfitAmount = investment.amount * (investment.plan.dailyProfit / 100);
-      
-      // Calculate total profit - use plan's totalProfit percentage
-      const totalProfitAmount = investment.amount * (investment.plan.totalProfit / 100);
-      
-      // Format dates for frontend
-      const formattedStartDate = startDate.toISOString();
-      const formattedEndDate = endDate.toISOString();
-      
+      const dailyProfit = (investment.amount * plan.dailyProfit) / 100;
+      const totalProfit = (investment.amount * plan.totalProfit) / 100;
+
       return {
-        _id: investment._id,
+        _id: investment._id?.toString() || 'unknown_id',
         user: {
-          _id: investment.user._id,
-          firstName: investment.user.firstName,
-          lastName: investment.user.lastName,
-          email: investment.user.email
+          firstName: user.firstName || 'Unknown',
+          lastName: user.lastName || 'User'
         },
         plan: {
-          _id: investment.plan._id,
-          name: investment.plan.name,
-          minAmount: investment.plan.minAmount,
-          maxAmount: investment.plan.maxAmount,
-          duration: investment.plan.duration,
-          dailyProfit: investment.plan.dailyProfit,
-          totalProfit: investment.plan.totalProfit
+          name: plan.name || 'Unknown Plan'
         },
-        amount: investment.amount,
-        startDate: formattedStartDate,
-        endDate: formattedEndDate,
-        dailyProfit: dailyProfitAmount, // Actual amount in dollars
-        totalProfit: totalProfitAmount, // Actual amount in dollars
-        status: investment.status,
-        createdAt: investment.createdAt,
-        updatedAt: investment.updatedAt,
-        // Additional calculated fields
-        daysRemaining: daysRemaining
+        amount: parseFloat(investment.amount) || 0,
+        startDate: investment.startDate || new Date().toISOString(),
+        endDate: investment.endDate || new Date().toISOString(),
+        dailyProfit: parseFloat(dailyProfit.toFixed(2)) || 0,
+        totalProfit: parseFloat(totalProfit.toFixed(2)) || 0
       };
     });
-    
-    // Get total count for pagination
-    const totalCount = await Investment.countDocuments({
-      status: 'active'
-    });
+
+    const totalCount = await Investment.countDocuments({ status: 'active' });
     const totalPages = Math.ceil(totalCount / limit);
-    
-    console.log(`Total active investments: ${totalCount}, Total pages: ${totalPages}`);
-    
-    // Return response in exact format expected by frontend
-    res.status(200).json({
+
+    console.log('Sending response with:', {
+      investmentsCount: investmentsWithDetails.length,
+      totalPages: totalPages,
+      currentPage: page
+    });
+
+    // EXACT frontend structure
+    const response = {
       status: 'success',
       data: {
         investments: investmentsWithDetails,
         pagination: {
-          totalItems: totalCount,
           totalPages: totalPages,
-          currentPage: page,
-          itemsPerPage: limit,
-          hasNextPage: page < totalPages,
-          hasPrevPage: page > 1
+          currentPage: page
         }
       }
-    });
-    
+    };
+
+    res.status(200).json(response);
+
   } catch (err) {
-    console.error('Admin active investments error:', err);
+    console.error('=== ACTIVE INVESTMENTS ERROR ===');
+    console.error('Error details:', err);
+    console.error('Error message:', err.message);
+    console.error('Error stack:', err.stack);
+    
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch active investments',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      message: 'Failed to fetch active investments'
     });
   }
 });
+
 
 
 
@@ -13140,6 +13119,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
