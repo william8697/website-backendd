@@ -2276,7 +2276,6 @@ module.exports = {
   Loan,
   SystemLog,
  UserLog,
-  Notification, 
   DownlineRelationship, // Add this
   CommissionHistory,     // Add this
   CommissionSettings, 
@@ -13377,6 +13376,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
