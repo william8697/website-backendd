@@ -8155,25 +8155,34 @@ app.get('/api/admin/transactions/transfers', adminProtect, async (req, res) => {
   }
 });
 
-// Admin Active Investments Endpoint
+
+
+
+
+
+// Admin Active Investments Endpoint - REWRITTEN TO MATCH FRONTEND EXPECTATIONS
 app.get('/api/admin/investments/active', adminProtect, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 5;
+    const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
+    
+    console.log(`Fetching active investments - Page: ${page}, Limit: ${limit}`);
     
     // Get active investments with user and plan info
     const investments = await Investment.find({
       status: 'active'
     })
     .populate('user', 'firstName lastName email')
-    .populate('plan', 'name percentage duration')
+    .populate('plan', 'name minAmount maxAmount duration dailyProfit totalProfit')
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit)
     .lean();
     
-    // Calculate additional fields
+    console.log(`Found ${investments.length} active investments`);
+    
+    // Calculate additional fields to match frontend expectations
     const investmentsWithDetails = investments.map(investment => {
       const startDate = new Date(investment.startDate);
       const endDate = new Date(investment.endDate);
@@ -8182,18 +8191,43 @@ app.get('/api/admin/investments/active', adminProtect, async (req, res) => {
       // Calculate days remaining
       const daysRemaining = Math.max(0, Math.ceil((endDate - now) / (1000 * 60 * 60 * 24)));
       
-      // Calculate daily profit
-      const dailyProfit = investment.amount * (investment.plan.percentage / 100) / investment.plan.duration;
+      // Calculate daily profit - use plan's dailyProfit percentage
+      const dailyProfitAmount = investment.amount * (investment.plan.dailyProfit / 100);
       
-      // Calculate total profit so far
-      const daysPassed = Math.floor((now - startDate) / (1000 * 60 * 60 * 24));
-      const totalProfit = dailyProfit * Math.min(daysPassed, investment.plan.duration);
+      // Calculate total profit - use plan's totalProfit percentage
+      const totalProfitAmount = investment.amount * (investment.plan.totalProfit / 100);
+      
+      // Format dates for frontend
+      const formattedStartDate = startDate.toISOString();
+      const formattedEndDate = endDate.toISOString();
       
       return {
-        ...investment,
-        daysRemaining,
-        dailyProfit,
-        totalProfit
+        _id: investment._id,
+        user: {
+          _id: investment.user._id,
+          firstName: investment.user.firstName,
+          lastName: investment.user.lastName,
+          email: investment.user.email
+        },
+        plan: {
+          _id: investment.plan._id,
+          name: investment.plan.name,
+          minAmount: investment.plan.minAmount,
+          maxAmount: investment.plan.maxAmount,
+          duration: investment.plan.duration,
+          dailyProfit: investment.plan.dailyProfit,
+          totalProfit: investment.plan.totalProfit
+        },
+        amount: investment.amount,
+        startDate: formattedStartDate,
+        endDate: formattedEndDate,
+        dailyProfit: dailyProfitAmount, // Actual amount in dollars
+        totalProfit: totalProfitAmount, // Actual amount in dollars
+        status: investment.status,
+        createdAt: investment.createdAt,
+        updatedAt: investment.updatedAt,
+        // Additional calculated fields
+        daysRemaining: daysRemaining
       };
     });
     
@@ -8203,23 +8237,38 @@ app.get('/api/admin/investments/active', adminProtect, async (req, res) => {
     });
     const totalPages = Math.ceil(totalCount / limit);
     
+    console.log(`Total active investments: ${totalCount}, Total pages: ${totalPages}`);
+    
+    // Return response in exact format expected by frontend
     res.status(200).json({
       status: 'success',
       data: {
         investments: investmentsWithDetails,
-        totalCount,
-        totalPages,
-        currentPage: page
+        pagination: {
+          totalItems: totalCount,
+          totalPages: totalPages,
+          currentPage: page,
+          itemsPerPage: limit,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1
+        }
       }
     });
+    
   } catch (err) {
     console.error('Admin active investments error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch active investments'
+      message: 'Failed to fetch active investments',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 });
+
+
+
+
+
 
 // Admin Completed Investments Endpoint
 app.get('/api/admin/investments/completed', adminProtect, async (req, res) => {
@@ -13091,6 +13140,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
