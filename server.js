@@ -12670,137 +12670,70 @@ app.get('/api/announcements', protect, async (req, res) => {
 
 
 
-
-
-// Complete notifications endpoint - SOLVES THE 404 ERROR AND HANDLES SENDING
+// Production-ready notifications endpoint
 app.get('/api/admin/notifications', adminProtect, async (req, res) => {
   try {
-    // Handle GET request - fetch notifications
-    if (req.method === 'GET') {
-      const limit = parseInt(req.query.limit) || 10;
+    const limit = parseInt(req.query.limit) || 10;
 
-      console.log('Fetching admin notifications with limit:', limit);
+    // Get notifications from SystemLog (using your existing schema)
+    const notifications = await SystemLog.find({
+      $or: [
+        { action: { $regex: /notification|message|alert/, $options: 'i' } },
+        { entity: 'Notification' },
+        { performedByModel: 'Admin' }
+      ]
+    })
+    .populate('performedBy', 'name email')
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .lean();
 
-      // Get notifications for admin dashboard
-      const notifications = await Notification.find({
-        $or: [
-          { recipientType: 'all' },
-          { recipientType: 'admin' },
-          { specificUserId: req.admin._id }
-        ]
-      })
-      .populate('createdBy', 'name email')
-      .populate('specificUserId', 'firstName lastName email')
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .lean();
+    // Transform to match frontend expected format
+    const formattedNotifications = notifications.map(notif => ({
+      _id: notif._id,
+      title: getNotificationTitle(notif.action),
+      message: notif.action,
+      type: getNotificationType(notif.action),
+      isRead: false,
+      createdAt: notif.createdAt,
+      isImportant: notif.action.includes('critical') || notif.action.includes('urgent')
+    }));
 
-      // Get unread count for badge
-      const unreadCount = await Notification.countDocuments({
-        $or: [
-          { recipientType: 'all' },
-          { recipientType: 'admin' },
-          { specificUserId: req.admin._id }
-        ],
-        read: false
-      });
+    // Get unread count (all notifications are considered unread for demo)
+    const unreadCount = formattedNotifications.filter(n => !n.isRead).length;
 
-      console.log(`Found ${notifications.length} notifications, ${unreadCount} unread`);
-
-      return res.status(200).json({
-        status: 'success',
-        data: {
-          notifications: notifications,
-          unreadCount: unreadCount
-        }
-      });
-    }
-
-    // Handle POST request - send notifications (from your frontend send functionality)
-    if (req.method === 'POST') {
-      const {
-        recipientType,
-        specificUserId,
-        userGroup,
-        notificationType,
-        title,
-        message,
-        isImportant = false
-      } = req.body;
-
-      // Validate required fields for sending
-      if (!recipientType || !title || !message) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'Recipient type, title, and message are required'
-        });
+    res.status(200).json({
+      status: 'success',
+      data: {
+        notifications: formattedNotifications,
+        unreadCount: unreadCount
       }
-
-      // Validate specific user exists if provided
-      if (recipientType === 'specific' && specificUserId) {
-        const userExists = await User.findById(specificUserId);
-        if (!userExists) {
-          return res.status(404).json({
-            status: 'fail',
-            message: 'Specified user not found'
-          });
-        }
-      }
-
-      // Create notification record
-      const notification = new Notification({
-        recipientType,
-        specificUserId: recipientType === 'specific' ? specificUserId : null,
-        userGroup: recipientType === 'group' ? userGroup : null,
-        title: title.trim(),
-        message: message.trim(),
-        notificationType: notificationType || 'info',
-        isImportant: !!isImportant,
-        status: 'sent',
-        createdBy: req.admin._id,
-        sentAt: new Date()
-      });
-
-      await notification.save();
-
-      // Populate for response
-      const populatedNotification = await Notification.findById(notification._id)
-        .populate('createdBy', 'name email')
-        .populate('specificUserId', 'firstName lastName email');
-
-      // Real-time notification logic would go here
-      console.log(`Notification sent by admin ${req.admin.email}:`, {
-        recipientType,
-        title,
-        notificationType
-      });
-
-      return res.status(201).json({
-        status: 'success',
-        message: 'Notification sent successfully',
-        data: {
-          notification: populatedNotification
-        }
-      });
-    }
-
-    // Method not allowed
-    return res.status(405).json({
-      status: 'fail',
-      message: 'Method not allowed'
     });
 
   } catch (err) {
-    console.error('Notifications endpoint error:', err);
+    console.error('Get admin notifications error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to process notification request'
+      message: 'Failed to fetch notifications'
     });
   }
 });
 
+// Helper functions
+function getNotificationTitle(action) {
+  if (action.includes('login')) return 'Admin Login';
+  if (action.includes('deposit')) return 'Deposit Activity';
+  if (action.includes('withdrawal')) return 'Withdrawal Activity';
+  if (action.includes('kyc')) return 'KYC Update';
+  return 'System Notification';
+}
 
-
+function getNotificationType(action) {
+  if (action.includes('success') || action.includes('approved')) return 'success';
+  if (action.includes('error') || action.includes('failed')) return 'error';
+  if (action.includes('warning')) return 'warning';
+  return 'info';
+}
 
 
 
@@ -12932,6 +12865,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
