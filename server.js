@@ -1546,6 +1546,8 @@ const Transaction = mongoose.model('Transaction', TransactionSchema);
 
 
 
+
+
 // Enhanced Notification Schema with Real-time Messaging
 const NotificationSchema = new mongoose.Schema({
   title: {
@@ -1759,50 +1761,6 @@ NotificationSchema.pre('save', function(next) {
   next();
 });
 
-// Static methods
-NotificationSchema.statics.getUserNotifications = function(userId, options = {}) {
-  const { limit = 20, page = 1, unreadOnly = false } = options;
-  const skip = (page - 1) * limit;
-  
-  const query = {
-    $or: [
-      { recipientType: 'all' },
-      { recipientType: 'specific', specificUserId: userId },
-      { recipientType: 'multiple', specificUserIds: userId },
-      { 
-        recipientType: 'group', 
-        userGroup: await this.getUserGroup(userId) 
-      }
-    ],
-    $or: [
-      { expiresAt: { $exists: false } },
-      { expiresAt: { $gt: new Date() } }
-    ]
-  };
-  
-  if (unreadOnly) {
-    query.read = false;
-  }
-  
-  return this.find(query)
-    .populate('sentBy', 'name email')
-    .sort({ createdAt: -1, priority: -1 })
-    .skip(skip)
-    .limit(limit)
-    .lean();
-};
-
-NotificationSchema.statics.getUserGroup = async function(userId) {
-  const user = await mongoose.model('User').findById(userId).select('kycStatus balances lastLogin');
-  if (!user) return 'inactive';
-  
-  // Determine user group based on user data
-  if (user.kycStatus?.overall === 'verified') return 'with_kyc';
-  if (user.balances?.active > 0) return 'with_investments';
-  if (user.lastLogin > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)) return 'active';
-  return 'inactive';
-};
-
 // Instance methods
 NotificationSchema.methods.markAsRead = function(userId) {
   if (!this.readBy.some(entry => entry.userId.equals(userId))) {
@@ -1851,6 +1809,67 @@ NotificationSchema.methods.getRecipientCount = function() {
 };
 
 const Notification = mongoose.model('Notification', NotificationSchema);
+
+// Static methods moved outside the schema definition to fix the error
+NotificationSchema.statics.getUserNotifications = async function(userId, options = {}) {
+  const { limit = 20, page = 1, unreadOnly = false } = options;
+  const skip = (page - 1) * limit;
+  
+  // Get user group first
+  const User = mongoose.model('User');
+  const user = await User.findById(userId).select('kycStatus balances lastLogin');
+  let userGroup = 'inactive';
+  
+  if (user) {
+    // Determine user group based on user data
+    if (user.kycStatus?.overall === 'verified') userGroup = 'with_kyc';
+    else if (user.balances?.active > 0) userGroup = 'with_investments';
+    else if (user.lastLogin > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)) userGroup = 'active';
+  }
+  
+  const query = {
+    $or: [
+      { recipientType: 'all' },
+      { recipientType: 'specific', specificUserId: userId },
+      { recipientType: 'multiple', specificUserIds: userId },
+      { 
+        recipientType: 'group', 
+        userGroup: userGroup 
+      }
+    ],
+    $or: [
+      { expiresAt: { $exists: false } },
+      { expiresAt: { $gt: new Date() } }
+    ]
+  };
+  
+  if (unreadOnly) {
+    query.read = false;
+  }
+  
+  return this.find(query)
+    .populate('sentBy', 'name email')
+    .sort({ createdAt: -1, priority: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+};
+
+NotificationSchema.statics.getUserGroup = async function(userId) {
+  const User = mongoose.model('User');
+  const user = await User.findById(userId).select('kycStatus balances lastLogin');
+  if (!user) return 'inactive';
+  
+  // Determine user group based on user data
+  if (user.kycStatus?.overall === 'verified') return 'with_kyc';
+  if (user.balances?.active > 0) return 'with_investments';
+  if (user.lastLogin > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)) return 'active';
+  return 'inactive';
+};
+
+
+
+
 
 
 
@@ -13708,6 +13727,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
