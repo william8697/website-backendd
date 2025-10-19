@@ -4954,10 +4954,6 @@ function formatObjectDetails(detailsObj, type) {
 
 
 
-
-
-
-
 app.get('/api/mining', protect, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -4990,7 +4986,7 @@ app.get('/api/mining', protect, async (req, res) => {
         hashRate: "0 TH/s",
         btcMined: "0 BTC",
         miningPower: "0%",
-        estimatedDaily: "$0.00", // Frontend expects this field
+        estimatedDaily: 0.00, // Changed to NUMBER instead of string
         progress: 0,
         lastUpdated: new Date().toISOString()
       };
@@ -5058,11 +5054,12 @@ app.get('/api/mining', protect, async (req, res) => {
     const adjustedMiningPower = miningPower / networkFactor;
 
     // Format data to match EXACT frontend field names and formats
+    // CRITICAL FIX: estimatedDaily must be a NUMBER, not a string
     const miningData = {
       hashRate: `${adjustedHashRate.toFixed(2)} TH/s`, // Frontend: document.getElementById('hash-rate')
       btcMined: `${btcMined.toFixed(8)} BTC`, // Frontend: document.getElementById('btc-mined')
       miningPower: `${Math.min(100, adjustedMiningPower).toFixed(2)}%`, // Frontend: document.getElementById('mining-power')
-      estimatedDaily: `$${estimatedDailyFluctuated.toFixed(2)}`, // Frontend: document.getElementById('estimated-daily')
+      estimatedDaily: parseFloat(estimatedDailyFluctuated.toFixed(2)), // FIXED: Now a NUMBER for .toFixed() to work
       progress: parseFloat(maxProgress.toFixed(2)), // Frontend: mining-progress-bar and mining-progress-text
       lastUpdated: new Date().toISOString(),
       // Additional fields that frontend might use
@@ -5089,10 +5086,17 @@ app.get('/api/mining', protect, async (req, res) => {
   }
 });
 
-// Helper function to fluctuate cached values (keep this from original)
+// Updated helper function to handle both strings and numbers
 function fluctuateValue(baseValue, percent) {
+  // If it's already a number, fluctuate it directly
+  if (typeof baseValue === 'number') {
+    const fluctuation = (Math.random() * percent * 2 - percent) / 100;
+    return baseValue * (1 + fluctuation);
+  }
+  
+  // If it's a string, extract numeric value
   if (typeof baseValue === 'string') {
-    // Extract numeric value from strings like "12.34 TH/s"
+    // Extract numeric value from strings like "12.34 TH/s", "$12.34", "12.34%"
     const numericMatch = baseValue.match(/[\d.]+/);
     if (numericMatch) {
       const numericValue = parseFloat(numericMatch[0]);
@@ -5106,8 +5110,13 @@ function fluctuateValue(baseValue, percent) {
       if (baseValue.includes('$')) return `$${fluctuatedValue.toFixed(2)}`;
     }
   }
+  
   return baseValue;
 }
+
+
+
+
 
 
 
@@ -13309,6 +13318,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
