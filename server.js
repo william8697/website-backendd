@@ -4805,7 +4805,7 @@ app.get('/api/transactions', protect, async (req, res) => {
         .limit(50)
         .lean();
 
-        // Format transactions to match frontend expectations
+        // Format transactions to match frontend expectations with proper details
         const formattedTransactions = transactions.map(transaction => ({
             id: transaction._id,
             date: transaction.createdAt,
@@ -4815,7 +4815,7 @@ app.get('/api/transactions', protect, async (req, res) => {
             status: transaction.status,
             method: transaction.method,
             reference: transaction.reference,
-            details: transaction.details || getDefaultDetails(transaction.type),
+            details: generateTransactionDetails(transaction), // Use the new helper function
             fee: transaction.fee || 0,
             netAmount: transaction.netAmount || transaction.amount
         }));
@@ -4837,20 +4837,123 @@ app.get('/api/transactions', protect, async (req, res) => {
     }
 });
 
-// Helper function to generate default details based on transaction type
-function getDefaultDetails(type) {
-    const detailsMap = {
-        'deposit': 'Funds deposited to account',
-        'withdrawal': 'Funds withdrawn from account',
-        'investment': 'Investment transaction processed',
-        'interest': 'Interest earnings applied',
-        'referral': 'Referral bonus credited',
-        'loan': 'Loan transaction processed',
-        'transfer': 'Funds transfer completed'
+// Enhanced helper function to generate meaningful transaction details
+function generateTransactionDetails(transaction) {
+    const type = transaction.type;
+    const status = transaction.status;
+    const amount = transaction.amount;
+    const method = transaction.method;
+    const currency = transaction.currency || 'USD';
+    
+    // Base status messages
+    const statusMessages = {
+        'completed': 'completed successfully',
+        'pending': 'is being processed',
+        'failed': 'failed to process',
+        'cancelled': 'was cancelled',
+        'reversed': 'was reversed'
     };
     
-    return detailsMap[type] || 'Transaction processed';
+    const statusText = statusMessages[status] || 'processed';
+
+    // Type-specific detail templates
+    const detailTemplates = {
+        'deposit': {
+            completed: `Deposit of $${amount.toFixed(2)} ${currency} ${method ? `via ${method}` : ''} completed successfully`,
+            pending: `Deposit of $${amount.toFixed(2)} ${currency} is being processed${method ? ` via ${method}` : ''}`,
+            failed: `Deposit of $${amount.toFixed(2)} ${currency} failed${method ? ` via ${method}` : ''}`,
+            default: `Deposit transaction ${statusText}`
+        },
+        'withdrawal': {
+            completed: `Withdrawal of $${amount.toFixed(2)} ${currency} processed successfully${method ? ` to ${method}` : ''}`,
+            pending: `Withdrawal of $${amount.toFixed(2)} ${currency} is being processed${method ? ` to ${method}` : ''}`,
+            failed: `Withdrawal of $${amount.toFixed(2)} ${currency} failed${method ? ` to ${method}` : ''}`,
+            default: `Withdrawal transaction ${statusText}`
+        },
+        'investment': {
+            completed: `Investment of $${amount.toFixed(2)} ${currency} activated successfully`,
+            pending: `Investment of $${amount.toFixed(2)} ${currency} is being activated`,
+            failed: `Investment of $${amount.toFixed(2)} ${currency} activation failed`,
+            default: `Investment transaction ${statusText}`
+        },
+        'interest': {
+            completed: `Interest earnings of $${amount.toFixed(2)} ${currency} credited to your account`,
+            pending: `Interest earnings of $${amount.toFixed(2)} ${currency} pending`,
+            failed: `Interest earnings of $${amount.toFixed(2)} ${currency} failed to credit`,
+            default: `Interest payment ${statusText}`
+        },
+        'referral': {
+            completed: `Referral bonus of $${amount.toFixed(2)} ${currency} earned from referral activity`,
+            pending: `Referral bonus of $${amount.toFixed(2)} ${currency} pending verification`,
+            failed: `Referral bonus of $${amount.toFixed(2)} ${currency} failed to process`,
+            default: `Referral bonus ${statusText}`
+        },
+        'loan': {
+            completed: `Loan of $${amount.toFixed(2)} ${currency} ${transaction.loanType === 'repayment' ? 'repayment completed' : 'disbursed successfully'}`,
+            pending: `Loan ${transaction.loanType === 'repayment' ? 'repayment' : 'application'} of $${amount.toFixed(2)} ${currency} is being processed`,
+            failed: `Loan ${transaction.loanType === 'repayment' ? 'repayment' : 'application'} of $${amount.toFixed(2)} ${currency} failed`,
+            default: `Loan transaction ${statusText}`
+        },
+        'transfer': {
+            completed: `Transfer of $${amount.toFixed(2)} ${currency} completed successfully`,
+            pending: `Transfer of $${amount.toFixed(2)} ${currency} is being processed`,
+            failed: `Transfer of $${amount.toFixed(2)} ${currency} failed`,
+            default: `Transfer transaction ${statusText}`
+        }
+    };
+
+    // Get the appropriate template for this transaction type
+    const template = detailTemplates[type];
+    if (template) {
+        return template[status] || template.default;
+    }
+
+    // Fallback for unknown transaction types
+    return `${type} transaction ${statusText}`;
 }
+
+// Alternative: If you want to preserve existing details but ensure they're strings
+function getTransactionDetails(transaction) {
+    // If details already exist and are a string, use them
+    if (transaction.details && typeof transaction.details === 'string') {
+        return transaction.details;
+    }
+    
+    // If details exist but are an object, convert to meaningful string
+    if (transaction.details && typeof transaction.details === 'object') {
+        return formatObjectDetails(transaction.details, transaction.type);
+    }
+    
+    // Generate new details if none exist
+    return generateTransactionDetails(transaction);
+}
+
+// Helper to format object details into readable strings
+function formatObjectDetails(detailsObj, type) {
+    if (detailsObj.message) {
+        return detailsObj.message;
+    }
+    
+    if (detailsObj.reason) {
+        return `${type} ${detailsObj.reason}`;
+    }
+    
+    // Convert object to readable string
+    try {
+        return Object.entries(detailsObj)
+            .map(([key, value]) => `${key}: ${value}`)
+            .join(', ');
+    } catch {
+        return `${type} transaction processed`;
+    }
+}
+
+
+
+
+
+
+
 
 
 
@@ -13206,6 +13309,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
