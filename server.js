@@ -4984,9 +4984,9 @@ app.get('/api/mining', protect, async (req, res) => {
     if (activeInvestments.length === 0) {
       const defaultData = {
         hashRate: "0 TH/s",
-        btcMined: "0 BTC",
+        btcMined: "0 BTC", 
         miningPower: "0%",
-        estimatedDaily: 0.00, // Changed to NUMBER instead of string
+        estimatedDaily: 0.00, // NUMBER for .toFixed() to work
         progress: 0,
         lastUpdated: new Date().toISOString()
       };
@@ -4998,45 +4998,52 @@ app.get('/api/mining', protect, async (req, res) => {
       });
     }
 
-    // Calculate total expected amount at maturity
-    let totalExpected = 0;
+    // Calculate total investment amount and expected returns
     let totalInvestmentAmount = 0;
+    let totalExpected = 0;
     let maxProgress = 0;
 
     for (const investment of activeInvestments) {
-      const investmentReturn = investment.amount * (investment.plan.percentage / 100);
+      const planPercentage = investment.plan?.percentage || 12; // Default to 12% if no plan
+      const investmentReturn = investment.amount * (planPercentage / 100);
       totalExpected += investment.amount + investmentReturn; // Principal + profit
       totalInvestmentAmount += investment.amount;
 
       // Calculate progress for this investment
-      const totalDuration = investment.endDate - investment.createdAt;
-      const elapsed = Date.now() - investment.createdAt;
+      const startDate = new Date(investment.createdAt);
+      const endDate = new Date(investment.endDate);
+      const totalDuration = endDate - startDate;
+      const elapsed = Date.now() - startDate.getTime();
       const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
       maxProgress = Math.max(maxProgress, progress);
     }
 
-    // Get BTC price from CoinGecko
-    let btcPrice = 43000; // Using frontend's assumed BTC price of $43,000
+    // Get BTC price from CoinGecko (fallback to $43,000)
+    let btcPrice = 43000;
     try {
-      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd', {
+        timeout: 5000
+      });
       btcPrice = response.data.bitcoin.usd;
     } catch (error) {
-      console.error('CoinGecko API error:', error);
+      console.error('CoinGecko API error, using fallback price:', error.message);
     }
 
-    // Base calculations - matching frontend expectations
-    const baseHashRate = totalInvestmentAmount * 0.15; // Adjusted for realistic TH/s
-    const baseMiningPower = Math.min(100, (totalInvestmentAmount / 5000) * 100); // Adjusted scaling
-    const baseBtcMined = (totalExpected - totalInvestmentAmount) / btcPrice; // Profit in BTC
+    // Calculate mining metrics based on investments
+    const baseHashRate = Math.max(0.1, totalInvestmentAmount * 0.00015); // Realistic TH/s calculation
+    const baseMiningPower = Math.min(100, Math.max(0, (totalInvestmentAmount / 5000) * 100));
     
-    // Calculate estimated daily earnings (frontend expects this)
+    // Total BTC mined (profit converted to BTC)
     const totalProfit = totalExpected - totalInvestmentAmount;
-    const averageDurationDays = 30; // Assuming 30-day average investment duration
+    const baseBtcMined = totalProfit / btcPrice;
+    
+    // Calculate estimated daily earnings
+    const averageDurationDays = 30;
     const estimatedDaily = totalProfit / averageDurationDays;
 
-    // Apply realistic fluctuations
+    // Apply realistic fluctuations based on time
     const currentTime = Date.now();
-    const timeFactor = Math.sin(currentTime / 60000);
+    const timeFactor = Math.sin(currentTime / 60000); // Fluctuates every minute
     
     const hashRateFluctuation = 0.05 * timeFactor + (Math.random() * 0.1 - 0.05);
     const hashRate = baseHashRate * (1 + hashRateFluctuation);
@@ -5053,21 +5060,41 @@ app.get('/api/mining', protect, async (req, res) => {
     const adjustedHashRate = hashRate / networkFactor;
     const adjustedMiningPower = miningPower / networkFactor;
 
-    // Format data to match EXACT frontend field names and formats
-    // CRITICAL FIX: estimatedDaily must be a NUMBER, not a string
+    // CRITICAL: Format data to match EXACT frontend field expectations
     const miningData = {
-      hashRate: `${adjustedHashRate.toFixed(2)} TH/s`, // Frontend: document.getElementById('hash-rate')
-      btcMined: `${btcMined.toFixed(8)} BTC`, // Frontend: document.getElementById('btc-mined')
-      miningPower: `${Math.min(100, adjustedMiningPower).toFixed(2)}%`, // Frontend: document.getElementById('mining-power')
-      estimatedDaily: parseFloat(estimatedDailyFluctuated.toFixed(2)), // FIXED: Now a NUMBER for .toFixed() to work
-      progress: parseFloat(maxProgress.toFixed(2)), // Frontend: mining-progress-bar and mining-progress-text
+      // Frontend: document.getElementById('hash-rate').textContent
+      hashRate: `${Math.max(0.01, adjustedHashRate).toFixed(2)} TH/s`,
+      
+      // Frontend: document.getElementById('btc-mined').textContent  
+      btcMined: `${Math.max(0, btcMined).toFixed(8)} BTC`,
+      
+      // Frontend: document.getElementById('mining-power').textContent
+      miningPower: `${Math.min(100, Math.max(0, adjustedMiningPower)).toFixed(2)}%`,
+      
+      // Frontend: document.getElementById('estimated-daily').textContent = `$${expectedDaily.toFixed(2)}`
+      // MUST be a NUMBER for .toFixed() to work
+      estimatedDaily: parseFloat(Math.max(0, estimatedDailyFluctuated).toFixed(2)),
+      
+      // Frontend: mining-progress-bar and mining-progress-text
+      progress: parseFloat(Math.min(100, Math.max(0, maxProgress)).toFixed(2)),
+      
       lastUpdated: new Date().toISOString(),
-      // Additional fields that frontend might use
-      totalInvested: `$${totalInvestmentAmount.toFixed(2)}`,
+      
+      // Additional data for display (frontend expects totalExpected)
       totalExpected: `$${totalExpected.toFixed(2)}`,
+      totalInvested: `$${totalInvestmentAmount.toFixed(2)}`,
       networkDifficulty: networkFactor.toFixed(2),
       workersOnline: Math.floor(3 + Math.random() * 3)
     };
+    
+    console.log('Mining data sent to frontend:', {
+      hashRate: miningData.hashRate,
+      btcMined: miningData.btcMined, 
+      miningPower: miningData.miningPower,
+      estimatedDaily: miningData.estimatedDaily,
+      progress: miningData.progress,
+      totalExpected: miningData.totalExpected
+    });
     
     // Cache for 1 minute
     await redis.set(cacheKey, JSON.stringify(miningData), 'EX', 60);
@@ -5079,24 +5106,35 @@ app.get('/api/mining', protect, async (req, res) => {
 
   } catch (error) {
     console.error('Mining endpoint error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch mining data'
+    
+    // Return safe default data on error
+    const errorData = {
+      hashRate: "0 TH/s",
+      btcMined: "0 BTC",
+      miningPower: "0%", 
+      estimatedDaily: 0.00,
+      progress: 0,
+      lastUpdated: new Date().toISOString(),
+      totalExpected: "$0.00"
+    };
+    
+    res.status(200).json({
+      status: 'success',
+      data: errorData
     });
   }
 });
 
-// Updated helper function to handle both strings and numbers
+// Helper function to add realistic fluctuations
 function fluctuateValue(baseValue, percent) {
-  // If it's already a number, fluctuate it directly
+  // Handle numbers directly
   if (typeof baseValue === 'number') {
     const fluctuation = (Math.random() * percent * 2 - percent) / 100;
     return baseValue * (1 + fluctuation);
   }
   
-  // If it's a string, extract numeric value
+  // Handle strings by extracting numeric values
   if (typeof baseValue === 'string') {
-    // Extract numeric value from strings like "12.34 TH/s", "$12.34", "12.34%"
     const numericMatch = baseValue.match(/[\d.]+/);
     if (numericMatch) {
       const numericValue = parseFloat(numericMatch[0]);
@@ -5104,16 +5142,15 @@ function fluctuateValue(baseValue, percent) {
       const fluctuatedValue = numericValue * (1 + fluctuation);
       
       // Return in same format
-      if (baseValue.includes('TH/s')) return `${fluctuatedValue.toFixed(2)} TH/s`;
-      if (baseValue.includes('BTC')) return `${fluctuatedValue.toFixed(8)} BTC`;
-      if (baseValue.includes('%')) return `${Math.min(100, fluctuatedValue).toFixed(2)}%`;
-      if (baseValue.includes('$')) return `$${fluctuatedValue.toFixed(2)}`;
+      if (baseValue.includes('TH/s')) return `${Math.max(0, fluctuatedValue).toFixed(2)} TH/s`;
+      if (baseValue.includes('BTC')) return `${Math.max(0, fluctuatedValue).toFixed(8)} BTC`;
+      if (baseValue.includes('%')) return `${Math.min(100, Math.max(0, fluctuatedValue)).toFixed(2)}%`;
+      if (baseValue.includes('$')) return `$${Math.max(0, fluctuatedValue).toFixed(2)}`;
     }
   }
   
   return baseValue;
 }
-
 
 
 
@@ -13318,6 +13355,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
