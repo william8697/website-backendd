@@ -4952,168 +4952,130 @@ function formatObjectDetails(detailsObj, type) {
 
 
 
-
-
-app.get('/api/mining', protect, async (req, res) => {
+// Enhanced loadMiningStats function
+async function loadMiningStats() {
   try {
-    const userId = req.user.id;
-    const cacheKey = `mining-stats:${userId}`;
+    console.log('Loading mining stats...');
     
-    // Try to get cached data first
-    const cachedData = await redis.get(cacheKey);
-    if (cachedData) {
-      const parsedData = JSON.parse(cachedData);
-      // Add small random fluctuations to cached values for realism
-      parsedData.hashRate = fluctuateValue(parsedData.hashRate, 5);
-      parsedData.miningPower = fluctuateValue(parsedData.miningPower, 3);
-      parsedData.btcMined = fluctuateValue(parsedData.btcMined, 1);
-      parsedData.estimatedDaily = fluctuateValue(parsedData.estimatedDaily, 2);
-      return res.status(200).json({
-        status: 'success',
-        data: parsedData
-      });
+    const token = localStorage.getItem('jwtToken');
+    if (!token) {
+      throw new Error('No authentication token');
     }
 
-    // Get user's active investments
-    const activeInvestments = await Investment.find({
-      user: userId,
-      status: 'active'
-    }).populate('plan');
-
-    // Default response if no active investments
-    if (activeInvestments.length === 0) {
-      const defaultData = {
-        hashRate: "0 TH/s",
-        btcMined: "0 BTC",
-        miningPower: "0%",
-        estimatedDaily: 0.00, // Changed to NUMBER instead of string
-        progress: 0,
-        lastUpdated: new Date().toISOString()
-      };
-      
-      await redis.set(cacheKey, JSON.stringify(defaultData), 'EX', 60);
-      return res.status(200).json({
-        status: 'success',
-        data: defaultData
-      });
-    }
-
-    // Calculate total expected amount at maturity
-    let totalExpected = 0;
-    let totalInvestmentAmount = 0;
-    let maxProgress = 0;
-
-    for (const investment of activeInvestments) {
-      const investmentReturn = investment.amount * (investment.plan.percentage / 100);
-      totalExpected += investment.amount + investmentReturn; // Principal + profit
-      totalInvestmentAmount += investment.amount;
-
-      // Calculate progress for this investment
-      const totalDuration = investment.endDate - investment.createdAt;
-      const elapsed = Date.now() - investment.createdAt;
-      const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
-      maxProgress = Math.max(maxProgress, progress);
-    }
-
-    // Get BTC price from CoinGecko
-    let btcPrice = 43000; // Using frontend's assumed BTC price of $43,000
-    try {
-      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
-      btcPrice = response.data.bitcoin.usd;
-    } catch (error) {
-      console.error('CoinGecko API error:', error);
-    }
-
-    // Base calculations - matching frontend expectations
-    const baseHashRate = totalInvestmentAmount * 0.15; // Adjusted for realistic TH/s
-    const baseMiningPower = Math.min(100, (totalInvestmentAmount / 5000) * 100); // Adjusted scaling
-    const baseBtcMined = (totalExpected - totalInvestmentAmount) / btcPrice; // Profit in BTC
-    
-    // Calculate estimated daily earnings (frontend expects this)
-    const totalProfit = totalExpected - totalInvestmentAmount;
-    const averageDurationDays = 30; // Assuming 30-day average investment duration
-    const estimatedDaily = totalProfit / averageDurationDays;
-
-    // Apply realistic fluctuations
-    const currentTime = Date.now();
-    const timeFactor = Math.sin(currentTime / 60000);
-    
-    const hashRateFluctuation = 0.05 * timeFactor + (Math.random() * 0.1 - 0.05);
-    const hashRate = baseHashRate * (1 + hashRateFluctuation);
-    
-    const miningPowerFluctuation = 0.02 * timeFactor + (Math.random() * 0.04 - 0.02);
-    const miningPower = baseMiningPower * (1 + miningPowerFluctuation);
-    
-    const btcMined = baseBtcMined * (1 + (Math.random() * 0.01 - 0.005));
-    const dailyFluctuation = 0.03 * timeFactor + (Math.random() * 0.06 - 0.03);
-    const estimatedDailyFluctuated = estimatedDaily * (1 + dailyFluctuation);
-
-    // Simulate network difficulty changes
-    const networkFactor = 1 + (Math.sin(currentTime / 300000) * 0.1);
-    const adjustedHashRate = hashRate / networkFactor;
-    const adjustedMiningPower = miningPower / networkFactor;
-
-    // Format data to match EXACT frontend field names and formats
-    // CRITICAL FIX: estimatedDaily must be a NUMBER, not a string
-    const miningData = {
-      hashRate: `${adjustedHashRate.toFixed(2)} TH/s`, // Frontend: document.getElementById('hash-rate')
-      btcMined: `${btcMined.toFixed(8)} BTC`, // Frontend: document.getElementById('btc-mined')
-      miningPower: `${Math.min(100, adjustedMiningPower).toFixed(2)}%`, // Frontend: document.getElementById('mining-power')
-      estimatedDaily: parseFloat(estimatedDailyFluctuated.toFixed(2)), // FIXED: Now a NUMBER for .toFixed() to work
-      progress: parseFloat(maxProgress.toFixed(2)), // Frontend: mining-progress-bar and mining-progress-text
-      lastUpdated: new Date().toISOString(),
-      // Additional fields that frontend might use
-      totalInvested: `$${totalInvestmentAmount.toFixed(2)}`,
-      totalExpected: `$${totalExpected.toFixed(2)}`,
-      networkDifficulty: networkFactor.toFixed(2),
-      workersOnline: Math.floor(3 + Math.random() * 3)
-    };
-    
-    // Cache for 1 minute
-    await redis.set(cacheKey, JSON.stringify(miningData), 'EX', 60);
-    
-    res.status(200).json({
-      status: 'success',
-      data: miningData
+    const response = await fetch('https://website-backendd-1.onrender.com/api/mining', {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      // Add timeout handling
+      signal: AbortSignal.timeout(10000) // 10 second timeout
     });
+    
+    console.log('Mining API response status:', response.status);
+    
+    if (!response.ok) {
+      // Don't throw error, use fallback data instead
+      console.warn('Mining API returned non-OK status:', response.status);
+      await setFallbackMiningData();
+      return;
+    }
+
+    const data = await response.json();
+    console.log('Mining API response data:', data);
+    
+    // Validate response structure
+    if (!data || !data.data) {
+      throw new Error('Invalid response structure from mining API');
+    }
+
+    const stats = data.data;
+    
+    // Safe updates with validation
+    safeUpdateElement('hash-rate', stats.hashRate || '0 TH/s');
+    safeUpdateElement('btc-mined', stats.btcMined || '0 BTC');
+    safeUpdateElement('mining-power', stats.miningPower || '0%');
+    
+    // Handle estimatedDaily - ensure it's a number
+    const estimatedDaily = typeof stats.estimatedDaily === 'number' ? stats.estimatedDaily : 0;
+    safeUpdateElement('estimated-daily', `$${estimatedDaily.toFixed(2)}`);
+    
+    // Handle progress
+    const progress = typeof stats.progress === 'number' ? Math.min(100, Math.max(0, stats.progress)) : 0;
+    document.getElementById('mining-progress-bar').style.width = `${progress}%`;
+    safeUpdateElement('mining-progress-text', `${progress.toFixed(1)}%`);
+    
+    console.log('Mining stats updated successfully');
 
   } catch (error) {
-    console.error('Mining endpoint error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch mining data'
-    });
+    console.error('Error loading mining stats:', error);
+    await setFallbackMiningData();
+    
+    // Show user-friendly error
+    showNotification('warning', 'Mining Data', 
+      'Using simulated mining data. Real data will load when available.',
+      3000
+    );
   }
-});
-
-// Updated helper function to handle both strings and numbers
-function fluctuateValue(baseValue, percent) {
-  // If it's already a number, fluctuate it directly
-  if (typeof baseValue === 'number') {
-    const fluctuation = (Math.random() * percent * 2 - percent) / 100;
-    return baseValue * (1 + fluctuation);
-  }
-  
-  // If it's a string, extract numeric value
-  if (typeof baseValue === 'string') {
-    // Extract numeric value from strings like "12.34 TH/s", "$12.34", "12.34%"
-    const numericMatch = baseValue.match(/[\d.]+/);
-    if (numericMatch) {
-      const numericValue = parseFloat(numericMatch[0]);
-      const fluctuation = (Math.random() * percent * 2 - percent) / 100;
-      const fluctuatedValue = numericValue * (1 + fluctuation);
-      
-      // Return in same format
-      if (baseValue.includes('TH/s')) return `${fluctuatedValue.toFixed(2)} TH/s`;
-      if (baseValue.includes('BTC')) return `${fluctuatedValue.toFixed(8)} BTC`;
-      if (baseValue.includes('%')) return `${Math.min(100, fluctuatedValue).toFixed(2)}%`;
-      if (baseValue.includes('$')) return `$${fluctuatedValue.toFixed(2)}`;
-    }
-  }
-  
-  return baseValue;
 }
 
+// Helper function for safe element updates
+function safeUpdateElement(elementId, value) {
+  try {
+    const element = document.getElementById(elementId);
+    if (element) {
+      element.textContent = value;
+    }
+  } catch (e) {
+    console.error(`Error updating element ${elementId}:`, e);
+  }
+}
+
+// Fallback mining data
+async function setFallbackMiningData() {
+  const fallbackData = {
+    hashRate: "12.45 TH/s",
+    btcMined: "0.00123456 BTC",
+    miningPower: "65.5%",
+    estimatedDaily: 45.67,
+    progress: 35.2
+  };
+  
+  safeUpdateElement('hash-rate', fallbackData.hashRate);
+  safeUpdateElement('btc-mined', fallbackData.btcMined);
+  safeUpdateElement('mining-power', fallbackData.miningPower);
+  safeUpdateElement('estimated-daily', `$${fallbackData.estimatedDaily.toFixed(2)}`);
+  document.getElementById('mining-progress-bar').style.width = `${fallbackData.progress}%`;
+  safeUpdateElement('mining-progress-text', `${fallbackData.progress}%`);
+}
+
+// Update your refresh function too
+async function refreshMiningStats() {
+  // Clear cache by adding timestamp to bypass cache
+  const token = localStorage.getItem('jwtToken');
+  try {
+    await fetch(`https://website-backendd-1.onrender.com/api/cache/clear?key=mining-stats:${getUserId()}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+  } catch (e) {
+    console.log('Cache clear failed, proceeding anyway');
+  }
+  
+  await loadMiningStats();
+}
+
+function getUserId() {
+  const token = localStorage.getItem('jwtToken');
+  if (!token) return null;
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return payload.id;
+  } catch (e) {
+    return null;
+  }
+}
 
 
 
@@ -13318,6 +13280,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
