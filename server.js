@@ -8288,87 +8288,7 @@ app.get('/api/admin/transactions/transfers', adminProtect, async (req, res) => {
 
 
 
-// DEBUG VERSION - Admin Active Investments Endpoint
-app.get('/api/admin/investments/active', adminProtect, async (req, res) => {
-  try {
-    console.log('=== ACTIVE INVESTMENTS ENDPOINT HIT ===');
-    console.log('Query params:', req.query);
-    
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
 
-    // Get active investments
-    const investments = await Investment.find({ status: 'active' })
-      .populate('user', 'firstName lastName')
-      .populate('plan', 'name dailyProfit totalProfit')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
-
-    console.log('Found investments:', investments.length);
-
-    // Simple transformation - ensure no undefined values
-    const investmentsWithDetails = investments.map(investment => {
-      const user = investment.user || { firstName: 'Unknown', lastName: 'User' };
-      const plan = investment.plan || { name: 'Unknown Plan', dailyProfit: 0, totalProfit: 0 };
-      
-      const dailyProfit = (investment.amount * plan.dailyProfit) / 100;
-      const totalProfit = (investment.amount * plan.totalProfit) / 100;
-
-      return {
-        _id: investment._id?.toString() || 'unknown_id',
-        user: {
-          firstName: user.firstName || 'Unknown',
-          lastName: user.lastName || 'User'
-        },
-        plan: {
-          name: plan.name || 'Unknown Plan'
-        },
-        amount: parseFloat(investment.amount) || 0,
-        startDate: investment.startDate || new Date().toISOString(),
-        endDate: investment.endDate || new Date().toISOString(),
-        dailyProfit: parseFloat(dailyProfit.toFixed(2)) || 0,
-        totalProfit: parseFloat(totalProfit.toFixed(2)) || 0
-      };
-    });
-
-    const totalCount = await Investment.countDocuments({ status: 'active' });
-    const totalPages = Math.ceil(totalCount / limit);
-
-    console.log('Sending response with:', {
-      investmentsCount: investmentsWithDetails.length,
-      totalPages: totalPages,
-      currentPage: page
-    });
-
-    // EXACT frontend structure
-    const response = {
-      status: 'success',
-      data: {
-        investments: investmentsWithDetails,
-        pagination: {
-          totalPages: totalPages,
-          currentPage: page
-        }
-      }
-    };
-
-    res.status(200).json(response);
-
-  } catch (err) {
-    console.error('=== ACTIVE INVESTMENTS ERROR ===');
-    console.error('Error details:', err);
-    console.error('Error message:', err.message);
-    console.error('Error stack:', err.stack);
-    
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch active investments'
-    });
-  }
-});
 
 
 
@@ -13280,6 +13200,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
