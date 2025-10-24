@@ -9148,7 +9148,7 @@ app.post('/api/admin/investments/:id/cancel', adminProtect, [
     
     // Return funds to user balance
     user.balances.active -= investment.amount;
-    user.balances.main += investment.amount;
+    user.balances.matured += investment.amount;
     await user.save();
     
     // Update investment status
@@ -13280,6 +13280,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
