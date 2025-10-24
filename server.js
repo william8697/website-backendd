@@ -8925,6 +8925,160 @@ app.get('/api/admin/investment/plans/:id', adminProtect, async (req, res) => {
   }
 });
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ENHANCED VERSION - Admin Active Investments Endpoint with Accurate Time Calculations
+app.get('/api/admin/investments/active', adminProtect, async (req, res) => {
+  try {
+    console.log('=== ACTIVE INVESTMENTS ENDPOINT HIT ===');
+    console.log('Query params:', req.query);
+    
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // Get active investments with proper plan population for duration
+    const investments = await Investment.find({ status: 'active' })
+      .populate('user', 'firstName lastName')
+      .populate('plan', 'name duration percentage')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    console.log('Found investments:', investments.length);
+
+    // Helper function to calculate accurate time remaining
+    const calculateTimeRemaining = (endDate) => {
+      const now = new Date();
+      const end = new Date(endDate);
+      const remainingMs = Math.max(0, end - now);
+      
+      if (remainingMs <= 0) {
+        return 'Expired';
+      }
+
+      const days = Math.floor(remainingMs / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((remainingMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((remainingMs % (1000 * 60)) / 1000);
+
+      const parts = [];
+      if (days > 0) parts.push(`${days}d`);
+      if (hours > 0) parts.push(`${hours}h`);
+      if (minutes > 0) parts.push(`${minutes}m`);
+      if (seconds > 0) parts.push(`${seconds}s`);
+
+      return parts.length > 0 ? parts.join(' ') : '0s';
+    };
+
+    // Calculate accurate profit based on plan percentage and duration
+    const calculateProfitDetails = (investmentAmount, planPercentage, planDuration) => {
+      const totalProfit = (investmentAmount * planPercentage) / 100;
+      const hourlyProfit = planDuration > 0 ? totalProfit / planDuration : 0;
+      const dailyProfit = planDuration > 0 ? (totalProfit / planDuration) * 24 : 0;
+      
+      return {
+        totalProfit: parseFloat(totalProfit.toFixed(2)),
+        hourlyProfit: parseFloat(hourlyProfit.toFixed(4)),
+        dailyProfit: parseFloat(dailyProfit.toFixed(2))
+      };
+    };
+
+    // Simple transformation - ensure no undefined values with accurate calculations
+    const investmentsWithDetails = investments.map(investment => {
+      const user = investment.user || { firstName: 'Unknown', lastName: 'User' };
+      const plan = investment.plan || { 
+        name: 'Unknown Plan', 
+        duration: 0, 
+        percentage: 0 
+      };
+      
+      // Calculate accurate time remaining
+      const timeRemaining = investment.endDate ? 
+        calculateTimeRemaining(investment.endDate) : 
+        'Unknown';
+      
+      // Calculate accurate profit based on actual plan percentage
+      const profitDetails = calculateProfitDetails(
+        investment.amount || 0, 
+        plan.percentage || 0, 
+        plan.duration || 0
+      );
+
+      return {
+        _id: investment._id?.toString() || 'unknown_id',
+        user: {
+          firstName: user.firstName || 'Unknown',
+          lastName: user.lastName || 'User'
+        },
+        plan: {
+          name: plan.name || 'Unknown Plan',
+          duration: plan.duration || 0,
+          percentage: plan.percentage || 0
+        },
+        amount: parseFloat(investment.amount) || 0,
+        startDate: investment.startDate ? new Date(investment.startDate).toISOString() : new Date().toISOString(),
+        endDate: investment.endDate ? new Date(investment.endDate).toISOString() : new Date().toISOString(),
+        timeRemaining: timeRemaining,
+        dailyProfit: profitDetails.dailyProfit,
+        totalProfit: profitDetails.totalProfit,
+        hourlyProfit: profitDetails.hourlyProfit,
+        // Additional time details for verification
+        planDurationHours: plan.duration || 0,
+        isActive: investment.status === 'active',
+        createdAt: investment.createdAt ? new Date(investment.createdAt).toISOString() : new Date().toISOString()
+      };
+    });
+
+    const totalCount = await Investment.countDocuments({ status: 'active' });
+    const totalPages = Math.ceil(totalCount / limit);
+
+    console.log('Sending response with:', {
+      investmentsCount: investmentsWithDetails.length,
+      totalPages: totalPages,
+      currentPage: page,
+      accurateTimeCalculations: true
+    });
+
+    // EXACT frontend structure
+    const response = {
+      status: 'success',
+      data: {
+        investments: investmentsWithDetails,
+        pagination: {
+          totalPages: totalPages,
+          currentPage: page
+        }
+      }
+    };
+
+    res.status(200).json(response);
+
+  } catch (err) {
+    console.error('=== ACTIVE INVESTMENTS ERROR ===');
+    console.error('Error details:', err);
+    console.error('Error message:', err.message);
+    console.error('Error stack:', err.stack);
+    
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch active investments'
+    });
+  }
+});
+
 // Admin Update Investment Plan Endpoint
 app.put('/api/admin/investment/plans/:id', adminProtect, [
   body('name').optional().trim().notEmpty().withMessage('Plan name cannot be empty'),
@@ -13200,6 +13354,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
