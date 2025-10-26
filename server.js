@@ -10652,32 +10652,47 @@ app.get('/api/referrals/downline', protect, async (req, res) => {
             upline: userId 
         })
         .populate('downline', 'firstName lastName email createdAt')
-        .populate('upline', 'firstName lastName email')
         .sort({ createdAt: -1 })
         .lean();
 
-        // Format for the frontend tables
+        // Format for the frontend tables - EXACT structure expected by updateReferralTables()
         const referrals = downlineRelationships.map(relationship => {
             const downlineUser = relationship.downline;
+            const roundsCompleted = relationship.commissionRounds - (relationship.remainingRounds || 0);
+            
             return {
                 id: relationship._id,
-                fullName: `${downlineUser.firstName} ${downlineUser.lastName}`,
-                email: downlineUser.email,
-                joinDate: downlineUser.createdAt,
+                fullName: downlineUser ? `${downlineUser.firstName} ${downlineUser.lastName}` : 'Anonymous User',
+                email: downlineUser?.email || 'N/A',
+                joinDate: downlineUser?.createdAt || relationship.createdAt,
                 isActive: relationship.status === 'active',
-                investmentRounds: relationship.commissionRounds - relationship.remainingRounds,
-                totalEarned: relationship.totalCommissionEarned,
+                investmentRounds: roundsCompleted,
+                totalEarned: relationship.totalCommissionEarned || 0,
                 status: relationship.status
             };
         });
 
-        // Get earnings breakdown
+        // Get earnings breakdown for all statuses (paid + pending)
         const earningsBreakdown = await CommissionHistory.aggregate([
             { 
                 $match: { 
                     upline: userId,
-                    status: 'paid'
+                    status: { $in: ['paid', 'pending'] } // Include both paid and pending
                 } 
+            },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'downline',
+                    foreignField: '_id',
+                    as: 'downlineInfo'
+                }
+            },
+            {
+                $unwind: {
+                    path: '$downlineInfo',
+                    preserveNullAndEmptyArrays: true
+                }
             },
             {
                 $group: {
@@ -10685,32 +10700,29 @@ app.get('/api/referrals/downline', protect, async (req, res) => {
                         downline: '$downline',
                         roundNumber: '$roundNumber'
                     },
-                    roundEarnings: { $sum: '$commissionAmount' }
+                    roundEarnings: { $sum: '$commissionAmount' },
+                    downlineName: { 
+                        $first: { 
+                            $cond: [
+                                { $and: [
+                                    '$downlineInfo.firstName', 
+                                    '$downlineInfo.lastName'
+                                ]},
+                                { $concat: [
+                                    '$downlineInfo.firstName', 
+                                    ' ', 
+                                    '$downlineInfo.lastName'
+                                ]},
+                                'Anonymous User'
+                            ]
+                        } 
+                    }
                 }
-            },
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: '_id.downline',
-                    foreignField: '_id',
-                    as: 'downlineInfo'
-                }
-            },
-            {
-                $unwind: '$downlineInfo'
             },
             {
                 $group: {
                     _id: '$_id.downline',
-                    referralName: { 
-                        $first: { 
-                            $concat: [
-                                '$downlineInfo.firstName', 
-                                ' ', 
-                                '$downlineInfo.lastName'
-                            ] 
-                        } 
-                    },
+                    referralName: { $first: '$downlineName' },
                     round1Earnings: {
                         $sum: {
                             $cond: [{ $eq: ['$_id.roundNumber', 1] }, '$roundEarnings', 0]
@@ -10731,13 +10743,22 @@ app.get('/api/referrals/downline', protect, async (req, res) => {
             }
         ]);
 
-        res.status(200).json({
+        // Return data in the EXACT format expected by frontend's updateReferralTables function
+        const responseData = {
             status: 'success',
             data: {
+                // The frontend's updateReferralTables function expects either:
+                // data.referrals and data.earnings directly, OR
+                // data.data.referrals and data.data.earnings
                 referrals: referrals,
                 earnings: earningsBreakdown
             }
-        });
+        };
+
+        res.status(200).json(responseData);
+
+        // Log the activity
+        await logActivity('view_downline_details', 'referral', userId, userId, 'User', req);
 
     } catch (error) {
         console.error('Error loading downline data:', error);
@@ -10747,7 +10768,6 @@ app.get('/api/referrals/downline', protect, async (req, res) => {
         });
     }
 });
-
 
 
 
@@ -13366,6 +13386,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
