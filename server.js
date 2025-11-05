@@ -13816,6 +13816,7 @@ app.delete('/api/admin/notifications/delete-all-read', adminProtect, async (req,
 
 
 
+
 // OTP Schema for storing verification codes
 const OTPSchema = new mongoose.Schema({
   email: {
@@ -13823,13 +13824,13 @@ const OTPSchema = new mongoose.Schema({
     required: [true, 'Email is required'],
     index: true
   },
-  otp: {
+  code: {
     type: String,
-    required: [true, 'OTP is required']
+    required: [true, 'OTP code is required']
   },
-  purpose: {
+  type: {
     type: String,
-    enum: ['login', 'signup', 'password_reset', 'withdrawal', 'security'],
+    enum: ['login', 'signup', 'password_reset', 'withdrawal'],
     default: 'login'
   },
   expiresAt: {
@@ -13845,7 +13846,7 @@ const OTPSchema = new mongoose.Schema({
     type: Number,
     default: 5
   },
-  used: {
+  verified: {
     type: Boolean,
     default: false
   },
@@ -13856,45 +13857,28 @@ const OTPSchema = new mongoose.Schema({
 });
 
 // Index for efficient queries
-OTPSchema.index({ email: 1, purpose: 1 });
+OTPSchema.index({ email: 1, type: 1 });
 OTPSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const OTP = mongoose.model('OTP', OTPSchema);
 
-// Generate OTP function
+// Generate a 6-digit OTP code
 const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-// Enhanced OTP Email Template
-const sendOTPEmail = async (email, otp, purpose, userFirstName = '') => {
+// Send OTP Email with Professional Design
+const sendOTPEmail = async (email, otpCode, userName = 'User') => {
   try {
-    const purposeTitles = {
-      'login': 'Login Verification',
-      'signup': 'Welcome to BitHash Capital',
-      'password_reset': 'Password Reset Request',
-      'withdrawal': 'Withdrawal Authorization',
-      'security': 'Security Verification'
-    };
-
-    const purposeDescriptions = {
-      'login': 'sign in to your BitHash Capital account',
-      'signup': 'complete your registration with BitHash Capital',
-      'password_reset': 'reset your BitHash Capital account password',
-      'withdrawal': 'authorize your withdrawal request',
-      'security': 'verify your identity for security purposes'
-    };
-
-    const subject = `Your Verification Code - ${purposeTitles[purpose]}`;
-    const greeting = userFirstName ? `Hello ${userFirstName},` : 'Hello,';
+    const otpSubject = `Your BitHash Capital Verification Code: ${otpCode}`;
     
-    const htmlContent = `
+    const otpHtml = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${purposeTitles[purpose]} - BitHash Capital</title>
+    <title>BitHash Capital - Verification Code</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -13904,72 +13888,70 @@ const sendOTPEmail = async (email, otp, purpose, userFirstName = '') => {
         .header h1 { color: #ffffff; font-size: 28px; font-weight: 700; margin-bottom: 10px; }
         .header p { color: #e2e8f0; font-size: 16px; font-weight: 400; }
         .content { padding: 40px 30px; }
-        .greeting { font-size: 18px; color: #1a202c; margin-bottom: 20px; font-weight: 600; }
-        .otp-section { background: linear-gradient(135deg, #fef3c7 0%, #fef7cd 100%); border: 2px solid #fcd34d; border-radius: 12px; padding: 30px; text-align: center; margin: 25px 0; }
-        .otp-code { font-size: 42px; font-weight: 700; color: #000000; letter-spacing: 8px; margin: 20px 0; font-family: 'Courier New', monospace; background: #ffffff; padding: 15px; border-radius: 8px; border: 2px dashed #d97706; }
+        .welcome-section { text-align: center; margin-bottom: 30px; }
+        .welcome-section h2 { color: #1a202c; font-size: 24px; font-weight: 600; margin-bottom: 15px; }
+        
+        .otp-section { background: linear-gradient(135deg, #fef3c7 0%, #fef7cd 100%); border: 2px solid #fcd34d; border-radius: 12px; padding: 30px; text-align: center; margin: 30px 0; }
+        .otp-code { font-size: 42px; font-weight: 700; color: #000000; letter-spacing: 8px; margin: 20px 0; font-family: 'Courier New', monospace; background: #ffffff; padding: 20px; border-radius: 8px; border: 2px dashed #f59e0b; }
         .otp-expiry { color: #dc2626; font-weight: 600; margin: 15px 0; }
-        .security-tips { background: #f0f9ff; border-radius: 8px; padding: 20px; margin: 25px 0; border-left: 4px solid #0369a1; }
-        .tip-item { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
-        .tip-icon { color: #0369a1; font-size: 16px; margin-top: 2px; }
-        .action-section { background: #dcfce7; border-radius: 8px; padding: 25px; text-align: center; margin: 25px 0; border: 1px solid #bbf7d0; }
-        .support-section { background: #f8fafc; border-radius: 8px; padding: 20px; margin: 25px 0; text-align: center; border: 1px solid #e2e8f0; }
+        
+        .security-section { background: #f0f9ff; padding: 25px; border-radius: 8px; border-left: 4px solid #0369a1; margin: 25px 0; }
+        .security-tips { text-align: left; margin-top: 15px; }
+        .security-tips li { margin-bottom: 8px; color: #475569; }
+        
+        .mining-image { width: 100%; max-width: 400px; margin: 20px auto; border-radius: 8px; overflow: hidden; }
+        .mining-image img { width: 100%; height: auto; display: block; }
+        
         .footer { background: #1a202c; color: #e2e8f0; padding: 30px; text-align: center; }
-        .warning { color: #dc2626; font-weight: 600; margin: 15px 0; }
-        @media (max-width: 600px) { 
-            .header, .content { padding: 25px 20px; } 
-            .otp-code { font-size: 32px; letter-spacing: 6px; padding: 12px; }
-        }
+        @media (max-width: 600px) { .header, .content { padding: 25px 20px; } .otp-code { font-size: 32px; letter-spacing: 6px; } }
     </style>
 </head>
 <body>
     <div class="email-container">
         <div class="header">
-            <h1>${purposeTitles[purpose]}</h1>
-            <p>BitHash Capital - Secure Cloud Mining Platform</p>
+            <h1>BitHash Capital</h1>
+            <p>Secure Bitcoin Cloud Mining Platform</p>
         </div>
         <div class="content">
-            <div class="greeting">${greeting}</div>
-            
-            <p>We received a request to ${purposeDescriptions[purpose]}. Use the verification code below to complete the process:</p>
+            <div class="welcome-section">
+                <h2>Hello, ${userName}!</h2>
+                <p>To complete your secure login, please use the verification code below:</p>
+            </div>
             
             <div class="otp-section">
-                <h3 style="color: #000000; margin-bottom: 15px;">Your Verification Code</h3>
-                <div class="otp-code">${otp}</div>
+                <h3>Your Verification Code</h3>
+                <div class="otp-code">${otpCode}</div>
                 <p class="otp-expiry">⏰ This code expires in 5 minutes</p>
+                <p>Enter this code in the verification window to access your account.</p>
             </div>
             
-            <p class="warning">⚠️ For your security, never share this code with anyone. BitHash Capital will never ask for your verification code.</p>
+            <div class="mining-image">
+                <img src="https://images.unsplash.com/photo-1518546305927-5a555bb7020d?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" alt="Bitcoin Mining Facility" style="border-radius: 8px;">
+                <p style="text-align: center; margin-top: 10px; color: #64748b; font-size: 0.9rem;">Our state-of-the-art Bitcoin mining facility</p>
+            </div>
             
-            <div class="security-tips">
-                <h4 style="color: #0369a1; margin-bottom: 15px;">Security Tips:</h4>
-                <div class="tip-item">
-                    <span class="tip-icon">🔒</span>
-                    <span>Keep your verification codes confidential</span>
-                </div>
-                <div class="tip-item">
-                    <span class="tip-icon">👤</span>
-                    <span>Never share your account credentials</span>
-                </div>
-                <div class="tip-item">
-                    <span class="tip-icon">📧</span>
-                    <span>Only use official BitHash Capital communications</span>
+            <div class="security-section">
+                <h3>🔒 Security Tips</h3>
+                <div class="security-tips">
+                    <ul>
+                        <li>Never share this code with anyone</li>
+                        <li>BitHash Capital will never ask for your password or verification code</li>
+                        <li>Ensure you're on our official website: https://www.bithashcapital.live</li>
+                        <li>This code is valid for one-time use only</li>
+                    </ul>
                 </div>
             </div>
             
-            <div class="action-section">
-                <h4 style="color: #166534; margin-bottom: 10px;">Ready to Start Mining?</h4>
-                <p>Once verified, you can start your Bitcoin cloud mining journey and watch your investments grow with our optimized mining operations.</p>
-            </div>
-            
-            <div class="support-section">
-                <p><strong>Need help?</strong> Contact our 24/7 support team at <a href="mailto:support@bithashcapital.live" style="color: #0369a1;">support@bithashcapital.live</a></p>
+            <div style="text-align: center; margin-top: 30px; padding: 20px; background: #f1f5f9; border-radius: 8px;">
+                <h4>Ready to Start Mining?</h4>
+                <p>Once verified, you can access your dashboard and continue your Bitcoin mining journey with us.</p>
             </div>
         </div>
         <div class="footer">
             <p>© 2024 BitHash Capital LLC. All rights reserved.<br>
             This email was sent to ${email} as part of your BitHash Capital account security.</p>
-            <p style="font-size: 12px; margin-top: 10px; color: #94a3b8;">
-                This is an automated message. Please do not reply to this email.
+            <p style="font-size: 0.8rem; margin-top: 10px; color: #94a3b8;">
+                Institutional-grade Bitcoin mining • 256-bit encryption • 24/7 monitoring
             </p>
         </div>
     </div>
@@ -13977,44 +13959,35 @@ const sendOTPEmail = async (email, otp, purpose, userFirstName = '') => {
 </html>
     `;
 
-    const textContent = `
-${purposeTitles[purpose]} - BitHash Capital
+    const otpText = `
+BitHash Capital - Verification Code
 
-${greeting}
+Hello ${userName}!
 
-We received a request to ${purposeDescriptions[purpose]}. Use the verification code below to complete the process:
+Your verification code is: ${otpCode}
 
-Your Verification Code: ${otp}
-
-⏰ This code expires in 5 minutes
-
-⚠️ SECURITY WARNING:
-- Never share this code with anyone
-- BitHash Capital will never ask for your verification code
-- Keep your account credentials secure
+This code expires in 5 minutes. Enter it in the verification window to access your account.
 
 Security Tips:
-🔒 Keep your verification codes confidential
-👤 Never share your account credentials  
-📧 Only use official BitHash Capital communications
+• Never share this code with anyone
+• BitHash Capital will never ask for your password or verification code
+• Ensure you're on our official website: https://www.bithashcapital.live
+• This code is valid for one-time use only
 
-Ready to Start Mining?
-Once verified, you can start your Bitcoin cloud mining journey and watch your investments grow with our optimized mining operations.
-
-Need help? Contact our 24/7 support team: support@bithashcapital.live
+Ready to continue your Bitcoin mining journey? Verify your code to access your dashboard.
 
 © 2024 BitHash Capital LLC. All rights reserved.
-This is an automated message. Please do not reply to this email.
+This email was sent to ${email} as part of your BitHash Capital account security.
     `;
 
     await sendEmail({
       email: email,
-      subject: subject,
-      message: textContent,
-      html: htmlContent
+      subject: otpSubject,
+      message: otpText,
+      html: otpHtml
     });
 
-    console.log(`OTP email sent to ${email} for ${purpose}`);
+    console.log(`OTP email sent successfully to ${email}`);
     return true;
   } catch (error) {
     console.error('Failed to send OTP email:', error);
@@ -14022,7 +13995,7 @@ This is an automated message. Please do not reply to this email.
   }
 };
 
-// Send OTP Endpoint - Matches frontend expectation exactly
+// Send OTP Endpoint - Matches frontend expectation
 app.post('/api/send-otp', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
 ], async (req, res) => {
@@ -14036,63 +14009,53 @@ app.post('/api/send-otp', [
 
   try {
     const { email } = req.body;
-    
-    // Check if user exists for login OTP
-    const user = await User.findOne({ email: email.toLowerCase() });
+
+    // Check if user exists
+    const user = await User.findOne({ email });
     if (!user) {
       return res.status(404).json({
         status: 'fail',
-        message: 'No account found with this email address'
+        message: 'User not found with this email address'
       });
     }
 
     // Generate OTP
-    const otp = generateOTP();
+    const otpCode = generateOTP();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
     // Delete any existing OTPs for this email
-    await OTP.deleteMany({ 
-      email: email.toLowerCase(),
-      purpose: 'login'
-    });
+    await OTP.deleteMany({ email, type: 'login' });
 
-    // Create new OTP record
+    // Create new OTP
     const otpRecord = await OTP.create({
-      email: email.toLowerCase(),
-      otp: otp,
-      purpose: 'login',
-      expiresAt: expiresAt,
+      email,
+      code: otpCode,
+      type: 'login',
+      expiresAt,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent']
     });
 
     // Send OTP email
-    await sendOTPEmail(
-      email.toLowerCase(), 
-      otp, 
-      'login', 
-      user.firstName
-    );
+    await sendOTPEmail(email, otpCode, user.firstName);
 
-    // Return success response matching frontend expectation
     res.status(200).json({
       status: 'success',
       message: 'Verification code sent to your email',
       data: {
-        email: email.toLowerCase(),
-        expiresAt: expiresAt,
-        purpose: 'login'
+        email: email,
+        expiresIn: '5 minutes',
+        // Note: We don't send the OTP code in response for security
       }
     });
 
-    // Log the activity
     await logActivity('otp_sent', 'auth', user._id, user._id, 'User', req, {
-      purpose: 'login',
-      method: 'email'
+      email: email,
+      type: 'login'
     });
 
-  } catch (error) {
-    console.error('Send OTP error:', error);
+  } catch (err) {
+    console.error('Send OTP error:', err);
     res.status(500).json({
       status: 'error',
       message: 'Failed to send verification code. Please try again.'
@@ -14100,7 +14063,7 @@ app.post('/api/send-otp', [
   }
 });
 
-// Verify OTP Endpoint - Matches frontend expectation exactly
+// Verify OTP Endpoint - Matches frontend expectation
 app.post('/api/verify-otp', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
   body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
@@ -14118,60 +14081,40 @@ app.post('/api/verify-otp', [
 
     // Find the OTP record
     const otpRecord = await OTP.findOne({
-      email: email.toLowerCase(),
-      purpose: 'login',
-      used: false
+      email,
+      code: otp,
+      type: 'login',
+      expiresAt: { $gt: new Date() },
+      verified: false
     });
 
     if (!otpRecord) {
+      // Increment attempts if OTP exists but is invalid
+      await OTP.updateOne(
+        { email, type: 'login' },
+        { $inc: { attempts: 1 } }
+      );
+
       return res.status(400).json({
         status: 'fail',
         message: 'Invalid or expired verification code. Please request a new one.'
       });
     }
 
-    // Check if OTP has expired
-    if (otpRecord.expiresAt < new Date()) {
-      await OTP.findByIdAndUpdate(otpRecord._id, { used: true });
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Verification code has expired. Please request a new one.'
-      });
-    }
-
-    // Check if maximum attempts exceeded
+    // Check if max attempts exceeded
     if (otpRecord.attempts >= otpRecord.maxAttempts) {
-      await OTP.findByIdAndUpdate(otpRecord._id, { used: true });
       return res.status(400).json({
         status: 'fail',
         message: 'Too many failed attempts. Please request a new verification code.'
       });
     }
 
-    // Verify OTP
-    if (otpRecord.otp !== otp) {
-      // Increment attempt count
-      await OTP.findByIdAndUpdate(otpRecord._id, { 
-        $inc: { attempts: 1 } 
-      });
+    // Mark OTP as verified
+    otpRecord.verified = true;
+    await otpRecord.save();
 
-      const remainingAttempts = otpRecord.maxAttempts - (otpRecord.attempts + 1);
-      
-      return res.status(400).json({
-        status: 'fail',
-        message: `Invalid verification code. ${remainingAttempts} attempt(s) remaining.`,
-        remainingAttempts: remainingAttempts
-      });
-    }
-
-    // OTP is valid - mark as used
-    await OTP.findByIdAndUpdate(otpRecord._id, { 
-      used: true,
-      usedAt: new Date()
-    });
-
-    // Find user and generate final JWT token
-    const user = await User.findOne({ email: email.toLowerCase() });
+    // Find the user
+    const user = await User.findOne({ email });
     if (!user) {
       return res.status(404).json({
         status: 'fail',
@@ -14179,7 +14122,7 @@ app.post('/api/verify-otp', [
       });
     }
 
-    // Generate final JWT token (2FA verified)
+    // Generate JWT token for the user
     const token = generateJWT(user._id);
 
     // Update user's last login
@@ -14188,36 +14131,42 @@ app.post('/api/verify-otp', [
     user.loginHistory.push(deviceInfo);
     await user.save();
 
-    // Return success response with token
+    // Set HTTP-only cookie
+    res.cookie('jwt', token, {
+      expires: new Date(Date.now() + JWT_COOKIE_EXPIRES * 24 * 60 * 60 * 1000),
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict'
+    });
+
     res.status(200).json({
       status: 'success',
       message: 'Verification successful! Welcome back to BitHash Capital.',
-      token: token,
       data: {
         user: {
           id: user._id,
           firstName: user.firstName,
           lastName: user.lastName,
           email: user.email
-        }
+        },
+        token: token
       }
     });
 
-    // Log successful verification
     await logActivity('otp_verified', 'auth', user._id, user._id, 'User', req, {
-      purpose: 'login',
-      method: 'email'
+      email: email,
+      type: 'login'
     });
 
-    // Send login success email
+    // Send successful login notification email
     try {
-      const loginSuccessHtml = `
+      const loginNotificationHtml = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login Successful - BitHash Capital</title>
+    <title>Successful Login - BitHash Capital</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -14233,9 +14182,9 @@ app.post('/api/verify-otp', [
         .detail-item { display: flex; flex-direction: column; }
         .detail-label { font-size: 12px; color: #64748b; font-weight: 500; margin-bottom: 5px; }
         .detail-value { font-size: 14px; color: #1e293b; font-weight: 600; }
-        .security-alert { background: #fef3f2; border: 1px solid #fecaca; border-radius: 8px; padding: 15px; margin: 20px 0; }
-        .action-buttons { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 20px; }
+        .action-buttons { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 15px; }
         .action-button { display: block; background: linear-gradient(135deg, #000000 0%, #374151 100%); color: #ffffff; padding: 12px 16px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 14px; text-align: center; }
+        .security-note { background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 15px; margin: 20px 0; text-align: center; }
         .footer { background: #1a202c; color: #e2e8f0; padding: 30px; text-align: center; }
         @media (max-width: 600px) { .header, .content { padding: 25px 20px; } .details-grid, .action-buttons { grid-template-columns: 1fr; } }
     </style>
@@ -14250,7 +14199,7 @@ app.post('/api/verify-otp', [
             <div class="success-section">
                 <div class="success-icon">✅</div>
                 <h2>Hello, ${user.firstName}!</h2>
-                <p>You've successfully logged into your BitHash Capital account with two-factor authentication.</p>
+                <p>You've successfully logged into your BitHash Capital account with two-step verification.</p>
             </div>
             
             <div class="login-details">
@@ -14275,31 +14224,31 @@ app.post('/api/verify-otp', [
                 </div>
             </div>
             
-            <div class="security-alert">
-                <h4 style="color: #dc2626; margin-bottom: 10px;">Security Notice</h4>
+            <div class="security-note">
+                <h4>🔒 Security Notice</h4>
                 <p>If this wasn't you, please secure your account immediately by changing your password and contacting our support team.</p>
             </div>
             
             <div class="action-buttons">
-                <a href="https://www.bithashcapital.live/dashboard" class="action-button">Go to Dashboard</a>
+                <a href="https://www.bithashcapital.live/dashboard" class="action-button">View Dashboard</a>
                 <a href="https://www.bithashcapital.live/invest" class="action-button">Make Investment</a>
-                <a href="https://www.bithashcapital.live/security" class="action-button">Security Settings</a>
+                <a href="https://www.bithashcapital.live/portfolio" class="action-button">Check Portfolio</a>
             </div>
         </div>
         <div class="footer">
-            <p>© 2024 BitHash Capital LLC. All rights reserved.<br>This security notification was sent to ${user.email}.</p>
+            <p>© 2024 BitHash Capital LLC. All rights reserved.<br>This login notification was sent to ${email} for security purposes.</p>
         </div>
     </div>
 </body>
 </html>
       `;
 
-      const loginSuccessText = `
-LOGIN SUCCESSFUL - BitHash Capital
+      const loginNotificationText = `
+SUCCESSFUL LOGIN: BitHash Capital
 
-Hello ${user.firstName},
+Hello ${user.firstName}!
 
-You've successfully logged into your BitHash Capital account with two-factor authentication.
+You've successfully logged into your BitHash Capital account with two-step verification.
 
 Login Details:
 - Time: ${new Date().toLocaleString()}
@@ -14307,32 +14256,31 @@ Login Details:
 - IP Address: ${deviceInfo.ip}
 - Location: ${deviceInfo.location}
 
-SECURITY NOTICE:
+Security Notice:
 If this wasn't you, please secure your account immediately by changing your password and contacting our support team.
 
-Quick Actions:
+Quick Access:
 • Dashboard: https://www.bithashcapital.live/dashboard
-• Make Investment: https://www.bithashcapital.live/invest  
-• Security Settings: https://www.bithashcapital.live/security
+• Make Investment: https://www.bithashcapital.live/invest
+• Portfolio: https://www.bithashcapital.live/portfolio
 
 Stay secure,
 The BitHash Capital Team
-
-© 2024 BitHash Capital LLC. All rights reserved.
       `;
 
       await sendEmail({
-        email: user.email,
-        subject: 'Login Successful - BitHash Capital',
-        message: loginSuccessText,
-        html: loginSuccessHtml
+        email: email,
+        subject: 'Successful Login - BitHash Capital',
+        message: loginNotificationText,
+        html: loginNotificationHtml
       });
+
     } catch (emailError) {
-      console.error('Failed to send login success email:', emailError);
+      console.error('Failed to send login notification:', emailError);
     }
 
-  } catch (error) {
-    console.error('Verify OTP error:', error);
+  } catch (err) {
+    console.error('Verify OTP error:', err);
     res.status(500).json({
       status: 'error',
       message: 'Failed to verify code. Please try again.'
@@ -14356,63 +14304,56 @@ app.post('/api/resend-otp', [
     const { email } = req.body;
 
     // Check if user exists
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const user = await User.findOne({ email });
     if (!user) {
       return res.status(404).json({
         status: 'fail',
-        message: 'No account found with this email address'
+        message: 'User not found'
       });
     }
 
     // Generate new OTP
-    const otp = generateOTP();
+    const otpCode = generateOTP();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
     // Delete any existing OTPs for this email
-    await OTP.deleteMany({ 
-      email: email.toLowerCase(),
-      purpose: 'login'
-    });
+    await OTP.deleteMany({ email, type: 'login' });
 
-    // Create new OTP record
+    // Create new OTP
     const otpRecord = await OTP.create({
-      email: email.toLowerCase(),
-      otp: otp,
-      purpose: 'login',
-      expiresAt: expiresAt,
+      email,
+      code: otpCode,
+      type: 'login',
+      expiresAt,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent']
     });
 
     // Send OTP email
-    await sendOTPEmail(
-      email.toLowerCase(), 
-      otp, 
-      'login', 
-      user.firstName
-    );
+    await sendOTPEmail(email, otpCode, user.firstName);
 
     res.status(200).json({
       status: 'success',
       message: 'New verification code sent to your email',
       data: {
-        email: email.toLowerCase(),
-        expiresAt: expiresAt
+        email: email,
+        expiresIn: '5 minutes'
       }
     });
 
-    await logActivity('otp_resent', 'auth', user._id, user._id, 'User', req);
+    await logActivity('otp_resent', 'auth', user._id, user._id, 'User', req, {
+      email: email,
+      type: 'login'
+    });
 
-  } catch (error) {
-    console.error('Resend OTP error:', error);
+  } catch (err) {
+    console.error('Resend OTP error:', err);
     res.status(500).json({
       status: 'error',
       message: 'Failed to resend verification code. Please try again.'
     });
   }
 });
-
-
 
 
 
@@ -14543,11 +14484,3 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
