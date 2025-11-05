@@ -1945,38 +1945,6 @@ const upload = multer({
 
 
 
-// Generate full referral link for users
-app.get('/api/users/referral-link', protect, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id);
-    
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-
-    const referralLink = `https://www.bithashcapital.live/ref/${user.referralCode}`;
-    
-    res.status(200).json({
-      status: 'success',
-      data: {
-        referralCode: user.referralCode,
-        referralLink: referralLink,
-        shareMessage: `Join BitHash Capital using my referral link: ${referralLink}`
-      }
-    });
-
-  } catch (err) {
-    console.error('Get referral link error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to generate referral link'
-    });
-  }
-});
-
 
 // Replace the existing setupWebSocketServer function with this enhanced version
 const setupWebSocketServer = (server) => {
@@ -13420,7 +13388,37 @@ app.delete('/api/admin/notifications/delete-all-read', adminProtect, async (req,
 
 
 
+// Generate full referral link for users
+app.get('/api/users/referral-link', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
 
+    const referralLink = `https://www.bithashcapital.live/ref/${user.referralCode}`;
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        referralCode: user.referralCode,
+        referralLink: referralLink,
+        shareMessage: `Join BitHash Capital using my referral link: ${referralLink}`
+      }
+    });
+
+  } catch (err) {
+    console.error('Get referral link error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to generate referral link'
+    });
+  }
+});
 
 
 
@@ -13551,5 +13549,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
