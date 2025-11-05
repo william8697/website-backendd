@@ -1761,7 +1761,46 @@ const SystemLog = mongoose.model('SystemLog', SystemLogSchema);
 
 
 
+// Add this to your schemas section (after other schemas)
+const OTPSchema = new mongoose.Schema({
+  email: {
+    type: String,
+    required: [true, 'Email is required'],
+    index: true
+  },
+  otp: {
+    type: String,
+    required: [true, 'OTP is required']
+  },
+  type: {
+    type: String,
+    enum: ['signup', 'login', 'password_reset', 'withdrawal'],
+    default: 'signup'
+  },
+  expiresAt: {
+    type: Date,
+    required: true,
+    index: { expireAfterSeconds: 0 }
+  },
+  attempts: {
+    type: Number,
+    default: 0
+  },
+  used: {
+    type: Boolean,
+    default: false
+  },
+  ipAddress: String,
+  userAgent: String
+}, {
+  timestamps: true
+});
 
+// Index for faster queries
+OTPSchema.index({ email: 1, type: 1 });
+OTPSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+const OTP = mongoose.model('OTP', OTPSchema);
 
 
 
@@ -2849,221 +2888,596 @@ initializeLanguages();
 
 
 
+
+// Enhanced email service with professional templates
+const sendProfessionalEmail = async (options) => {
+  try {
+    const emailTemplates = {
+      welcome: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Welcome to BitHash Capital</title>
+            <style>
+                body { font-family: 'Arial', sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+                .header h1 { color: white; margin: 0; font-size: 28px; }
+                .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+                .button { display: inline-block; background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+                .footer { text-align: center; margin-top: 30px; color: #666; font-size: 12px; }
+                .security-note { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0; }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>Welcome to BitHash Capital</h1>
+            </div>
+            <div class="content">
+                <h2>Hello ${options.name},</h2>
+                <p>Welcome to BitHash Capital! Your account has been successfully created and you're now part of our exclusive investment community.</p>
+                
+                <p>At BitHash Capital, we offer:</p>
+                <ul>
+                    <li>Investment plans starting from just $30</li>
+                    <li>Cloud mining for Bitcoin</li>
+                    <li>Loan services for qualified investors</li>
+                    <li>Secure and transparent trading environment</li>
+                </ul>
+                
+                <div class="security-note">
+                    <strong>Security Tip:</strong> Always ensure you're logging in through our official website at https://www.bithashcapital.live
+                </div>
+                
+                <p>Start your investment journey today and watch your portfolio grow!</p>
+                
+                <p>Best regards,<br>The BitHash Capital Team</p>
+            </div>
+            <div class="footer">
+                <p>&copy; ${new Date().getFullYear()} BitHash Capital. All rights reserved.<br>
+                This email was sent from our secure notification system.</p>
+            </div>
+        </body>
+        </html>
+      `,
+      
+      otp: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Verification Code - BitHash Capital</title>
+            <style>
+                body { font-family: 'Arial', sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+                .header h1 { color: white; margin: 0; font-size: 28px; }
+                .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+                .otp-code { background: #667eea; color: white; padding: 15px; font-size: 32px; font-weight: bold; text-align: center; letter-spacing: 8px; margin: 20px 0; border-radius: 8px; }
+                .footer { text-align: center; margin-top: 30px; color: #666; font-size: 12px; }
+                .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0; }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>Security Verification</h1>
+            </div>
+            <div class="content">
+                <h2>Hello ${options.name},</h2>
+                <p>Your verification code for BitHash Capital is:</p>
+                
+                <div class="otp-code">${options.otp}</div>
+                
+                <p>This code will expire in 5 minutes. Please do not share this code with anyone.</p>
+                
+                <div class="warning">
+                    <strong>Security Alert:</strong> If you didn't request this code, please secure your account immediately and contact our support team.
+                </div>
+                
+                <p>For your security, this code can only be used once.</p>
+            </div>
+            <div class="footer">
+                <p>&copy; ${new Date().getFullYear()} BitHash Capital. All rights reserved.<br>
+                This is an automated security message.</p>
+            </div>
+        </body>
+        </html>
+      `,
+      
+      login_alert: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Security Alert - BitHash Capital</title>
+            <style>
+                body { font-family: 'Arial', sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+                .header h1 { color: white; margin: 0; font-size: 28px; }
+                .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+                .alert-box { background: #ffeaa7; border: 2px solid #fdcb6e; padding: 20px; border-radius: 8px; margin: 20px 0; }
+                .footer { text-align: center; margin-top: 30px; color: #666; font-size: 12px; }
+                .button { display: inline-block; background: #ff6b6b; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin: 10px 0; }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>Security Alert</h1>
+            </div>
+            <div class="content">
+                <h2>Hello ${options.name},</h2>
+                
+                <div class="alert-box">
+                    <h3>New Login Attempt</h3>
+                    <p>We detected a login attempt to your BitHash Capital account.</p>
+                    <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+                    <p><strong>IP Address:</strong> ${options.ipAddress || 'Unknown'}</p>
+                    <p><strong>Device:</strong> ${options.device || 'Unknown'}</p>
+                </div>
+                
+                <p>If this was you, you can ignore this message.</p>
+                
+                <p>If this wasn't you, please:</p>
+                <ol>
+                    <li>Change your password immediately</li>
+                    <li>Enable two-factor authentication</li>
+                    <li>Contact our support team</li>
+                </ol>
+                
+                <p>Stay safe,<br>The BitHash Capital Security Team</p>
+            </div>
+            <div class="footer">
+                <p>&copy; ${new Date().getFullYear()} BitHash Capital. All rights reserved.<br>
+                Protecting your investments is our top priority.</p>
+            </div>
+        </body>
+        </html>
+      `,
+      
+      login_success: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Login Successful - BitHash Capital</title>
+            <style>
+                body { font-family: 'Arial', sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background: linear-gradient(135deg, #00b894 0%, #00a085 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+                .header h1 { color: white; margin: 0; font-size: 28px; }
+                .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+                .success-box { background: #d4edda; border: 2px solid #c3e6cb; padding: 20px; border-radius: 8px; margin: 20px 0; }
+                .footer { text-align: center; margin-top: 30px; color: #666; font-size: 12px; }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>Login Successful</h1>
+            </div>
+            <div class="content">
+                <h2>Hello ${options.name},</h2>
+                
+                <div class="success-box">
+                    <h3>Welcome Back to BitHash Capital!</h3>
+                    <p>Your login was successful. You can now access your investment dashboard.</p>
+                    <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+                    <p><strong>IP Address:</strong> ${options.ipAddress || 'Unknown'}</p>
+                </div>
+                
+                <p>If this wasn't you, please contact our support team immediately.</p>
+                
+                <p>Happy investing!<br>The BitHash Capital Team</p>
+            </div>
+            <div class="footer">
+                <p>&copy; ${new Date().getFullYear()} BitHash Capital. All rights reserved.</p>
+            </div>
+        </body>
+        </html>
+      `
+    };
+
+    const template = emailTemplates[options.template] || options.html;
+    
+    const mailOptions = {
+      from: `BitHash Capital <${process.env.EMAIL_FROM || 'info@bithashcapital.live'}>`,
+      to: options.email,
+      subject: options.subject,
+      html: template,
+      text: options.message
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log('Professional email sent successfully to:', options.email);
+  } catch (err) {
+    console.error('Error sending professional email:', err);
+    throw new Error('Failed to send email');
+  }
+};
+
+
+
+
+
+
 // Routes
 
 
 
 
-// Enhanced Signup Endpoint with Referral Link Support
-app.post('/api/signup', [
-    body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
-    body('lastName').trim().notEmpty().withMessage('Last name is required').escape(),
-    body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
-    body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-        .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
-        .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
-        .matches(/[0-9]/).withMessage('Password must contain at least one number')
-        .matches(/[^A-Za-z0-9]/).withMessage('Password must contain at least one special character'),
-    body('city').trim().notEmpty().withMessage('City is required').escape(),
-    body('referralCode').optional().trim().escape() // Changed from referredBy to referralCode
+// Enhanced Signup Endpoint with OTP
+app.post('/api/auth/signup', [
+  body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
+  body('lastName').trim().notEmpty().withMessage('Last name is required').escape(),
+  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+      .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
+      .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
+      .matches(/[0-9]/).withMessage('Password must contain at least one number')
+      .matches(/[^A-Za-z0-9]/).withMessage('Password must contain at least one special character'),
+  body('city').trim().notEmpty().withMessage('City is required').escape(),
+  body('referralCode').optional().trim().escape()
 ], async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({
-            status: 'fail',
-            errors: errors.array()
-        });
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { firstName, lastName, email, password, city, referralCode } = req.body;
+
+    // Check if email already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Email already in use'
+      });
     }
 
-    try {
-        const { firstName, lastName, email, password, city, referralCode } = req.body;
+    const hashedPassword = await bcrypt.hash(password, 12);
+    const newReferralCode = generateReferralCode();
 
-        // Check if email already exists
-        const existingUser = await User.findOne({ email });
-        if (existingUser) {
-            return res.status(400).json({
-                status: 'fail',
-                message: 'Email already in use'
-            });
+    let referredByUser = null;
+    let referralSource = 'organic';
+
+    // Handle referral code
+    if (referralCode) {
+      let actualReferralCode = referralCode;
+      if (referralCode.includes('-')) {
+        const parts = referralCode.split('-');
+        if (parts.length > 1) {
+          actualReferralCode = parts[parts.length - 1];
         }
-
-        const hashedPassword = await bcrypt.hash(password, 12);
-        const newReferralCode = generateReferralCode();
-
-        let referredByUser = null;
-        let referralSource = 'organic';
-
-        // Handle referral code from URL parameter
-        if (referralCode) {
-            console.log('Processing referral code:', referralCode);
-            
-            // Handle both formats: "firstName-code" and just "code"
-            let actualReferralCode = referralCode;
-            
-            // Check if it's in "firstName-code" format
-            if (referralCode.includes('-')) {
-                const parts = referralCode.split('-');
-                if (parts.length > 1) {
-                    actualReferralCode = parts[parts.length - 1]; // Take the last part as the code
-                }
-            }
-            
-            referredByUser = await User.findOne({ referralCode: actualReferralCode });
-            
-            if (referredByUser) {
-                referralSource = 'referral_link';
-                console.log(`Referral found: ${referredByUser.firstName} ${referredByUser.lastName} (${referredByUser.email})`);
-            } else {
-                console.log('No user found with referral code:', actualReferralCode);
-                // Don't fail signup if referral code is invalid, just proceed without referral
-            }
-        }
-
-        const newUser = await User.create({
-            firstName,
-            lastName,
-            email,
-            password: hashedPassword,
-            city,
-            referralCode: newReferralCode,
-            referredBy: referredByUser ? referredByUser._id : undefined
-        });
-
-        // If user was referred, create downline relationship
-        if (referredByUser) {
-            try {
-                // Get current commission settings
-                const commissionSettings = await CommissionSettings.findOne({ isActive: true }) || 
-                    await CommissionSettings.create({
-                        commissionPercentage: 5,
-                        commissionRounds: 3,
-                        updatedBy: referredByUser._id // Use referring user's ID
-                    });
-
-                // Create downline relationship
-                await DownlineRelationship.create({
-                    upline: referredByUser._id,
-                    downline: newUser._id,
-                    commissionPercentage: commissionSettings.commissionPercentage,
-                    commissionRounds: commissionSettings.commissionRounds,
-                    remainingRounds: commissionSettings.commissionRounds,
-                    assignedBy: referredByUser._id, // Self-assigned through referral
-                    status: 'active'
-                });
-
-                console.log(`Downline relationship created: ${referredByUser.email} -> ${newUser.email}`);
-
-                // Update referring user's stats
-                await User.findByIdAndUpdate(referredByUser._id, {
-                    $inc: {
-                        'referralStats.totalReferrals': 1,
-                        'downlineStats.totalDownlines': 1,
-                        'downlineStats.activeDownlines': 1
-                    }
-                });
-
-                // Log referral activity for both users
-                await logActivity('referral_signup', 'user', newUser._id, referredByUser._id, 'User', req, {
-                    referredUser: newUser._id,
-                    referralCode: referralCode
-                });
-
-            } catch (relationshipError) {
-                console.error('Error creating downline relationship:', relationshipError);
-                // Don't fail the signup if relationship creation fails
-            }
-        }
-
-        const token = generateJWT(newUser._id);
-
-        // Send welcome email (fire and forget)
-        try {
-            const welcomeMessage = `Welcome to BitHash, ${firstName}! Your account has been successfully created.`;
-            if (referredByUser) {
-                welcomeMessage += ` You were referred by ${referredByUser.firstName}.`;
-            }
-            
-            await sendEmail({
-                email: newUser.email,
-                subject: 'Welcome to BitHash',
-                message: welcomeMessage,
-                html: `<p>${welcomeMessage}</p>`
-            });
-
-            // Send referral success email to referring user
-            if (referredByUser) {
-                const referralSuccessMessage = `Great news! ${firstName} ${lastName} has joined BitHash Capital using your referral link.`;
-                await sendEmail({
-                    email: referredByUser.email,
-                    subject: 'New Referral on BitHash Capital!',
-                    message: referralSuccessMessage,
-                    html: `<p>${referralSuccessMessage}</p>`
-                });
-            }
-        } catch (emailError) {
-            console.error('Failed to send welcome email:', emailError);
-            // Don't fail the signup if email fails
-        }
-
-        // Set cookie
-        res.cookie('jwt', token, {
-            expires: new Date(Date.now() + JWT_COOKIE_EXPIRES * 24 * 60 * 60 * 1000),
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict'
-        });
-
-        // Return success response with user data
-        res.status(201).json({
-            status: 'success',
-            token,
-            data: {
-                user: {
-                    id: newUser._id,
-                    firstName: newUser.firstName,
-                    lastName: newUser.lastName,
-                    email: newUser.email,
-                    referralCode: newUser.referralCode,
-                    referredBy: referredByUser ? {
-                        id: referredByUser._id,
-                        name: `${referredByUser.firstName} ${referredByUser.lastName}`
-                    } : null
-                }
-            }
-        });
-
-        // Log successful signup AFTER sending response (non-blocking)
-        try {
-            const deviceInfo = await getUserDeviceInfo(req);
-            await SystemLog.create({
-                action: 'signup_complete',
-                entity: 'User',
-                entityId: newUser._id,
-                performedBy: newUser._id,
-                performedByModel: 'User',
-                ip: deviceInfo.ip,
-                device: deviceInfo.device,
-                location: deviceInfo.location,
-                changes: {
-                    userId: newUser._id,
-                    referralUsed: !!referredByUser,
-                    referralSource: referralSource,
-                    referringUser: referredByUser ? referredByUser._id : null
-                }
-            });
-        } catch (logError) {
-            console.error('Failed to log signup activity:', logError);
-        }
-
-    } catch (err) {
-        console.error('Signup error:', err);
-        
-        res.status(500).json({
-            status: 'error',
-            message: 'An error occurred during signup'
-        });
+      }
+      
+      referredByUser = await User.findOne({ referralCode: actualReferralCode });
+      if (referredByUser) {
+        referralSource = 'referral_link';
+      }
     }
+
+    // Create user (but don't mark as verified yet)
+    const newUser = await User.create({
+      firstName,
+      lastName,
+      email,
+      password: hashedPassword,
+      city,
+      referralCode: newReferralCode,
+      referredBy: referredByUser ? referredByUser._id : undefined,
+      isVerified: false // Will be verified after OTP
+    });
+
+    // Generate OTP for signup verification
+    const otp = generateOTP();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes for signup
+
+    await OTP.create({
+      email: newUser.email,
+      otp,
+      type: 'signup',
+      expiresAt,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    // Send welcome email with OTP
+    await sendProfessionalEmail({
+      email: newUser.email,
+      subject: 'Welcome to BitHash Capital - Verify Your Account',
+      template: 'otp',
+      name: `${newUser.firstName} ${newUser.lastName}`,
+      otp: otp
+    });
+
+    // Generate temporary token for OTP verification
+    const tempToken = generateJWT(newUser._id);
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Account created. Please verify your email with the code sent.',
+      tempToken: tempToken,
+      requiresVerification: true,
+      data: {
+        user: {
+          id: newUser._id,
+          firstName: newUser.firstName,
+          lastName: newUser.lastName,
+          email: newUser.email
+        }
+      }
+    });
+
+    // Log signup activity
+    await logActivity('signup_initiated', 'user', newUser._id, newUser._id, 'User', req, {
+      referralUsed: !!referredByUser,
+      referralSource: referralSource
+    });
+
+  } catch (err) {
+    console.error('Signup error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred during signup'
+    });
+  }
 });
+
+
+
+
+
+// Generate OTP
+const generateOTP = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+// Send OTP Endpoint
+app.post('/api/auth/send-otp', [
+  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { email } = req.body;
+    
+    // Check if user exists
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'No account found with this email address'
+      });
+    }
+
+    // Generate OTP
+    const otp = generateOTP();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+
+    // Delete any existing OTPs for this email
+    await OTP.deleteMany({ email, type: 'login' });
+
+    // Create new OTP
+    const otpRecord = await OTP.create({
+      email,
+      otp,
+      type: 'login',
+      expiresAt,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    // Get user name for email
+    const userName = `${user.firstName} ${user.lastName}`;
+
+    // Send OTP email
+    await sendProfessionalEmail({
+      email: user.email,
+      subject: 'Your Verification Code - BitHash Capital',
+      template: 'otp',
+      name: userName,
+      otp: otp
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Verification code sent to your email'
+    });
+
+    // Log the activity
+    await logActivity('send_otp', 'otp', otpRecord._id, user._id, 'User', req, {
+      email: email,
+      type: 'login'
+    });
+
+  } catch (err) {
+    console.error('Send OTP error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to send verification code'
+    });
+  }
+});
+
+// Verify OTP Endpoint
+app.post('/api/auth/verify-otp', [
+  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
+  body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { email, otp } = req.body;
+
+    // Find the OTP record
+    const otpRecord = await OTP.findOne({
+      email,
+      otp,
+      type: 'login',
+      used: false,
+      expiresAt: { $gt: new Date() }
+    });
+
+    if (!otpRecord) {
+      // Increment attempts if OTP exists but is invalid
+      await OTP.updateOne(
+        { email, type: 'login' },
+        { $inc: { attempts: 1 } }
+      );
+
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Invalid or expired verification code'
+      });
+    }
+
+    // Find user
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Mark OTP as used
+    otpRecord.used = true;
+    await otpRecord.save();
+
+    // Generate JWT token
+    const token = generateJWT(user._id);
+
+    // Update last login
+    user.lastLogin = new Date();
+    const deviceInfo = await getUserDeviceInfo(req);
+    user.loginHistory.push(deviceInfo);
+    await user.save();
+
+    // Send login success email
+    await sendProfessionalEmail({
+      email: user.email,
+      subject: 'Login Successful - BitHash Capital',
+      template: 'login_success',
+      name: `${user.firstName} ${user.lastName}`,
+      ipAddress: deviceInfo.ip
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Verification successful',
+      token: token,
+      data: {
+        user: {
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email
+        }
+      }
+    });
+
+    // Log successful verification
+    await logActivity('verify_otp_success', 'otp', otpRecord._id, user._id, 'User', req, {
+      email: email,
+      type: 'login'
+    });
+
+  } catch (err) {
+    console.error('Verify OTP error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to verify code'
+    });
+  }
+});
+
+// Resend OTP Endpoint (triggers send-otp again as requested)
+app.post('/api/auth/resend-otp', [
+  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'fail',
+      errors: errors.array()
+    });
+  }
+
+  try {
+    const { email } = req.body;
+    
+    // Simply call the send-otp logic again
+    // This reuses the same send-otp functionality
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'No account found with this email address'
+      });
+    }
+
+    const otp = generateOTP();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+    // Delete any existing OTPs
+    await OTP.deleteMany({ email, type: 'login' });
+
+    // Create new OTP
+    const otpRecord = await OTP.create({
+      email,
+      otp,
+      type: 'login',
+      expiresAt,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    // Send new OTP email
+    await sendProfessionalEmail({
+      email: user.email,
+      subject: 'Your New Verification Code - BitHash Capital',
+      template: 'otp',
+      name: `${user.firstName} ${user.lastName}`,
+      otp: otp
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: 'New verification code sent to your email'
+    });
+
+    await logActivity('resend_otp', 'otp', otpRecord._id, user._id, 'User', req, {
+      email: email,
+      type: 'login'
+    });
+
+  } catch (err) {
+    console.error('Resend OTP error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to resend verification code'
+    });
+  }
+});
+
+
 
 
 
@@ -3135,20 +3549,18 @@ app.get('/api/referrals/validate/:code', async (req, res) => {
 
 
 
-// User Login with Comprehensive Tracking
-app.post('/api/login', [
+
+
+
+
+// Enhanced Login Endpoint with OTP
+app.post('/api/auth/login', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
   body('password').notEmpty().withMessage('Password is required'),
   body('rememberMe').optional().isBoolean().withMessage('Remember me must be a boolean')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    // Track failed validation
-    await logUserActivity(req, 'login_attempt', 'failed', {
-      error: 'Validation failed',
-      fields: errors.array().map(err => err.param)
-    });
-    
     return res.status(400).json({
       status: 'fail',
       errors: errors.array()
@@ -3158,20 +3570,14 @@ app.post('/api/login', [
   try {
     const { email, password, rememberMe } = req.body;
 
-    // Track login attempt
-    await logUserActivity(req, 'login_attempt', 'pending', {
-      email,
-      rememberMe: !!rememberMe
-    });
-
     const user = await User.findOne({ email }).select('+password +twoFactorAuth.secret');
     if (!user || !(await bcrypt.compare(password, user.password))) {
-      // Track failed login
-      await logUserActivity(req, 'login_attempt', 'failed', {
-        error: 'Invalid credentials',
-        email
+      // Log failed attempt
+      await logActivity('failed_login', 'auth', null, null, 'System', req, {
+        email: email,
+        reason: 'Invalid credentials'
       });
-      
+
       return res.status(401).json({
         status: 'fail',
         message: 'Incorrect email or password'
@@ -3179,102 +3585,82 @@ app.post('/api/login', [
     }
 
     if (user.status !== 'active') {
-      // Track login to suspended account
-      await logUserActivity(req, 'login_attempt', 'failed', {
-        error: 'Account suspended',
-        userId: user._id,
-        status: user.status
-      });
-      
       return res.status(401).json({
         status: 'fail',
         message: 'Your account has been suspended. Please contact support.'
       });
     }
 
-    const token = generateJWT(user._id);
-
-    // Update last login
-    user.lastLogin = new Date();
-    const deviceInfo = await getUserDeviceInfo(req);
-    user.loginHistory.push(deviceInfo);
-    await user.save();
-
-    // Track device info
-    await logUserActivity(req, 'device_login', 'success', {
-      deviceType: getDeviceType(req),
-      ipAddress: deviceInfo.ip,
-      location: deviceInfo.location,
-      os: getOSFromUserAgent(req.headers['user-agent']),
-      browser: getBrowserFromUserAgent(req.headers['user-agent'])
-    }, user);
-
-    // Set cookie
-    res.cookie('jwt', token, {
-      expires: rememberMe ? new Date(Date.now() + JWT_COOKIE_EXPIRES * 24 * 60 * 60 * 1000) : undefined,
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict'
-    });
-
-    // Track session creation
-    await logUserActivity(req, 'session_created', 'success', {
-      userId: user._id,
-      sessionType: 'jwt',
-      rememberMe: !!rememberMe,
-      duration: rememberMe ? JWT_COOKIE_EXPIRES + ' days' : 'session'
-    });
-
-    const responseData = {
-      status: 'success',
-      token,
-      data: {
-        user: {
-          id: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email
-        }
-      }
-    };
-
-    // Check if 2FA is enabled
+    // If user has 2FA enabled, handle that first
     if (user.twoFactorAuth.enabled) {
-      responseData.twoFactorRequired = true;
-      responseData.message = 'Two-factor authentication required';
+      const tempToken = generateJWT(user._id);
       
-      // Track 2FA required
-      await logUserActivity(req, '2fa_required', 'pending', {
-        userId: user._id
-      }, user);
-    } else {
-      // Track successful login
-      await logUserActivity(req, 'login', 'success', {
-        userId: user._id,
-        rememberMe: !!rememberMe
-      }, user);
+      return res.status(200).json({
+        status: 'success',
+        requires2FA: true,
+        tempToken: tempToken,
+        message: 'Two-factor authentication required'
+      });
     }
 
-    res.status(200).json(responseData);
+    // Generate OTP for login verification
+    const otp = generateOTP();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-    // Also log to system activity
-    await logActivity('user_login', 'user', user._id, user._id, 'User', req);
+    // Delete any existing OTPs
+    await OTP.deleteMany({ email, type: 'login' });
+
+    // Create new OTP
+    await OTP.create({
+      email,
+      otp,
+      type: 'login',
+      expiresAt,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    // Send OTP email
+    await sendProfessionalEmail({
+      email: user.email,
+      subject: 'Login Verification - BitHash Capital',
+      template: 'otp',
+      name: `${user.firstName} ${user.lastName}`,
+      otp: otp
+    });
+
+    // Generate temporary token for OTP verification
+    const tempToken = generateJWT(user._id);
+
+    res.status(200).json({
+      status: 'success',
+      requiresOTP: true,
+      tempToken: tempToken,
+      message: 'Verification code sent to your email'
+    });
+
+    // Log OTP sent activity
+    await logActivity('login_otp_sent', 'auth', user._id, user._id, 'User', req, {
+      email: email
+    });
 
   } catch (err) {
     console.error('Login error:', err);
-    
-    // Track login error
-    await logUserActivity(req, 'login_error', 'failed', {
-      error: err.message,
-      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
-    });
-
     res.status(500).json({
       status: 'error',
       message: 'An error occurred during login'
     });
   }
 });
+
+
+
+
+
+
+
+
+
 app.post('/api/auth/verify-2fa', [
   body('token').notEmpty().withMessage('Token is required'),
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
@@ -3330,6 +3716,7 @@ app.post('/api/auth/verify-2fa', [
   }
 });
 
+// Enhanced Google Signin with OTP
 app.post('/api/auth/google', async (req, res) => {
   try {
     const { credential } = req.body;
@@ -3342,6 +3729,8 @@ app.post('/api/auth/google', async (req, res) => {
     const { email, given_name, family_name, sub } = payload;
 
     let user = await User.findOne({ email });
+    const isNewUser = !user;
+
     if (!user) {
       // Create new user with Google auth
       const referralCode = generateReferralCode();
@@ -3350,8 +3739,16 @@ app.post('/api/auth/google', async (req, res) => {
         lastName: family_name,
         email,
         googleId: sub,
-        isVerified: true,
+        isVerified: true, // Google users are automatically verified
         referralCode
+      });
+
+      // Send welcome email
+      await sendProfessionalEmail({
+        email: user.email,
+        subject: 'Welcome to BitHash Capital',
+        template: 'welcome',
+        name: `${user.firstName} ${user.lastName}`
       });
     } else if (!user.googleId) {
       // Existing user, add Google auth
@@ -3360,36 +3757,45 @@ app.post('/api/auth/google', async (req, res) => {
       await user.save();
     }
 
-    const token = generateJWT(user._id);
+    // Generate OTP for Google signin
+    const otp = generateOTP();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-    // Update last login
-    user.lastLogin = new Date();
-    const deviceInfo = await getUserDeviceInfo(req);
-    user.loginHistory.push(deviceInfo);
-    await user.save();
-
-    // Set cookie
-    res.cookie('jwt', token, {
-      expires: new Date(Date.now() + JWT_COOKIE_EXPIRES * 24 * 60 * 60 * 1000),
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict'
+    await OTP.deleteMany({ email, type: 'login' });
+    await OTP.create({
+      email,
+      otp,
+      type: 'login',
+      expiresAt,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
     });
+
+    // Send OTP email
+    await sendProfessionalEmail({
+      email: user.email,
+      subject: 'Login Verification - BitHash Capital',
+      template: 'otp',
+      name: `${user.firstName} ${user.lastName}`,
+      otp: otp
+    });
+
+    const tempToken = generateJWT(user._id);
 
     res.status(200).json({
       status: 'success',
-      token,
-      data: {
-        user: {
-          id: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email
-        }
-      }
+      requiresOTP: true,
+      tempToken: tempToken,
+      isNewUser: isNewUser,
+      message: 'Verification code sent to your email'
     });
 
-    await logActivity('google-login', 'user', user._id, user._id, 'User', req);
+    // Log Google signin activity
+    await logActivity('google_signin_otp_sent', 'auth', user._id, user._id, 'User', req, {
+      email: email,
+      isNewUser: isNewUser
+    });
+
   } catch (err) {
     console.error('Google auth error:', err);
     res.status(500).json({
@@ -13443,7 +13849,42 @@ app.delete('/api/admin/notifications/delete-all-read', adminProtect, async (req,
 
 
 
+// Security monitoring middleware for failed OTP attempts
+const monitorFailedOTPAttempts = async (email, req) => {
+  try {
+    const recentFailures = await OTP.countDocuments({
+      email,
+      type: 'login',
+      used: false,
+      attempts: { $gte: 3 },
+      createdAt: { $gte: new Date(Date.now() - 30 * 60 * 1000) } // Last 30 minutes
+    });
 
+    if (recentFailures >= 5) {
+      // Send security alert
+      const user = await User.findOne({ email });
+      if (user) {
+        await sendProfessionalEmail({
+          email: user.email,
+          subject: 'Suspicious Activity Detected - BitHash Capital',
+          template: 'login_alert',
+          name: `${user.firstName} ${user.lastName}`,
+          ipAddress: req.ip,
+          device: req.headers['user-agent']
+        });
+
+        // Log security event
+        await logActivity('suspicious_otp_attempts', 'security', user._id, user._id, 'System', req, {
+          email: email,
+          failureCount: recentFailures,
+          action: 'security_alert_sent'
+        });
+      }
+    }
+  } catch (err) {
+    console.error('Failed OTP monitoring error:', err);
+  }
+};
 
 
 
@@ -13575,5 +14016,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
