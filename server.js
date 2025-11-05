@@ -108,14 +108,13 @@ redis.on('error', (err) => {
   console.error('Redis error:', err);
 });
 
-// Email transporter with production-ready settings
 const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST || 'sandbox.smtp.mailtrap.io',
-  port: process.env.EMAIL_PORT || 2525,
+  host: process.env.EMAIL_HOST,
+  port: process.env.EMAIL_PORT,
   secure: process.env.EMAIL_SECURE === 'true',
   auth: {
-    user: process.env.EMAIL_USER || '7c707ac161af1c',
-    pass: process.env.EMAIL_PASS || '6c08aa4f2c679a'
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
   },
   tls: {
     rejectUnauthorized: false
@@ -124,6 +123,7 @@ const transporter = nodemailer.createTransport({
   maxConnections: 5,
   maxMessages: 100
 });
+
 
 // Google OAuth client with enhanced configuration
 const googleClient = new OAuth2Client({
@@ -13555,6 +13555,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
