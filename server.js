@@ -2261,55 +2261,6 @@ const setupWebSocketServer = (server) => {
 
 
 
-
-
-// Enhanced activity logger with device and location info
-const logUserActivity = async (req, action, status = 'success', metadata = {}) => {
-  try {
-    const deviceInfo = await getUserDeviceInfo(req);
-    
-    await UserLog.create({
-      user: req.user?._id || null,
-      username: req.user?.email || (action === 'signup' ? metadata.email : 'unknown'),
-      email: req.user?.email || (action === 'signup' ? metadata.email : null),
-      userFullName: req.user?.fullName || (action === 'signup' ? `${metadata.firstName} ${metadata.lastName}` : 'Unknown'),
-      action: action,
-      actionCategory: 'authentication',
-      ipAddress: deviceInfo.ip,
-      userAgent: deviceInfo.device,
-      deviceInfo: {
-        type: getDeviceType(req),
-        os: getOSFromUserAgent(req.headers['user-agent']),
-        browser: getBrowserFromUserAgent(req.headers['user-agent']),
-        platform: 'web'
-      },
-      location: {
-        ip: deviceInfo.ip,
-        country: { name: deviceInfo.location?.split(', ')[2] || 'Unknown' },
-        city: deviceInfo.location?.split(', ')[0] || 'Unknown'
-      },
-      status: status,
-      metadata: metadata,
-      riskLevel: 'low',
-      isSuspicious: false
-    });
-
-  } catch (err) {
-    console.error('Error logging user activity:', err);
-  }
-};
-
-
-
-
-
-
-
-
-
-
-
-
 module.exports = {
   User,
   Admin,
@@ -2437,6 +2388,40 @@ const verifyTOTP = (token, secret) => {
     window: 2
   });
 };
+
+
+
+// Generate full referral link for users
+app.get('/api/users/referral-link', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    const referralLink = `https://www.bithashcapital.live/ref/${user.referralCode}`;
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        referralCode: user.referralCode,
+        referralLink: referralLink,
+        shareMessage: `Join BitHash Capital using my referral link: ${referralLink}`
+      }
+    });
+
+  } catch (err) {
+    console.error('Get referral link error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to generate referral link'
+    });
+  }
+});
 
 
 
@@ -2881,10 +2866,7 @@ initializeLanguages();
 // Routes
 
 
-
-
-
-// Enhanced User Signup with Referral System
+// Enhanced User Signup with Referral System Integration
 app.post('/api/signup', [
   body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
   body('lastName').trim().notEmpty().withMessage('Last name is required').escape(),
@@ -2921,33 +2903,28 @@ app.post('/api/signup', [
     const referralCode = generateReferralCode();
 
     let referredByUser = null;
-    let referralSource = 'organic';
+    let referralSource = null;
 
-    // Handle referral system
-    if (referredBy) {
-      referredByUser = await User.findOne({ referralCode: referredBy });
-      if (!referredByUser) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'Invalid referral code'
-        });
+    // Handle referral code from query parameter (when coming from referral link)
+    const referralCodeFromQuery = req.query.ref;
+    
+    // Use either the query parameter or the body field
+    const finalReferralCode = referredBy || referralCodeFromQuery;
+
+    if (finalReferralCode) {
+      referredByUser = await User.findOne({ referralCode: finalReferralCode });
+      if (referredByUser) {
+        referralSource = referredByUser._id;
+        
+        // Log the referral usage
+        console.log(`🔗 Referral used: ${email} was referred by ${referredByUser.email} (${finalReferralCode})`);
+      } else {
+        console.log(`❌ Invalid referral code: ${finalReferralCode}`);
+        // Don't fail signup if referral code is invalid, just proceed without referral
       }
-      
-      // Update referral stats for the referring user
-      await User.findByIdAndUpdate(referredByUser._id, {
-        $inc: {
-          'referralStats.totalReferrals': 1,
-          'downlineStats.totalDownlines': 1,
-          'downlineStats.activeDownlines': 1
-        }
-      });
-
-      referralSource = 'referral';
-      
-      console.log(`🎯 New user ${email} signed up via referral from ${referredByUser.email}`);
     }
 
-    // Create new user
+    // Create new user with referral information
     const newUser = await User.create({
       firstName,
       lastName,
@@ -2955,7 +2932,7 @@ app.post('/api/signup', [
       password: hashedPassword,
       city,
       referralCode,
-      referredBy: referredByUser ? referredByUser._id : undefined,
+      referredBy: referralSource,
       referralStats: {
         totalReferrals: 0,
         totalEarnings: 0,
@@ -2971,60 +2948,70 @@ app.post('/api/signup', [
       }
     });
 
-    // Create downline relationship if referred
+    // If user was referred, create downline relationship
     if (referredByUser) {
-      const commissionSettings = await CommissionSettings.findOne({ isActive: true }) || 
-        await CommissionSettings.create({
-          commissionPercentage: 5,
-          commissionRounds: 3,
-          updatedBy: referredByUser._id // Use referring user as updater
+      try {
+        // Get current commission settings
+        const commissionSettings = await CommissionSettings.findOne({ isActive: true }) || 
+          await CommissionSettings.create({
+            commissionPercentage: 5,
+            commissionRounds: 3,
+            updatedBy: referredByUser._id // Use referring user as updater
+          });
+
+        // Create downline relationship
+        await DownlineRelationship.create({
+          upline: referredByUser._id,
+          downline: newUser._id,
+          commissionPercentage: commissionSettings.commissionPercentage,
+          commissionRounds: commissionSettings.commissionRounds,
+          remainingRounds: commissionSettings.commissionRounds,
+          assignedBy: referredByUser._id,
+          status: 'active'
         });
 
-      await DownlineRelationship.create({
-        upline: referredByUser._id,
-        downline: newUser._id,
-        commissionPercentage: commissionSettings.commissionPercentage,
-        commissionRounds: commissionSettings.commissionRounds,
-        remainingRounds: commissionSettings.commissionRounds,
-        assignedBy: referredByUser._id, // Use referring user as assigner
-        status: 'active'
-      });
+        // Update referring user's stats
+        await User.findByIdAndUpdate(referredByUser._id, {
+          $inc: {
+            'referralStats.totalReferrals': 1,
+            'downlineStats.totalDownlines': 1,
+            'downlineStats.activeDownlines': 1
+          }
+        });
 
-      console.log(`🔗 Downline relationship created: ${referredByUser.email} -> ${newUser.email}`);
+        console.log(`✅ Downline relationship created: ${referredByUser.email} -> ${newUser.email}`);
+
+        // Log referral activity for both users
+        await logActivity('referral_signup', 'user', newUser._id, referredByUser._id, 'User', req, {
+          referredUser: newUser._id,
+          referralCode: finalReferralCode
+        });
+
+      } catch (relationshipError) {
+        console.error('Error creating downline relationship:', relationshipError);
+        // Don't fail signup if relationship creation fails
+      }
     }
 
     const token = generateJWT(newUser._id);
 
-    // Send welcome email with referral information
+    // Send welcome email (fire and forget)
     try {
-      const welcomeMessage = referredByUser 
-        ? `Welcome to BitHash, ${firstName}! Your account has been successfully created through referral from ${referredByUser.firstName}.`
-        : `Welcome to BitHash, ${firstName}! Your account has been successfully created.`;
+      const welcomeMessage = `Welcome to BitHash, ${firstName}! Your account has been successfully created.`;
       
-      const referralInfo = referredByUser 
-        ? `<p>You were referred by ${referredByUser.firstName} ${referredByUser.lastName}. You'll both benefit from our referral program!</p>`
-        : '';
+      if (referredByUser) {
+        welcomeMessage += ` You were referred by ${referredByUser.firstName}.`;
+      }
       
       await sendEmail({
         email: newUser.email,
-        subject: 'Welcome to BitHash - Account Created Successfully',
+        subject: 'Welcome to BitHash',
         message: welcomeMessage,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #003366;">Welcome to BitHash, ${firstName}!</h2>
-            <p>Your account has been successfully created and is ready to use.</p>
-            ${referralInfo}
-            <p><strong>Your Referral Code:</strong> ${referralCode}</p>
-            <p>Share your referral link to earn commissions from your friends' investments:</p>
-            <p style="background: #f5f5f5; padding: 10px; border-radius: 5px;">
-              https://www.bithashcapital.live/signup.html?ref=${referralCode}
-            </p>
-            <p>Start investing and grow your wealth with BitHash!</p>
-          </div>
-        `
+        html: `<p>${welcomeMessage}</p>`
       });
     } catch (emailError) {
       console.error('Failed to send welcome email:', emailError);
+      // Don't fail the signup if email fails
     }
 
     // Set cookie
@@ -3046,15 +3033,12 @@ app.post('/api/signup', [
           lastName: newUser.lastName,
           email: newUser.email,
           referralCode: newUser.referralCode,
-          referredBy: referredByUser ? {
-            id: referredByUser._id,
-            name: `${referredByUser.firstName} ${referredByUser.lastName}`
-          } : null
+          referredBy: referralSource
         }
       }
     });
 
-    // Log successful signup AFTER sending response
+    // Log successful signup AFTER sending response (non-blocking)
     try {
       const deviceInfo = await getUserDeviceInfo(req);
       await SystemLog.create({
@@ -3070,16 +3054,32 @@ app.post('/api/signup', [
           userId: newUser._id,
           referralUsed: !!referredByUser,
           referralSource: referralSource,
-          referringUser: referredByUser ? referredByUser._id : null
+          referralCode: finalReferralCode
         }
       });
 
-      // Also log as user activity
-      await logUserActivity(req, 'signup', 'success', {
-        userId: newUser._id,
-        referralCode: newUser.referralCode,
-        referredBy: referredByUser ? referredByUser._id : null,
-        source: referralSource
+      // Also log in UserLog for comprehensive tracking
+      await UserLog.create({
+        user: newUser._id,
+        username: newUser.email,
+        email: newUser.email,
+        userFullName: `${firstName} ${lastName}`,
+        action: 'signup',
+        actionCategory: 'authentication',
+        ipAddress: deviceInfo.ip,
+        userAgent: deviceInfo.device,
+        deviceInfo: {
+          type: getDeviceType(req),
+          os: getOSFromUserAgent(req.headers['user-agent']),
+          browser: getBrowserFromUserAgent(req.headers['user-agent']),
+          platform: 'web'
+        },
+        status: 'success',
+        metadata: {
+          referralUsed: !!referredByUser,
+          referralSource: referralSource,
+          city: city
+        }
       });
 
     } catch (logError) {
@@ -3098,80 +3098,34 @@ app.post('/api/signup', [
 
 
 
-
-// Validate referral code and redirect to signup
-app.get('/api/referral/:referralCode', async (req, res) => {
+// Referral link redirect endpoint - takes users to signup page with referral code
+app.get('/ref/:referralCode', async (req, res) => {
   try {
     const { referralCode } = req.params;
-
-    // Validate referral code format
-    if (!referralCode || referralCode.length !== 8) {
-      return res.redirect('https://www.bithashcapital.live/signup.html');
-    }
-
-    // Check if referral code exists
-    const referringUser = await User.findOne({ referralCode });
-    if (!referringUser) {
-      // Redirect to signup page even if code is invalid, but without referral
-      return res.redirect('https://www.bithashcapital.live/signup.html');
-    }
-
-    // Store referral code in session or return it for frontend
-    const encodedReferral = encodeURIComponent(referralCode);
     
-    // Redirect to signup page with referral parameter
-    res.redirect(`https://www.bithashcapital.live/signup.html?ref=${encodedReferral}`);
+    // Verify the referral code exists
+    const referringUser = await User.findOne({ referralCode });
+    
+    if (!referringUser) {
+      // If referral code is invalid, still redirect to signup but without referral
+      return res.redirect('https://www.bithashcapital.live/signup.html');
+    }
 
-    // Log the referral link usage
-    await logActivity('referral_link_used', 'user', referringUser._id, referringUser._id, 'User', req, {
+    // Redirect to signup page with referral code as query parameter
+    res.redirect(`https://www.bithashcapital.live/signup.html?ref=${referralCode}`);
+    
+    // Log the referral link click
+    await logActivity('referral_link_click', 'user', referringUser._id, referringUser._id, 'User', req, {
       referralCode: referralCode,
-      ipAddress: req.ip,
-      userAgent: req.headers['user-agent']
+      ipAddress: req.ip
     });
 
   } catch (err) {
-    console.error('Referral validation error:', err);
-    // Always redirect to signup page even on error
+    console.error('Referral redirect error:', err);
+    // Still redirect to signup page even if there's an error
     res.redirect('https://www.bithashcapital.live/signup.html');
   }
 });
-
-// Get referral information for a code
-app.get('/api/referral/validate/:referralCode', async (req, res) => {
-  try {
-    const { referralCode } = req.params;
-
-    const referringUser = await User.findOne({ referralCode })
-      .select('firstName lastName referralStats');
-
-    if (!referringUser) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Invalid referral code'
-      });
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        valid: true,
-        referringUser: {
-          firstName: referringUser.firstName,
-          lastName: referringUser.lastName,
-          totalReferrals: referringUser.referralStats?.totalReferrals || 0
-        }
-      }
-    });
-
-  } catch (err) {
-    console.error('Referral validation error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to validate referral code'
-    });
-  }
-});
-
 
 
 // User Login with Comprehensive Tracking
@@ -13600,20 +13554,3 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
