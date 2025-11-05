@@ -2832,132 +2832,287 @@ initializeLanguages();
 // Routes
 
 
-// User Signup with Comprehensive Tracking - FIXED VERSION
+
+
+// Enhanced Signup Endpoint with Referral Link Support
 app.post('/api/signup', [
-  body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
-  body('lastName').trim().notEmpty().withMessage('Last name is required').escape(),
-  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
-  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
-    .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
-    .matches(/[0-9]/).withMessage('Password must contain at least one number')
-    .matches(/[^A-Za-z0-9]/).withMessage('Password must contain at least one special character'),
-  body('city').trim().notEmpty().withMessage('City is required').escape(),
-  body('referredBy').optional().trim().escape()
+    body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
+    body('lastName').trim().notEmpty().withMessage('Last name is required').escape(),
+    body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
+    body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+        .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
+        .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
+        .matches(/[0-9]/).withMessage('Password must contain at least one number')
+        .matches(/[^A-Za-z0-9]/).withMessage('Password must contain at least one special character'),
+    body('city').trim().notEmpty().withMessage('City is required').escape(),
+    body('referralCode').optional().trim().escape() // Changed from referredBy to referralCode
 ], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { firstName, lastName, email, password, city, referredBy } = req.body;
-
-    // Check if email already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Email already in use'
-      });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 12);
-    const referralCode = generateReferralCode();
-
-    let referredByUser = null;
-    if (referredBy) {
-      referredByUser = await User.findOne({ referralCode: referredBy });
-      if (!referredByUser) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
         return res.status(400).json({
-          status: 'fail',
-          message: 'Invalid referral code'
+            status: 'fail',
+            errors: errors.array()
         });
-      }
     }
 
-    const newUser = await User.create({
-      firstName,
-      lastName,
-      email,
-      password: hashedPassword,
-      city,
-      referralCode,
-      referredBy: referredByUser ? referredByUser._id : undefined
-    });
-
-    const token = generateJWT(newUser._id);
-
-    // Send welcome email (fire and forget)
     try {
-      const welcomeMessage = `Welcome to BitHash, ${firstName}! Your account has been successfully created.`;
-      await sendEmail({
-        email: newUser.email,
-        subject: 'Welcome to BitHash',
-        message: welcomeMessage,
-        html: `<p>${welcomeMessage}</p>`
-      });
-    } catch (emailError) {
-      console.error('Failed to send welcome email:', emailError);
-      // Don't fail the signup if email fails
-    }
+        const { firstName, lastName, email, password, city, referralCode } = req.body;
 
-    // Set cookie
-    res.cookie('jwt', token, {
-      expires: new Date(Date.now() + JWT_COOKIE_EXPIRES * 24 * 60 * 60 * 1000),
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict'
-    });
-
-    // Return success response with user data
-    res.status(201).json({
-      status: 'success',
-      token,
-      data: {
-        user: {
-          id: newUser._id,
-          firstName: newUser.firstName,
-          lastName: newUser.lastName,
-          email: newUser.email
+        // Check if email already exists
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'Email already in use'
+            });
         }
-      }
-    });
 
-    // Log successful signup AFTER sending response (non-blocking)
-    try {
-      const deviceInfo = await getUserDeviceInfo(req);
-      await SystemLog.create({
-        action: 'signup_complete',
-        entity: 'User',
-        entityId: newUser._id,
-        performedBy: newUser._id,
-        performedByModel: 'User',
-        ip: deviceInfo.ip,
-        device: deviceInfo.device,
-        location: deviceInfo.location,
-        changes: {
-          userId: newUser._id,
-          referralUsed: !!referredByUser,
-          referralSource: referredByUser ? referredByUser._id : 'organic'
+        const hashedPassword = await bcrypt.hash(password, 12);
+        const newReferralCode = generateReferralCode();
+
+        let referredByUser = null;
+        let referralSource = 'organic';
+
+        // Handle referral code from URL parameter
+        if (referralCode) {
+            console.log('Processing referral code:', referralCode);
+            
+            // Handle both formats: "firstName-code" and just "code"
+            let actualReferralCode = referralCode;
+            
+            // Check if it's in "firstName-code" format
+            if (referralCode.includes('-')) {
+                const parts = referralCode.split('-');
+                if (parts.length > 1) {
+                    actualReferralCode = parts[parts.length - 1]; // Take the last part as the code
+                }
+            }
+            
+            referredByUser = await User.findOne({ referralCode: actualReferralCode });
+            
+            if (referredByUser) {
+                referralSource = 'referral_link';
+                console.log(`Referral found: ${referredByUser.firstName} ${referredByUser.lastName} (${referredByUser.email})`);
+            } else {
+                console.log('No user found with referral code:', actualReferralCode);
+                // Don't fail signup if referral code is invalid, just proceed without referral
+            }
         }
-      });
-    } catch (logError) {
-      console.error('Failed to log signup activity:', logError);
-    }
 
-  } catch (err) {
-    console.error('Signup error:', err);
-    
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred during signup'
-    });
-  }
+        const newUser = await User.create({
+            firstName,
+            lastName,
+            email,
+            password: hashedPassword,
+            city,
+            referralCode: newReferralCode,
+            referredBy: referredByUser ? referredByUser._id : undefined
+        });
+
+        // If user was referred, create downline relationship
+        if (referredByUser) {
+            try {
+                // Get current commission settings
+                const commissionSettings = await CommissionSettings.findOne({ isActive: true }) || 
+                    await CommissionSettings.create({
+                        commissionPercentage: 5,
+                        commissionRounds: 3,
+                        updatedBy: referredByUser._id // Use referring user's ID
+                    });
+
+                // Create downline relationship
+                await DownlineRelationship.create({
+                    upline: referredByUser._id,
+                    downline: newUser._id,
+                    commissionPercentage: commissionSettings.commissionPercentage,
+                    commissionRounds: commissionSettings.commissionRounds,
+                    remainingRounds: commissionSettings.commissionRounds,
+                    assignedBy: referredByUser._id, // Self-assigned through referral
+                    status: 'active'
+                });
+
+                console.log(`Downline relationship created: ${referredByUser.email} -> ${newUser.email}`);
+
+                // Update referring user's stats
+                await User.findByIdAndUpdate(referredByUser._id, {
+                    $inc: {
+                        'referralStats.totalReferrals': 1,
+                        'downlineStats.totalDownlines': 1,
+                        'downlineStats.activeDownlines': 1
+                    }
+                });
+
+                // Log referral activity for both users
+                await logActivity('referral_signup', 'user', newUser._id, referredByUser._id, 'User', req, {
+                    referredUser: newUser._id,
+                    referralCode: referralCode
+                });
+
+            } catch (relationshipError) {
+                console.error('Error creating downline relationship:', relationshipError);
+                // Don't fail the signup if relationship creation fails
+            }
+        }
+
+        const token = generateJWT(newUser._id);
+
+        // Send welcome email (fire and forget)
+        try {
+            const welcomeMessage = `Welcome to BitHash, ${firstName}! Your account has been successfully created.`;
+            if (referredByUser) {
+                welcomeMessage += ` You were referred by ${referredByUser.firstName}.`;
+            }
+            
+            await sendEmail({
+                email: newUser.email,
+                subject: 'Welcome to BitHash',
+                message: welcomeMessage,
+                html: `<p>${welcomeMessage}</p>`
+            });
+
+            // Send referral success email to referring user
+            if (referredByUser) {
+                const referralSuccessMessage = `Great news! ${firstName} ${lastName} has joined BitHash Capital using your referral link.`;
+                await sendEmail({
+                    email: referredByUser.email,
+                    subject: 'New Referral on BitHash Capital!',
+                    message: referralSuccessMessage,
+                    html: `<p>${referralSuccessMessage}</p>`
+                });
+            }
+        } catch (emailError) {
+            console.error('Failed to send welcome email:', emailError);
+            // Don't fail the signup if email fails
+        }
+
+        // Set cookie
+        res.cookie('jwt', token, {
+            expires: new Date(Date.now() + JWT_COOKIE_EXPIRES * 24 * 60 * 60 * 1000),
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict'
+        });
+
+        // Return success response with user data
+        res.status(201).json({
+            status: 'success',
+            token,
+            data: {
+                user: {
+                    id: newUser._id,
+                    firstName: newUser.firstName,
+                    lastName: newUser.lastName,
+                    email: newUser.email,
+                    referralCode: newUser.referralCode,
+                    referredBy: referredByUser ? {
+                        id: referredByUser._id,
+                        name: `${referredByUser.firstName} ${referredByUser.lastName}`
+                    } : null
+                }
+            }
+        });
+
+        // Log successful signup AFTER sending response (non-blocking)
+        try {
+            const deviceInfo = await getUserDeviceInfo(req);
+            await SystemLog.create({
+                action: 'signup_complete',
+                entity: 'User',
+                entityId: newUser._id,
+                performedBy: newUser._id,
+                performedByModel: 'User',
+                ip: deviceInfo.ip,
+                device: deviceInfo.device,
+                location: deviceInfo.location,
+                changes: {
+                    userId: newUser._id,
+                    referralUsed: !!referredByUser,
+                    referralSource: referralSource,
+                    referringUser: referredByUser ? referredByUser._id : null
+                }
+            });
+        } catch (logError) {
+            console.error('Failed to log signup activity:', logError);
+        }
+
+    } catch (err) {
+        console.error('Signup error:', err);
+        
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred during signup'
+        });
+    }
 });
+
+
+
+
+
+
+// Validate referral code endpoint
+app.get('/api/referrals/validate/:code', async (req, res) => {
+    try {
+        const { code } = req.params;
+        
+        if (!code) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'Referral code is required'
+            });
+        }
+
+        let actualReferralCode = code;
+        
+        // Handle both formats: "firstName-code" and just "code"
+        if (code.includes('-')) {
+            const parts = code.split('-');
+            if (parts.length > 1) {
+                actualReferralCode = parts[parts.length - 1];
+            }
+        }
+
+        const referringUser = await User.findOne({ 
+            referralCode: actualReferralCode,
+            status: 'active'
+        }).select('firstName lastName email referralCode');
+
+        if (!referringUser) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'Invalid referral code'
+            });
+        }
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                valid: true,
+                referringUser: {
+                    firstName: referringUser.firstName,
+                    lastName: referringUser.lastName,
+                    referralCode: referringUser.referralCode
+                },
+                message: `You're being referred by ${referringUser.firstName} ${referringUser.lastName}`
+            }
+        });
+
+    } catch (err) {
+        console.error('Referral validation error:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to validate referral code'
+        });
+    }
+});
+
+
+
+
+
+
+
+
 
 
 // User Login with Comprehensive Tracking
@@ -10438,7 +10593,216 @@ app.get('/api/users/downline', protect, async (req, res) => {
 
 
 
+app.get('/api/referrals', protect, async (req, res) => {
+    try {
+        const userId = req.user._id;
 
+        // Get user's referral code and details
+        const user = await User.findById(userId).select('referralCode referralStats firstName lastName email');
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Generate referral link using user's first name and unique code
+        const referralLink = `https://www.bithashcapital.live/signup.html?ref=${user.referralCode}`;
+        const referralLinkWithName = `https://www.bithashcapital.live/signup.html?ref=${encodeURIComponent(user.firstName)}-${user.referralCode}`;
+
+        // Get all downline relationships where this user is the upline
+        const downlineRelationships = await DownlineRelationship.find({ 
+            upline: userId 
+        })
+        .populate('downline', 'firstName lastName email createdAt')
+        .sort({ createdAt: -1 })
+        .lean();
+
+        // Calculate referral statistics
+        const totalReferrals = downlineRelationships.length;
+        const activeReferrals = downlineRelationships.filter(rel => rel.status === 'active').length;
+        
+        // Calculate total earnings from commission history
+        const commissionEarnings = await CommissionHistory.aggregate([
+            { 
+                $match: { 
+                    upline: userId,
+                    status: 'paid'
+                } 
+            },
+            {
+                $group: {
+                    _id: null,
+                    totalEarnings: { $sum: '$commissionAmount' }
+                }
+            }
+        ]);
+
+        const totalEarnings = commissionEarnings.length > 0 ? commissionEarnings[0].totalEarnings : 0;
+
+        // Calculate pending earnings (commissions that are earned but not yet paid)
+        const pendingEarningsResult = await CommissionHistory.aggregate([
+            { 
+                $match: { 
+                    upline: userId,
+                    status: 'pending'
+                } 
+            },
+            {
+                $group: {
+                    _id: null,
+                    totalPending: { $sum: '$commissionAmount' }
+                }
+            }
+        ]);
+
+        const pendingEarnings = pendingEarningsResult.length > 0 ? pendingEarningsResult[0].totalPending : 0;
+
+        // Format referral data for the referrals table
+        const referrals = downlineRelationships.map(relationship => {
+            const downlineUser = relationship.downline;
+            const roundsCompleted = relationship.commissionRounds - relationship.remainingRounds;
+            
+            return {
+                id: relationship._id,
+                fullName: downlineUser ? `${downlineUser.firstName} ${downlineUser.lastName}` : 'Anonymous User',
+                email: downlineUser?.email || 'N/A',
+                joinDate: downlineUser?.createdAt || relationship.createdAt,
+                isActive: relationship.status === 'active',
+                investmentRounds: roundsCompleted,
+                totalEarned: relationship.totalCommissionEarned || 0,
+                status: relationship.status
+            };
+        });
+
+        // Calculate earnings breakdown by round for each referral
+        const earningsBreakdown = await CommissionHistory.aggregate([
+            { 
+                $match: { 
+                    upline: userId,
+                    status: { $in: ['paid', 'pending'] }
+                } 
+            },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'downline',
+                    foreignField: '_id',
+                    as: 'downlineInfo'
+                }
+            },
+            {
+                $unwind: {
+                    path: '$downlineInfo',
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        downline: '$downline',
+                        roundNumber: '$roundNumber'
+                    },
+                    roundEarnings: { $sum: '$commissionAmount' },
+                    downlineName: { 
+                        $first: { 
+                            $cond: [
+                                { $and: ['$downlineInfo.firstName', '$downlineInfo.lastName'] },
+                                { $concat: ['$downlineInfo.firstName', ' ', '$downlineInfo.lastName'] },
+                                'Anonymous User'
+                            ]
+                        } 
+                    }
+                }
+            },
+            {
+                $group: {
+                    _id: '$_id.downline',
+                    referralName: { $first: '$downlineName' },
+                    round1Earnings: {
+                        $sum: {
+                            $cond: [{ $eq: ['$_id.roundNumber', 1] }, '$roundEarnings', 0]
+                        }
+                    },
+                    round2Earnings: {
+                        $sum: {
+                            $cond: [{ $eq: ['$_id.roundNumber', 2] }, '$roundEarnings', 0]
+                        }
+                    },
+                    round3Earnings: {
+                        $sum: {
+                            $cond: [{ $eq: ['$_id.roundNumber', 3] }, '$roundEarnings', 0]
+                        }
+                    },
+                    totalEarned: { $sum: '$roundEarnings' }
+                }
+            }
+        ]);
+
+        // Update user's referral stats in the database
+        await User.findByIdAndUpdate(userId, {
+            $set: {
+                'referralStats.totalReferrals': totalReferrals,
+                'referralStats.totalEarnings': totalEarnings,
+                'referralStats.availableBalance': totalEarnings - (user.referralStats?.withdrawn || 0),
+                'referralStats.pendingEarnings': pendingEarnings,
+                'downlineStats.totalDownlines': totalReferrals,
+                'downlineStats.activeDownlines': activeReferrals,
+                'downlineStats.totalCommissionEarned': totalEarnings
+            }
+        });
+
+        // Return the complete referral data in the EXACT format expected by frontend
+        const responseData = {
+            status: 'success',
+            data: {
+                // Enhanced referral data with links
+                code: user.referralCode || 'XXXXXX',
+                referralLink: referralLink,
+                referralLinkWithName: referralLinkWithName,
+                shareableLinks: {
+                    direct: referralLinkWithName,
+                    withMessage: `Join me on BitHash Capital! Use my referral link: ${referralLinkWithName}`,
+                    social: {
+                        facebook: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(referralLinkWithName)}`,
+                        twitter: `https://twitter.com/intent/tweet?text=${encodeURIComponent(`Join me on BitHash Capital! Use my referral link: ${referralLinkWithName}`)}`,
+                        whatsapp: `https://wa.me/?text=${encodeURIComponent(`Join me on BitHash Capital! Use my referral link: ${referralLinkWithName}`)}`,
+                        telegram: `https://t.me/share/url?url=${encodeURIComponent(referralLinkWithName)}&text=${encodeURIComponent('Join me on BitHash Capital!')}`
+                    }
+                },
+                totalReferrals: totalReferrals,
+                totalEarnings: totalEarnings,
+                pendingEarnings: pendingEarnings,
+                activeReferrals: activeReferrals,
+                
+                // Detailed data for the tabs
+                referrals: referrals, // For "My Referrals" tab
+                earnings: earningsBreakdown, // For "Earnings Breakdown" tab
+                
+                // Stats object (if needed elsewhere)
+                stats: {
+                    directReferrals: totalReferrals,
+                    totalCommission: totalEarnings,
+                    availableBalance: totalEarnings - (user.referralStats?.withdrawn || 0),
+                    withdrawn: user.referralStats?.withdrawn || 0,
+                    pending: pendingEarnings
+                }
+            }
+        };
+
+        res.status(200).json(responseData);
+
+        // Log the activity
+        await logActivity('view_referrals', 'referral', userId, userId, 'User', req);
+
+    } catch (error) {
+        console.error('Error loading referral data:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to load referral data'
+        });
+    }
+});
 
 
 
@@ -13191,6 +13555,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
