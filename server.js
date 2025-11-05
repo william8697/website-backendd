@@ -108,6 +108,7 @@ redis.on('error', (err) => {
   console.error('Redis error:', err);
 });
 
+// Email Configuration - Production Ready for Namecheap
 const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST,
   port: process.env.EMAIL_PORT,
@@ -123,6 +124,25 @@ const transporter = nodemailer.createTransport({
   maxConnections: 5,
   maxMessages: 100
 });
+
+// Email sending function
+const sendEmail = async (options) => {
+  try {
+    const mailOptions = {
+      from: `BitHash Capital <${process.env.EMAIL_FROM || 'info@bithashcapital.live'}>`,
+      to: options.email,
+      subject: options.subject,
+      text: options.message,
+      html: options.html
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log('Email sent successfully to:', options.email);
+  } catch (err) {
+    console.error('Error sending email:', err);
+    throw new Error('Failed to send email');
+  }
+};
 
 
 // Google OAuth client with enhanced configuration
@@ -13555,4 +13575,5 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
