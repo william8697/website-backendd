@@ -46,7 +46,7 @@ app.use(helmet({
 }));
 
 app.use(cors({
-  origin: ['https://bithashcapital.vercel.app', 'https://website-backendd-1.onrender.com'],
+  origin: ['https://www.bithashcapital.live', 'https://website-backendd-1.onrender.com'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token']
@@ -13386,6 +13386,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
