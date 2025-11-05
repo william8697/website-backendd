@@ -2834,7 +2834,7 @@ initializeLanguages();
 
 
 
-// Enhanced Signup Endpoint with Referral Link Support
+// Enhanced Signup Endpoint with Professional Welcome Email
 app.post('/api/signup', [
     body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
     body('lastName').trim().notEmpty().withMessage('Last name is required').escape(),
@@ -2956,28 +2956,445 @@ app.post('/api/signup', [
 
         const token = generateJWT(newUser._id);
 
-        // Send welcome email (fire and forget)
+        // Enhanced Welcome Email with Professional Design
         try {
-            const welcomeMessage = `Welcome to BitHash, ${firstName}! Your account has been successfully created.`;
-            if (referredByUser) {
-                welcomeMessage += ` You were referred by ${referredByUser.firstName}.`;
+            const welcomeSubject = `Welcome to BitHash Capital, ${firstName}! Start Your Cloud Mining Journey`;
+            
+            // Professional HTML email template with responsive design
+            const welcomeHtml = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to BitHash Capital</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f8fafc;
+        }
+        
+        .email-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #000000 0%, #1a202c 100%);
+            padding: 40px 30px;
+            text-align: center;
+            border-bottom: 4px solid #f59e0b;
+        }
+        
+        .logo {
+            max-width: 180px;
+            height: auto;
+            margin-bottom: 20px;
+        }
+        
+        .header h1 {
+            color: #ffffff;
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #e2e8f0;
+            font-size: 16px;
+            font-weight: 400;
+        }
+        
+        .content {
+            padding: 40px 30px;
+        }
+        
+        .welcome-section {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .welcome-section h2 {
+            color: #1a202c;
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        
+        .welcome-section p {
+            color: #4a5568;
+            font-size: 16px;
+            line-height: 1.7;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+        }
+        
+        .feature-card {
+            background: #f7fafc;
+            padding: 25px;
+            border-radius: 8px;
+            text-align: center;
+            border-left: 4px solid #f59e0b;
+        }
+        
+        .feature-icon {
+            width: 48px;
+            height: 48px;
+            margin: 0 auto 15px;
+            background: #fef3c7;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            color: #d97706;
+        }
+        
+        .feature-card h3 {
+            color: #1a202c;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        
+        .feature-card p {
+            color: #4a5568;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .cta-section {
+            background: linear-gradient(135deg, #fef3c7 0%, #fef7cd 100%);
+            padding: 30px;
+            border-radius: 8px;
+            text-align: center;
+            margin: 30px 0;
+            border: 1px solid #fcd34d;
+        }
+        
+        .cta-section h3 {
+            color: #92400e;
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        
+        .cta-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #000000 0%, #374151 100%);
+            color: #ffffff;
+            padding: 14px 32px;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 16px;
+            margin: 15px 0;
+            transition: all 0.3s ease;
+        }
+        
+        .cta-button:hover {
+            background: linear-gradient(135deg, #374151 0%, #000000 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .referral-section {
+            background: #f0f9ff;
+            padding: 25px;
+            border-radius: 8px;
+            border-left: 4px solid #0369a1;
+            margin: 25px 0;
+        }
+        
+        .referral-section h3 {
+            color: #0369a1;
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        
+        .referral-code {
+            background: #ffffff;
+            padding: 15px;
+            border-radius: 6px;
+            border: 2px dashed #0369a1;
+            font-family: monospace;
+            font-size: 18px;
+            font-weight: 600;
+            color: #0369a1;
+            margin: 15px 0;
+        }
+        
+        .footer {
+            background: #1a202c;
+            color: #e2e8f0;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        
+        .footer-links a {
+            color: #90cdf4;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        
+        .footer-links a:hover {
+            color: #ffffff;
+        }
+        
+        .social-links {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .social-icon {
+            width: 36px;
+            height: 36px;
+            background: #4a5568;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        
+        .copyright {
+            color: #a0aec0;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        
+        @media (max-width: 600px) {
+            .header, .content {
+                padding: 25px 20px;
             }
             
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .footer-links {
+                flex-direction: column;
+                gap: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <div class="header">
+            <h1>Welcome to BitHash Capital</h1>
+            <p>Your Gateway to Smart Bitcoin Cloud Mining</p>
+        </div>
+        
+        <div class="content">
+            <div class="welcome-section">
+                <h2>Hello, ${firstName}!</h2>
+                <p>Welcome to BitHash Capital! We're thrilled to have you join our community of smart investors. Your account has been successfully created and you're now ready to start your cloud mining journey.</p>
+            </div>
+            
+            ${referredByUser ? `
+            <div class="referral-section">
+                <h3>You were referred by ${referredByUser.firstName}</h3>
+                <p>Start investing together and maximize your earnings through our referral program.</p>
+            </div>
+            ` : ''}
+            
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3>Cloud Mining</h3>
+                    <p>Start mining Bitcoin instantly with our state-of-the-art cloud infrastructure. No technical expertise required.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">💰</div>
+                    <h3>Earn Returns</h3>
+                    <p>Watch your investments grow with competitive returns through our optimized mining operations.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">🤝</div>
+                    <h3>Referral Program</h3>
+                    <p>Earn additional income by referring friends and building your network with our multi-level commission system.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">🛡️</div>
+                    <h3>Secure & Insured</h3>
+                    <p>Your investments are protected with enterprise-grade security and insurance coverage.</p>
+                </div>
+            </div>
+            
+            <div class="cta-section">
+                <h3>Ready to Start Mining Bitcoin?</h3>
+                <p>Make your first investment and begin earning returns immediately.</p>
+                <a href="https://www.bithashcapital.live/dashboard" class="cta-button">Start Mining Now</a>
+            </div>
+            
+            <div class="referral-section">
+                <h3>Your Personal Referral Code</h3>
+                <p>Share this code with friends and earn commissions on their investments:</p>
+                <div class="referral-code">${newReferralCode}</div>
+                <p>Your referral link: <strong>https://www.bithashcapital.live/signup.html?ref=${newReferralCode}</strong></p>
+            </div>
+            
+            <div style="background: #f0fdf4; padding: 20px; border-radius: 8px; border-left: 4px solid #10b981; margin: 25px 0;">
+                <h3 style="color: #047857; margin-bottom: 10px;">Soft Loans Available</h3>
+                <p style="color: #065f46;">Qualified users can access soft loans to expand their mining operations. Check your eligibility in your dashboard.</p>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <div class="social-links">
+                <a href="#" class="social-icon">f</a>
+                <a href="#" class="social-icon">t</a>
+                <a href="#" class="social-icon">in</a>
+                <a href="#" class="social-icon">ig</a>
+            </div>
+            
+            <div class="footer-links">
+                <a href="https://www.bithashcapital.live/support">Support Center</a>
+                <a href="https://www.bithashcapital.live/faq">FAQ</a>
+                <a href="https://www.bithashcapital.live/privacy">Privacy Policy</a>
+                <a href="https://www.bithashcapital.live/terms">Terms of Service</a>
+            </div>
+            
+            <p class="copyright">
+                © 2024 BitHash Capital LLC. All rights reserved.<br>
+                This email was sent to ${email} as part of your BitHash Capital account.
+            </p>
+        </div>
+    </div>
+</body>
+</html>
+            `;
+
+            // Plain text version for email clients that don't support HTML
+            const welcomeText = `
+Welcome to BitHash Capital, ${firstName}!
+
+We're excited to have you join our community of smart Bitcoin cloud mining investors. Your account has been successfully created and you're now ready to start your mining journey.
+
+${referredByUser ? `You were referred by ${referredByUser.firstName}. Start investing together and maximize your earnings!` : ''}
+
+GET STARTED:
+• Cloud Mining: Start mining Bitcoin instantly with our advanced infrastructure
+• Earn Returns: Watch your investments grow with competitive returns
+• Referral Program: Earn commissions by referring friends
+• Soft Loans: Qualified users can access loans to expand operations
+
+Your Referral Code: ${newReferralCode}
+Your Referral Link: https://www.bithashcapital.live/signup.html?ref=${newReferralCode}
+
+Ready to start? Make your first investment:
+https://www.bithashcapital.live/dashboard
+
+Need help? Visit our Support Center:
+https://www.bithashcapital.live/support
+
+Best regards,
+The BitHash Capital Team
+
+© 2024 BitHash Capital LLC. All rights reserved.
+            `;
+
             await sendEmail({
                 email: newUser.email,
-                subject: 'Welcome to BitHash',
-                message: welcomeMessage,
-                html: `<p>${welcomeMessage}</p>`
+                subject: welcomeSubject,
+                message: welcomeText,
+                html: welcomeHtml
             });
 
-            // Send referral success email to referring user
+            // Enhanced referral success email to referring user
             if (referredByUser) {
-                const referralSuccessMessage = `Great news! ${firstName} ${lastName} has joined BitHash Capital using your referral link.`;
+                const referralSubject = `Great News! ${firstName} Joined BitHash Capital Through Your Referral`;
+                const referralHtml = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Referral - BitHash Capital</title>
+    <style>
+        /* Same professional styling as above */
+        body { font-family: 'Inter', sans-serif; background: #f8fafc; }
+        .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .header { background: linear-gradient(135deg, #000000 0%, #1a202c 100%); padding: 40px 30px; text-align: center; color: white; border-bottom: 4px solid #f59e0b; }
+        .content { padding: 40px 30px; }
+        .success-badge { background: #dcfce7; color: #166534; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0; border: 2px solid #bbf7d0; }
+        .cta-button { display: inline-block; background: linear-gradient(135deg, #000000 0%, #374151 100%); color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 15px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>New Referral Alert!</h1>
+            <p>Your network is growing at BitHash Capital</p>
+        </div>
+        <div class="content">
+            <div class="success-badge">
+                <h2>🎉 Congratulations!</h2>
+                <p><strong>${firstName} ${lastName}</strong> has joined BitHash Capital using your referral link.</p>
+            </div>
+            <p>You'll now earn commissions on their investments and help them succeed in their Bitcoin cloud mining journey.</p>
+            <p style="text-align: center;"><a href="https://www.bithashcapital.live/dashboard" class="cta-button">View Your Referral Dashboard</a></p>
+        </div>
+    </div>
+</body>
+</html>
+                `;
+
+                const referralText = `
+Congratulations!
+
+${firstName} ${lastName} has joined BitHash Capital using your referral link.
+
+You'll now earn commissions on their investments and help them succeed in their Bitcoin cloud mining journey.
+
+View your referral dashboard:
+https://www.bithashcapital.live/dashboard
+
+Thank you for growing our community!
+
+The BitHash Capital Team
+                `;
+
                 await sendEmail({
                     email: referredByUser.email,
-                    subject: 'New Referral on BitHash Capital!',
-                    message: referralSuccessMessage,
-                    html: `<p>${referralSuccessMessage}</p>`
+                    subject: referralSubject,
+                    message: referralText,
+                    html: referralHtml
                 });
             }
         } catch (emailError) {
@@ -3049,7 +3466,6 @@ app.post('/api/signup', [
 
 
 
-
 // Validate referral code endpoint
 app.get('/api/referrals/validate/:code', async (req, res) => {
     try {
@@ -3111,11 +3527,7 @@ app.get('/api/referrals/validate/:code', async (req, res) => {
 
 
 
-
-
-
-
-// User Login with Comprehensive Tracking
+// Enhanced User Login with Professional Email Notifications
 app.post('/api/login', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
   body('password').notEmpty().withMessage('Password is required'),
@@ -3145,12 +3557,335 @@ app.post('/api/login', [
     });
 
     const user = await User.findOne({ email }).select('+password +twoFactorAuth.secret');
+    
+    // Enhanced Failed Login Email Notification
     if (!user || !(await bcrypt.compare(password, user.password))) {
       // Track failed login
       await logUserActivity(req, 'login_attempt', 'failed', {
         error: 'Invalid credentials',
         email
       });
+
+      // Send failed login notification email if user exists
+      if (user) {
+        try {
+          const failedLoginHtml = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Alert - Failed Login Attempt</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f8fafc;
+        }
+        
+        .email-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+            padding: 40px 30px;
+            text-align: center;
+            border-bottom: 4px solid #f87171;
+        }
+        
+        .header h1 {
+            color: #ffffff;
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #fecaca;
+            font-size: 16px;
+            font-weight: 400;
+        }
+        
+        .content {
+            padding: 40px 30px;
+        }
+        
+        .alert-section {
+            background: #fef2f2;
+            border: 2px solid #fecaca;
+            border-radius: 8px;
+            padding: 25px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .alert-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        
+        .alert-section h2 {
+            color: #dc2626;
+            font-size: 22px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        
+        .device-info {
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 25px 0;
+            border-left: 4px solid #94a3b8;
+        }
+        
+        .device-info h3 {
+            color: #475569;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .info-item {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .info-label {
+            font-size: 12px;
+            color: #64748b;
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
+        
+        .info-value {
+            font-size: 14px;
+            color: #1e293b;
+            font-weight: 600;
+        }
+        
+        .action-section {
+            background: #fffbeb;
+            border: 2px solid #fcd34d;
+            border-radius: 8px;
+            padding: 25px;
+            margin: 25px 0;
+        }
+        
+        .action-section h3 {
+            color: #92400e;
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        
+        .security-tips {
+            background: #f0f9ff;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 25px 0;
+            border-left: 4px solid #0ea5e9;
+        }
+        
+        .security-tips h3 {
+            color: #0369a1;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        
+        .security-tips ul {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .security-tips li {
+            padding: 8px 0;
+            color: #475569;
+            font-size: 14px;
+        }
+        
+        .security-tips li:before {
+            content: "•";
+            color: #0ea5e9;
+            font-weight: bold;
+            display: inline-block;
+            width: 1em;
+            margin-left: -1em;
+        }
+        
+        .support-section {
+            text-align: center;
+            margin: 30px 0;
+            padding: 20px;
+            background: #f8fafc;
+            border-radius: 8px;
+        }
+        
+        .support-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+            color: #ffffff;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            margin: 10px 0;
+        }
+        
+        .footer {
+            background: #1a202c;
+            color: #e2e8f0;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .copyright {
+            color: #a0aec0;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        
+        @media (max-width: 600px) {
+            .header, .content {
+                padding: 25px 20px;
+            }
+            
+            .info-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <div class="header">
+            <h1>Security Alert</h1>
+            <p>Failed Login Attempt Detected</p>
+        </div>
+        
+        <div class="content">
+            <div class="alert-section">
+                <div class="alert-icon">⚠️</div>
+                <h2>Unsuccessful Login Attempt</h2>
+                <p>We detected a failed login attempt to your BitHash Capital account.</p>
+            </div>
+            
+            <div class="device-info">
+                <h3>Login Attempt Details</h3>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <span class="info-label">Time</span>
+                        <span class="info-value">${new Date().toLocaleString()}</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Email</span>
+                        <span class="info-value">${email}</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">IP Address</span>
+                        <span class="info-value">${req.ip || 'Unknown'}</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">User Agent</span>
+                        <span class="info-value">${req.headers['user-agent']?.substring(0, 50) || 'Unknown'}...</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="action-section">
+                <h3>Recommended Action</h3>
+                <p>If this was you, please ensure you're using the correct password. If you've forgotten your password, use the reset option.</p>
+                <p>If this wasn't you, we recommend changing your password immediately and reviewing your account security.</p>
+            </div>
+            
+            <div class="security-tips">
+                <h3>Security Tips</h3>
+                <ul>
+                    <li>Use a strong, unique password for your account</li>
+                    <li>Enable two-factor authentication for extra security</li>
+                    <li>Never share your login credentials with anyone</li>
+                    <li>Regularly monitor your account activity</li>
+                    <li>Use a password manager to generate and store secure passwords</li>
+                </ul>
+            </div>
+            
+            <div class="support-section">
+                <p>If you have any concerns about your account security, our support team is here to help.</p>
+                <a href="https://www.bithashcapital.live/support" class="support-button">Contact Support</a>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p class="copyright">
+                © 2024 BitHash Capital LLC. All rights reserved.<br>
+                This security alert was sent to ${user.email} to help protect your account.
+            </p>
+        </div>
+    </div>
+</body>
+</html>
+          `;
+
+          const failedLoginText = `
+SECURITY ALERT: Failed Login Attempt
+
+We detected a failed login attempt to your BitHash Capital account.
+
+Login Attempt Details:
+- Time: ${new Date().toLocaleString()}
+- Email: ${email}
+- IP Address: ${req.ip || 'Unknown'}
+- User Agent: ${req.headers['user-agent'] || 'Unknown'}
+
+If this was you, please ensure you're using the correct password.
+
+If this wasn't you, we recommend:
+1. Changing your password immediately
+2. Enabling two-factor authentication
+3. Reviewing your recent account activity
+
+Contact our support team if you have any concerns:
+https://www.bithashcapital.live/support
+
+Stay secure,
+The BitHash Capital Security Team
+
+© 2024 BitHash Capital LLC. All rights reserved.
+          `;
+
+          await sendEmail({
+            email: user.email,
+            subject: 'Security Alert: Failed Login Attempt - BitHash Capital',
+            message: failedLoginText,
+            html: failedLoginHtml
+          });
+        } catch (emailError) {
+          console.error('Failed to send security alert email:', emailError);
+        }
+      }
       
       return res.status(401).json({
         status: 'fail',
@@ -3233,6 +3968,347 @@ app.post('/api/login', [
         userId: user._id,
         rememberMe: !!rememberMe
       }, user);
+
+      // Enhanced Successful Login Email Notification
+      try {
+        const deviceType = getDeviceType(req);
+        const osInfo = getOSFromUserAgent(req.headers['user-agent']);
+        const browserInfo = getBrowserFromUserAgent(req.headers['user-agent']);
+
+        const successLoginHtml = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Successful Login - BitHash Capital</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f8fafc;
+        }
+        
+        .email-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #000000 0%, #1a202c 100%);
+            padding: 40px 30px;
+            text-align: center;
+            border-bottom: 4px solid #10b981;
+        }
+        
+        .header h1 {
+            color: #ffffff;
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #d1fae5;
+            font-size: 16px;
+            font-weight: 400;
+        }
+        
+        .content {
+            padding: 40px 30px;
+        }
+        
+        .success-section {
+            background: #f0fdf4;
+            border: 2px solid #bbf7d0;
+            border-radius: 8px;
+            padding: 25px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .success-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        
+        .success-section h2 {
+            color: #065f46;
+            font-size: 22px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        
+        .login-details {
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 25px 0;
+            border-left: 4px solid #3b82f6;
+        }
+        
+        .login-details h3 {
+            color: #1e40af;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        
+        .details-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .detail-item {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .detail-label {
+            font-size: 12px;
+            color: #64748b;
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
+        
+        .detail-value {
+            font-size: 14px;
+            color: #1e293b;
+            font-weight: 600;
+        }
+        
+        .quick-actions {
+            background: #f0f9ff;
+            border-radius: 8px;
+            padding: 25px;
+            margin: 25px 0;
+            border-left: 4px solid #0ea5e9;
+        }
+        
+        .quick-actions h3 {
+            color: #0369a1;
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        
+        .action-buttons {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .action-button {
+            display: block;
+            background: linear-gradient(135deg, #000000 0%, #374151 100%);
+            color: #ffffff;
+            padding: 12px 16px;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 14px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+        
+        .action-button:hover {
+            background: linear-gradient(135deg, #374151 0%, #000000 100%);
+            transform: translateY(-1px);
+        }
+        
+        .security-reminder {
+            background: #fffbeb;
+            border: 2px solid #fcd34d;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 25px 0;
+        }
+        
+        .security-reminder h3 {
+            color: #92400e;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        
+        .footer {
+            background: #1a202c;
+            color: #e2e8f0;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .support-links {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        
+        .support-links a {
+            color: #90cdf4;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        
+        .copyright {
+            color: #a0aec0;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        
+        @media (max-width: 600px) {
+            .header, .content {
+                padding: 25px 20px;
+            }
+            
+            .details-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .action-buttons {
+                grid-template-columns: 1fr;
+            }
+            
+            .support-links {
+                flex-direction: column;
+                gap: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <div class="header">
+            <h1>Login Successful</h1>
+            <p>Welcome back to BitHash Capital</p>
+        </div>
+        
+        <div class="content">
+            <div class="success-section">
+                <div class="success-icon">✅</div>
+                <h2>Hello, ${user.firstName}!</h2>
+                <p>You've successfully logged into your BitHash Capital account.</p>
+            </div>
+            
+            <div class="login-details">
+                <h3>Login Information</h3>
+                <div class="details-grid">
+                    <div class="detail-item">
+                        <span class="detail-label">Time</span>
+                        <span class="detail-value">${new Date().toLocaleString()}</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Device</span>
+                        <span class="detail-value">${deviceType}</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Browser</span>
+                        <span class="detail-value">${browserInfo}</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Operating System</span>
+                        <span class="detail-value">${osInfo}</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">IP Address</span>
+                        <span class="detail-value">${deviceInfo.ip}</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Location</span>
+                        <span class="detail-value">${deviceInfo.location}</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="quick-actions">
+                <h3>Quick Access</h3>
+                <div class="action-buttons">
+                    <a href="https://www.bithashcapital.live/dashboard" class="action-button">View Dashboard</a>
+                    <a href="https://www.bithashcapital.live/invest" class="action-button">Make Investment</a>
+                    <a href="https://www.bithashcapital.live/portfolio" class="action-button">Check Portfolio</a>
+                    <a href="https://www.bithashcapital.live/referrals" class="action-button">Referral Program</a>
+                </div>
+            </div>
+            
+            <div class="security-reminder">
+                <h3>Security Reminder</h3>
+                <p>If you don't recognize this login activity, please secure your account immediately by changing your password and contacting our support team.</p>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <div class="support-links">
+                <a href="https://www.bithashcapital.live/support">Support Center</a>
+                <a href="https://www.bithashcapital.live/security">Security Tips</a>
+                <a href="https://www.bithashcapital.live/privacy">Privacy Policy</a>
+            </div>
+            
+            <p class="copyright">
+                © 2024 BitHash Capital LLC. All rights reserved.<br>
+                This login notification was sent to ${user.email} for security purposes.
+            </p>
+        </div>
+    </div>
+</body>
+</html>
+        `;
+
+        const successLoginText = `
+SUCCESSFUL LOGIN: BitHash Capital
+
+Hello, ${user.firstName}!
+
+You've successfully logged into your BitHash Capital account.
+
+Login Details:
+- Time: ${new Date().toLocaleString()}
+- Device: ${deviceType}
+- Browser: ${browserInfo}
+- OS: ${osInfo}
+- IP Address: ${deviceInfo.ip}
+- Location: ${deviceInfo.location}
+
+Quick Access:
+• Dashboard: https://www.bithashcapital.live/dashboard
+• Make Investment: https://www.bithashcapital.live/invest
+• Portfolio: https://www.bithashcapital.live/portfolio
+• Referral Program: https://www.bithashcapital.live/referrals
+
+Security Reminder:
+If you don't recognize this login activity, please secure your account immediately.
+
+Stay secure,
+The BitHash Capital Team
+
+© 2024 BitHash Capital LLC. All rights reserved.
+        `;
+
+        await sendEmail({
+          email: user.email,
+          subject: 'Successful Login - BitHash Capital',
+          message: successLoginText,
+          html: successLoginHtml
+        });
+      } catch (emailError) {
+        console.error('Failed to send login notification email:', emailError);
+      }
     }
 
     res.status(200).json(responseData);
@@ -3255,6 +4331,15 @@ app.post('/api/login', [
     });
   }
 });
+
+
+
+
+
+
+
+
+
 app.post('/api/auth/verify-2fa', [
   body('token').notEmpty().withMessage('Token is required'),
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
@@ -13555,6 +14640,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
