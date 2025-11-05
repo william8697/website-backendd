@@ -2843,54 +2843,6 @@ const calculateReferralCommissions = async (investment) => {
 
 
 
-const initializeLanguages = async () => {
-  try {
-    const defaultLanguages = [
-      { code: 'EN', name: 'English', nativeName: 'English', flag: 'https://flagcdn.com/w40/gb.png', sortOrder: 1 },
-      { code: 'FI', name: 'Finnish', nativeName: 'Suomi', flag: 'https://flagcdn.com/w40/fi.png', sortOrder: 2 },
-      { code: 'SV', name: 'Swedish', nativeName: 'Svenska', flag: 'https://flagcdn.com/w40/se.png', sortOrder: 3 },
-      { code: 'NO', name: 'Norwegian', nativeName: 'Norsk', flag: 'https://flagcdn.com/w40/no.png', sortOrder: 4 },
-      { code: 'DA', name: 'Danish', nativeName: 'Dansk', flag: 'https://flagcdn.com/w40/dk.png', sortOrder: 5 },
-      { code: 'DE', name: 'German', nativeName: 'Deutsch', flag: 'https://flagcdn.com/w40/de.png', sortOrder: 6 },
-      { code: 'FR', name: 'French', nativeName: 'Français', flag: 'https://flagcdn.com/w40/fr.png', sortOrder: 7 },
-      { code: 'ES', name: 'Spanish', nativeName: 'Español', flag: 'https://flagcdn.com/w40/es.png', sortOrder: 8 },
-      { code: 'IT', name: 'Italian', nativeName: 'Italiano', flag: 'https://flagcdn.com/w40/it.png', sortOrder: 9 },
-      { code: 'PT', name: 'Portuguese', nativeName: 'Português', flag: 'https://flagcdn.com/w40/pt.png', sortOrder: 10 },
-      { code: 'NL', name: 'Dutch', nativeName: 'Nederlands', flag: 'https://flagcdn.com/w40/nl.png', sortOrder: 11 },
-      { code: 'RU', name: 'Russian', nativeName: 'Русский', flag: 'https://flagcdn.com/w40/ru.png', sortOrder: 12 },
-      { code: 'ZH', name: 'Chinese', nativeName: '中文', flag: 'https://flagcdn.com/w40/cn.png', sortOrder: 13 },
-      { code: 'JA', name: 'Japanese', nativeName: '日本語', flag: 'https://flagcdn.com/w40/jp.png', sortOrder: 14 },
-      { code: 'KO', name: 'Korean', nativeName: '한국어', flag: 'https://flagcdn.com/w40/kr.png', sortOrder: 15 },
-      { code: 'AR', name: 'Arabic', nativeName: 'العربية', flag: 'https://flagcdn.com/w40/sa.png', rtl: true, sortOrder: 16 },
-      { code: 'HI', name: 'Hindi', nativeName: 'हिन्दी', flag: 'https://flagcdn.com/w40/in.png', sortOrder: 17 }
-    ];
-
-    for (const lang of defaultLanguages) {
-      await Language.findOneAndUpdate(
-        { code: lang.code },
-        { $set: lang },
-        { upsert: true, new: true }
-      );
-    }
-
-    console.log('Default languages initialized successfully');
-  } catch (err) {
-    console.error('Error initializing languages:', err);
-  }
-};
-
-// Call this function after database connection
-initializeLanguages();
-
-
-
-
-
-
-
-
-
-
 // Enhanced email service with professional templates
 const sendProfessionalEmail = async (options) => {
   try {
@@ -14318,6 +14270,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
