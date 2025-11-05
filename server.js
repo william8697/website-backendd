@@ -2834,8 +2834,7 @@ initializeLanguages();
 
 
 
-
-// Enhanced Signup Endpoint with Instant Email Notifications
+// Enhanced Signup Endpoint with Referral Link Support
 app.post('/api/signup', [
     body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
     body('lastName').trim().notEmpty().withMessage('Last name is required').escape(),
@@ -2846,7 +2845,7 @@ app.post('/api/signup', [
         .matches(/[0-9]/).withMessage('Password must contain at least one number')
         .matches(/[^A-Za-z0-9]/).withMessage('Password must contain at least one special character'),
     body('city').trim().notEmpty().withMessage('City is required').escape(),
-    body('referralCode').optional().trim().escape()
+    body('referralCode').optional().trim().escape() // Changed from referredBy to referralCode
 ], async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -2878,12 +2877,14 @@ app.post('/api/signup', [
         if (referralCode) {
             console.log('Processing referral code:', referralCode);
             
+            // Handle both formats: "firstName-code" and just "code"
             let actualReferralCode = referralCode;
             
+            // Check if it's in "firstName-code" format
             if (referralCode.includes('-')) {
                 const parts = referralCode.split('-');
                 if (parts.length > 1) {
-                    actualReferralCode = parts[parts.length - 1];
+                    actualReferralCode = parts[parts.length - 1]; // Take the last part as the code
                 }
             }
             
@@ -2892,10 +2893,12 @@ app.post('/api/signup', [
             if (referredByUser) {
                 referralSource = 'referral_link';
                 console.log(`Referral found: ${referredByUser.firstName} ${referredByUser.lastName} (${referredByUser.email})`);
+            } else {
+                console.log('No user found with referral code:', actualReferralCode);
+                // Don't fail signup if referral code is invalid, just proceed without referral
             }
         }
 
-        // Create new user
         const newUser = await User.create({
             firstName,
             lastName,
@@ -2906,34 +2909,29 @@ app.post('/api/signup', [
             referredBy: referredByUser ? referredByUser._id : undefined
         });
 
-        // Fetch the complete user data with all fields
-        const createdUser = await User.findById(newUser._id)
-            .select('firstName lastName email referralCode referredBy createdAt')
-            .populate('referredBy', 'firstName lastName email');
-
-        if (!createdUser) {
-            throw new Error('Failed to fetch created user data');
-        }
-
         // If user was referred, create downline relationship
         if (referredByUser) {
             try {
+                // Get current commission settings
                 const commissionSettings = await CommissionSettings.findOne({ isActive: true }) || 
                     await CommissionSettings.create({
                         commissionPercentage: 5,
                         commissionRounds: 3,
-                        updatedBy: referredByUser._id
+                        updatedBy: referredByUser._id // Use referring user's ID
                     });
 
+                // Create downline relationship
                 await DownlineRelationship.create({
                     upline: referredByUser._id,
-                    downline: createdUser._id,
+                    downline: newUser._id,
                     commissionPercentage: commissionSettings.commissionPercentage,
                     commissionRounds: commissionSettings.commissionRounds,
                     remainingRounds: commissionSettings.commissionRounds,
-                    assignedBy: referredByUser._id,
+                    assignedBy: referredByUser._id, // Self-assigned through referral
                     status: 'active'
                 });
+
+                console.log(`Downline relationship created: ${referredByUser.email} -> ${newUser.email}`);
 
                 // Update referring user's stats
                 await User.findByIdAndUpdate(referredByUser._id, {
@@ -2944,213 +2942,50 @@ app.post('/api/signup', [
                     }
                 });
 
-                // Log referral activity
-                await logActivity('referral_signup', 'user', createdUser._id, referredByUser._id, 'User', req, {
-                    referredUser: createdUser._id,
+                // Log referral activity for both users
+                await logActivity('referral_signup', 'user', newUser._id, referredByUser._id, 'User', req, {
+                    referredUser: newUser._id,
                     referralCode: referralCode
                 });
 
             } catch (relationshipError) {
                 console.error('Error creating downline relationship:', relationshipError);
+                // Don't fail the signup if relationship creation fails
             }
         }
 
-        const token = generateJWT(createdUser._id);
+        const token = generateJWT(newUser._id);
 
-        // INSTANT WELCOME EMAIL - Fire and forget
-        (async () => {
-            try {
-                const deviceInfo = await getUserDeviceInfo(req);
-                const userFirstName = createdUser.firstName;
-                const userEmail = createdUser.email;
-                const userReferralCode = createdUser.referralCode;
-
-                const welcomeSubject = `Welcome to BitHash Capital, ${userFirstName}! Start Your Cloud Mining Journey`;
-                
-                const welcomeHtml = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Welcome to BitHash Capital</title>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; line-height: 1.6; color: #333; background-color: #f8fafc; }
-        .email-container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-        .header { background: linear-gradient(135deg, #000000 0%, #1a202c 100%); padding: 40px 30px; text-align: center; border-bottom: 4px solid #f59e0b; }
-        .header h1 { color: #ffffff; font-size: 28px; font-weight: 700; margin-bottom: 10px; }
-        .header p { color: #e2e8f0; font-size: 16px; font-weight: 400; }
-        .content { padding: 40px 30px; }
-        .welcome-section { text-align: center; margin-bottom: 30px; }
-        .welcome-section h2 { color: #1a202c; font-size: 24px; font-weight: 600; margin-bottom: 15px; }
-        .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin: 30px 0; }
-        .feature-card { background: #f7fafc; padding: 25px; border-radius: 8px; text-align: center; border-left: 4px solid #f59e0b; }
-        .feature-icon { width: 48px; height: 48px; margin: 0 auto 15px; background: #fef3c7; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600; color: #d97706; }
-        .cta-section { background: linear-gradient(135deg, #fef3c7 0%, #fef7cd 100%); padding: 30px; border-radius: 8px; text-align: center; margin: 30px 0; border: 1px solid #fcd34d; }
-        .cta-button { display: inline-block; background: linear-gradient(135deg, #000000 0%, #374151 100%); color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 15px 0; }
-        .referral-section { background: #f0f9ff; padding: 25px; border-radius: 8px; border-left: 4px solid #0369a1; margin: 25px 0; }
-        .referral-code { background: #ffffff; padding: 15px; border-radius: 6px; border: 2px dashed #0369a1; font-family: monospace; font-size: 18px; font-weight: 600; color: #0369a1; margin: 15px 0; }
-        .footer { background: #1a202c; color: #e2e8f0; padding: 30px; text-align: center; }
-        @media (max-width: 600px) { .header, .content { padding: 25px 20px; } .features-grid { grid-template-columns: 1fr; } }
-    </style>
-</head>
-<body>
-    <div class="email-container">
-        <div class="header">
-            <h1>Welcome to BitHash Capital</h1>
-            <p>Your Gateway to Smart Bitcoin Cloud Mining</p>
-        </div>
-        <div class="content">
-            <div class="welcome-section">
-                <h2>Hello, ${userFirstName}!</h2>
-                <p>Welcome to BitHash Capital! We're thrilled to have you join our community of smart investors. Your account has been successfully created and you're now ready to start your cloud mining journey.</p>
-            </div>
-            ${createdUser.referredBy ? `
-            <div class="referral-section">
-                <h3>You were referred by ${createdUser.referredBy.firstName}</h3>
-                <p>Start investing together and maximize your earnings through our referral program.</p>
-            </div>
-            ` : ''}
-            <div class="features-grid">
-                <div class="feature-card">
-                    <div class="feature-icon">⚡</div>
-                    <h3>Cloud Mining</h3>
-                    <p>Start mining Bitcoin instantly with our state-of-the-art cloud infrastructure.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">💰</div>
-                    <h3>Earn Returns</h3>
-                    <p>Watch your investments grow with competitive returns through optimized mining operations.</p>
-                </div>
-            </div>
-            <div class="cta-section">
-                <h3>Ready to Start Mining Bitcoin?</h3>
-                <p>Make your first investment and begin earning returns immediately.</p>
-                <a href="https://www.bithashcapital.live/dashboard" class="cta-button">Start Mining Now</a>
-            </div>
-            <div class="referral-section">
-                <h3>Your Personal Referral Code</h3>
-                <p>Share this code with friends and earn commissions on their investments:</p>
-                <div class="referral-code">${userReferralCode}</div>
-                <p>Your referral link: <strong>https://www.bithashcapital.live/signup.html?ref=${userReferralCode}</strong></p>
-            </div>
-        </div>
-        <div class="footer">
-            <p>© 2024 BitHash Capital LLC. All rights reserved.<br>This email was sent to ${userEmail} as part of your BitHash Capital account.</p>
-        </div>
-    </div>
-</body>
-</html>
-                `;
-
-                const welcomeText = `
-Welcome to BitHash Capital, ${userFirstName}!
-
-We're excited to have you join our community of smart Bitcoin cloud mining investors. Your account has been successfully created and you're now ready to start your mining journey.
-
-${createdUser.referredBy ? `You were referred by ${createdUser.referredBy.firstName}. Start investing together and maximize your earnings!` : ''}
-
-GET STARTED:
-• Cloud Mining: Start mining Bitcoin instantly with our advanced infrastructure
-• Earn Returns: Watch your investments grow with competitive returns
-• Referral Program: Earn commissions by referring friends
-
-Your Referral Code: ${userReferralCode}
-Your Referral Link: https://www.bithashcapital.live/signup.html?ref=${userReferralCode}
-
-Ready to start? Make your first investment:
-https://www.bithashcapital.live/dashboard
-
-Best regards,
-The BitHash Capital Team
-
-© 2024 BitHash Capital LLC. All rights reserved.
-                `;
-
-                await sendEmail({
-                    email: userEmail,
-                    subject: welcomeSubject,
-                    message: welcomeText,
-                    html: welcomeHtml
-                });
-
-                console.log(`Welcome email sent instantly to ${userEmail}`);
-
-                // INSTANT REFERRAL SUCCESS EMAIL
-                if (createdUser.referredBy) {
-                    const referringUser = await User.findById(createdUser.referredBy._id)
-                        .select('firstName lastName email');
-                    
-                    if (referringUser) {
-                        const referralSubject = `Great News! ${userFirstName} Joined BitHash Capital Through Your Referral`;
-                        const referralHtml = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>New Referral - BitHash Capital</title>
-    <style>
-        body { font-family: 'Inter', sans-serif; background: #f8fafc; }
-        .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
-        .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 30px; text-align: center; color: white; border-bottom: 4px solid #047857; }
-        .content { padding: 40px 30px; }
-        .success-badge { background: #dcfce7; color: #166534; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0; border: 2px solid #bbf7d0; }
-        .cta-button { display: inline-block; background: linear-gradient(135deg, #000000 0%, #374151 100%); color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 15px 0; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>New Referral Alert!</h1>
-            <p>Your network is growing at BitHash Capital</p>
-        </div>
-        <div class="content">
-            <div class="success-badge">
-                <h2>🎉 Congratulations!</h2>
-                <p><strong>${userFirstName} ${createdUser.lastName}</strong> has joined BitHash Capital using your referral link.</p>
-            </div>
-            <p>You'll now earn commissions on their investments and help them succeed in their Bitcoin cloud mining journey.</p>
-            <p style="text-align: center;"><a href="https://www.bithashcapital.live/dashboard" class="cta-button">View Your Referral Dashboard</a></p>
-        </div>
-    </div>
-</body>
-</html>
-                        `;
-
-                        const referralText = `
-Congratulations!
-
-${userFirstName} ${createdUser.lastName} has joined BitHash Capital using your referral link.
-
-You'll now earn commissions on their investments and help them succeed in their Bitcoin cloud mining journey.
-
-View your referral dashboard:
-https://www.bithashcapital.live/dashboard
-
-Thank you for growing our community!
-
-The BitHash Capital Team
-                        `;
-
-                        await sendEmail({
-                            email: referringUser.email,
-                            subject: referralSubject,
-                            message: referralText,
-                            html: referralHtml
-                        });
-
-                        console.log(`Referral success email sent instantly to ${referringUser.email}`);
-                    }
-                }
-            } catch (emailError) {
-                console.error('Failed to send welcome email:', emailError);
+        // Send welcome email (fire and forget)
+        try {
+            const welcomeMessage = `Welcome to BitHash, ${firstName}! Your account has been successfully created.`;
+            if (referredByUser) {
+                welcomeMessage += ` You were referred by ${referredByUser.firstName}.`;
             }
-        })(); // End of instant email function
+            
+            await sendEmail({
+                email: newUser.email,
+                subject: 'Welcome to BitHash',
+                message: welcomeMessage,
+                html: `<p>${welcomeMessage}</p>`
+            });
 
-        // Set cookie and return response immediately
+            // Send referral success email to referring user
+            if (referredByUser) {
+                const referralSuccessMessage = `Great news! ${firstName} ${lastName} has joined BitHash Capital using your referral link.`;
+                await sendEmail({
+                    email: referredByUser.email,
+                    subject: 'New Referral on BitHash Capital!',
+                    message: referralSuccessMessage,
+                    html: `<p>${referralSuccessMessage}</p>`
+                });
+            }
+        } catch (emailError) {
+            console.error('Failed to send welcome email:', emailError);
+            // Don't fail the signup if email fails
+        }
+
+        // Set cookie
         res.cookie('jwt', token, {
             expires: new Date(Date.now() + JWT_COOKIE_EXPIRES * 24 * 60 * 60 * 1000),
             httpOnly: true,
@@ -3158,42 +2993,42 @@ The BitHash Capital Team
             sameSite: 'strict'
         });
 
-        // Return success response immediately
+        // Return success response with user data
         res.status(201).json({
             status: 'success',
             token,
             data: {
                 user: {
-                    id: createdUser._id,
-                    firstName: createdUser.firstName,
-                    lastName: createdUser.lastName,
-                    email: createdUser.email,
-                    referralCode: createdUser.referralCode,
-                    referredBy: createdUser.referredBy ? {
-                        id: createdUser.referredBy._id,
-                        name: `${createdUser.referredBy.firstName} ${createdUser.referredBy.lastName}`
+                    id: newUser._id,
+                    firstName: newUser.firstName,
+                    lastName: newUser.lastName,
+                    email: newUser.email,
+                    referralCode: newUser.referralCode,
+                    referredBy: referredByUser ? {
+                        id: referredByUser._id,
+                        name: `${referredByUser.firstName} ${referredByUser.lastName}`
                     } : null
                 }
             }
         });
 
-        // Log successful signup AFTER sending response
+        // Log successful signup AFTER sending response (non-blocking)
         try {
             const deviceInfo = await getUserDeviceInfo(req);
             await SystemLog.create({
                 action: 'signup_complete',
                 entity: 'User',
-                entityId: createdUser._id,
-                performedBy: createdUser._id,
+                entityId: newUser._id,
+                performedBy: newUser._id,
                 performedByModel: 'User',
                 ip: deviceInfo.ip,
                 device: deviceInfo.device,
                 location: deviceInfo.location,
                 changes: {
-                    userId: createdUser._id,
-                    referralUsed: !!createdUser.referredBy,
+                    userId: newUser._id,
+                    referralUsed: !!referredByUser,
                     referralSource: referralSource,
-                    referringUser: createdUser.referredBy ? createdUser.referredBy._id : null
+                    referringUser: referredByUser ? referredByUser._id : null
                 }
             });
         } catch (logError) {
@@ -3202,12 +3037,16 @@ The BitHash Capital Team
 
     } catch (err) {
         console.error('Signup error:', err);
+        
         res.status(500).json({
             status: 'error',
             message: 'An error occurred during signup'
         });
     }
 });
+
+
+
 
 
 
@@ -3271,7 +3110,12 @@ app.get('/api/referrals/validate/:code', async (req, res) => {
 
 
 
-// Enhanced Login Endpoint with Instant Email Notifications
+
+
+
+
+
+// User Login with Comprehensive Tracking
 app.post('/api/login', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
   body('password').notEmpty().withMessage('Password is required'),
@@ -3279,6 +3123,7 @@ app.post('/api/login', [
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
+    // Track failed validation
     await logUserActivity(req, 'login_attempt', 'failed', {
       error: 'Validation failed',
       fields: errors.array().map(err => err.param)
@@ -3293,129 +3138,19 @@ app.post('/api/login', [
   try {
     const { email, password, rememberMe } = req.body;
 
+    // Track login attempt
     await logUserActivity(req, 'login_attempt', 'pending', {
       email,
       rememberMe: !!rememberMe
     });
 
-    // Fetch user with all necessary fields
-    const user = await User.findOne({ email }).select('+password +twoFactorAuth.secret firstName lastName email status');
-    
+    const user = await User.findOne({ email }).select('+password +twoFactorAuth.secret');
     if (!user || !(await bcrypt.compare(password, user.password))) {
+      // Track failed login
       await logUserActivity(req, 'login_attempt', 'failed', {
         error: 'Invalid credentials',
         email
       });
-
-      // INSTANT FAILED LOGIN EMAIL - Only if user exists
-      if (user) {
-        (async () => {
-          try {
-            const userFirstName = user.firstName;
-            const userEmail = user.email;
-            const deviceInfo = await getUserDeviceInfo(req);
-
-            const failedLoginHtml = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Security Alert - Failed Login Attempt</title>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; line-height: 1.6; color: #333; background-color: #f8fafc; }
-        .email-container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-        .header { background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); padding: 40px 30px; text-align: center; border-bottom: 4px solid #f87171; }
-        .header h1 { color: #ffffff; font-size: 28px; font-weight: 700; margin-bottom: 10px; }
-        .content { padding: 40px 30px; }
-        .alert-section { background: #fef2f2; border: 2px solid #fecaca; border-radius: 8px; padding: 25px; margin-bottom: 30px; text-align: center; }
-        .alert-icon { font-size: 48px; margin-bottom: 15px; }
-        .device-info { background: #f8fafc; border-radius: 8px; padding: 20px; margin: 25px 0; border-left: 4px solid #94a3b8; }
-        .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px; }
-        .info-item { display: flex; flex-direction: column; }
-        .info-label { font-size: 12px; color: #64748b; font-weight: 500; margin-bottom: 5px; }
-        .info-value { font-size: 14px; color: #1e293b; font-weight: 600; }
-        .support-button { display: inline-block; background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 10px 0; }
-        .footer { background: #1a202c; color: #e2e8f0; padding: 30px; text-align: center; }
-        @media (max-width: 600px) { .header, .content { padding: 25px 20px; } .info-grid { grid-template-columns: 1fr; } }
-    </style>
-</head>
-<body>
-    <div class="email-container">
-        <div class="header">
-            <h1>Security Alert</h1>
-            <p>Failed Login Attempt Detected</p>
-        </div>
-        <div class="content">
-            <div class="alert-section">
-                <div class="alert-icon">⚠️</div>
-                <h2>Unsuccessful Login Attempt</h2>
-                <p>We detected a failed login attempt to your BitHash Capital account.</p>
-            </div>
-            <div class="device-info">
-                <h3>Login Attempt Details</h3>
-                <div class="info-grid">
-                    <div class="info-item">
-                        <span class="info-label">Time</span>
-                        <span class="info-value">${new Date().toLocaleString()}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Email</span>
-                        <span class="info-value">${userEmail}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">IP Address</span>
-                        <span class="info-value">${deviceInfo.ip}</span>
-                    </div>
-                </div>
-            </div>
-            <div style="text-align: center;">
-                <p>If this wasn't you, we recommend changing your password immediately.</p>
-                <a href="https://www.bithashcapital.live/support" class="support-button">Contact Support</a>
-            </div>
-        </div>
-        <div class="footer">
-            <p>© 2024 BitHash Capital LLC. All rights reserved.<br>This security alert was sent to ${userEmail} to help protect your account.</p>
-        </div>
-    </div>
-</body>
-</html>
-            `;
-
-            const failedLoginText = `
-SECURITY ALERT: Failed Login Attempt
-
-We detected a failed login attempt to your BitHash Capital account.
-
-Login Attempt Details:
-- Time: ${new Date().toLocaleString()}
-- Email: ${userEmail}
-- IP Address: ${deviceInfo.ip}
-
-If this wasn't you, we recommend changing your password immediately.
-
-Contact our support team if you have any concerns:
-https://www.bithashcapital.live/support
-
-Stay secure,
-The BitHash Capital Security Team
-            `;
-
-            await sendEmail({
-              email: userEmail,
-              subject: 'Security Alert: Failed Login Attempt - BitHash Capital',
-              message: failedLoginText,
-              html: failedLoginHtml
-            });
-
-            console.log(`Security alert email sent instantly to ${userEmail}`);
-          } catch (emailError) {
-            console.error('Failed to send security alert email:', emailError);
-          }
-        })();
-      }
       
       return res.status(401).json({
         status: 'fail',
@@ -3424,6 +3159,7 @@ The BitHash Capital Security Team
     }
 
     if (user.status !== 'active') {
+      // Track login to suspended account
       await logUserActivity(req, 'login_attempt', 'failed', {
         error: 'Account suspended',
         userId: user._id,
@@ -3438,20 +3174,13 @@ The BitHash Capital Security Team
 
     const token = generateJWT(user._id);
 
-    // Update last login and fetch complete user data
+    // Update last login
     user.lastLogin = new Date();
     const deviceInfo = await getUserDeviceInfo(req);
     user.loginHistory.push(deviceInfo);
     await user.save();
 
-    // Fetch complete user data for email
-    const completeUser = await User.findById(user._id)
-        .select('firstName lastName email');
-
-    if (!completeUser) {
-        throw new Error('Failed to fetch complete user data');
-    }
-
+    // Track device info
     await logUserActivity(req, 'device_login', 'success', {
       deviceType: getDeviceType(req),
       ipAddress: deviceInfo.ip,
@@ -3468,6 +3197,7 @@ The BitHash Capital Security Team
       sameSite: 'strict'
     });
 
+    // Track session creation
     await logUserActivity(req, 'session_created', 'success', {
       userId: user._id,
       sessionType: 'jwt',
@@ -3480,10 +3210,10 @@ The BitHash Capital Security Team
       token,
       data: {
         user: {
-          id: completeUser._id,
-          firstName: completeUser.firstName,
-          lastName: completeUser.lastName,
-          email: completeUser.email
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email
         }
       }
     };
@@ -3493,143 +3223,27 @@ The BitHash Capital Security Team
       responseData.twoFactorRequired = true;
       responseData.message = 'Two-factor authentication required';
       
+      // Track 2FA required
       await logUserActivity(req, '2fa_required', 'pending', {
         userId: user._id
       }, user);
     } else {
+      // Track successful login
       await logUserActivity(req, 'login', 'success', {
         userId: user._id,
         rememberMe: !!rememberMe
       }, user);
-
-      // INSTANT SUCCESSFUL LOGIN EMAIL
-      (async () => {
-        try {
-          const userFirstName = completeUser.firstName;
-          const userEmail = completeUser.email;
-          const deviceType = getDeviceType(req);
-          const osInfo = getOSFromUserAgent(req.headers['user-agent']);
-          const browserInfo = getBrowserFromUserAgent(req.headers['user-agent']);
-
-          const successLoginHtml = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Successful Login - BitHash Capital</title>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; line-height: 1.6; color: #333; background-color: #f8fafc; }
-        .email-container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-        .header { background: linear-gradient(135deg, #000000 0%, #1a202c 100%); padding: 40px 30px; text-align: center; border-bottom: 4px solid #10b981; }
-        .header h1 { color: #ffffff; font-size: 28px; font-weight: 700; margin-bottom: 10px; }
-        .content { padding: 40px 30px; }
-        .success-section { background: #f0fdf4; border: 2px solid #bbf7d0; border-radius: 8px; padding: 25px; margin-bottom: 30px; text-align: center; }
-        .success-icon { font-size: 48px; margin-bottom: 15px; }
-        .login-details { background: #f8fafc; border-radius: 8px; padding: 20px; margin: 25px 0; border-left: 4px solid #3b82f6; }
-        .details-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px; }
-        .detail-item { display: flex; flex-direction: column; }
-        .detail-label { font-size: 12px; color: #64748b; font-weight: 500; margin-bottom: 5px; }
-        .detail-value { font-size: 14px; color: #1e293b; font-weight: 600; }
-        .action-buttons { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 15px; }
-        .action-button { display: block; background: linear-gradient(135deg, #000000 0%, #374151 100%); color: #ffffff; padding: 12px 16px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 14px; text-align: center; }
-        .footer { background: #1a202c; color: #e2e8f0; padding: 30px; text-align: center; }
-        @media (max-width: 600px) { .header, .content { padding: 25px 20px; } .details-grid, .action-buttons { grid-template-columns: 1fr; } }
-    </style>
-</head>
-<body>
-    <div class="email-container">
-        <div class="header">
-            <h1>Login Successful</h1>
-            <p>Welcome back to BitHash Capital</p>
-        </div>
-        <div class="content">
-            <div class="success-section">
-                <div class="success-icon">✅</div>
-                <h2>Hello, ${userFirstName}!</h2>
-                <p>You've successfully logged into your BitHash Capital account.</p>
-            </div>
-            <div class="login-details">
-                <h3>Login Information</h3>
-                <div class="details-grid">
-                    <div class="detail-item">
-                        <span class="detail-label">Time</span>
-                        <span class="detail-value">${new Date().toLocaleString()}</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">Device</span>
-                        <span class="detail-value">${deviceType}</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">Browser</span>
-                        <span class="detail-value">${browserInfo}</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">IP Address</span>
-                        <span class="detail-value">${deviceInfo.ip}</span>
-                    </div>
-                </div>
-            </div>
-            <div class="action-buttons">
-                <a href="https://www.bithashcapital.live/dashboard" class="action-button">View Dashboard</a>
-                <a href="https://www.bithashcapital.live/invest" class="action-button">Make Investment</a>
-                <a href="https://www.bithashcapital.live/portfolio" class="action-button">Check Portfolio</a>
-            </div>
-        </div>
-        <div class="footer">
-            <p>© 2024 BitHash Capital LLC. All rights reserved.<br>This login notification was sent to ${userEmail} for security purposes.</p>
-        </div>
-    </div>
-</body>
-</html>
-          `;
-
-          const successLoginText = `
-SUCCESSFUL LOGIN: BitHash Capital
-
-Hello, ${userFirstName}!
-
-You've successfully logged into your BitHash Capital account.
-
-Login Details:
-- Time: ${new Date().toLocaleString()}
-- Device: ${deviceType}
-- Browser: ${browserInfo}
-- IP Address: ${deviceInfo.ip}
-- Location: ${deviceInfo.location}
-
-Quick Access:
-• Dashboard: https://www.bithashcapital.live/dashboard
-• Make Investment: https://www.bithashcapital.live/invest
-• Portfolio: https://www.bithashcapital.live/portfolio
-
-Stay secure,
-The BitHash Capital Team
-          `;
-
-          await sendEmail({
-            email: userEmail,
-            subject: 'Successful Login - BitHash Capital',
-            message: successLoginText,
-            html: successLoginHtml
-          });
-
-          console.log(`Login success email sent instantly to ${userEmail}`);
-        } catch (emailError) {
-          console.error('Failed to send login notification email:', emailError);
-        }
-      })();
     }
 
     res.status(200).json(responseData);
 
+    // Also log to system activity
     await logActivity('user_login', 'user', user._id, user._id, 'User', req);
 
   } catch (err) {
     console.error('Login error:', err);
     
+    // Track login error
     await logUserActivity(req, 'login_error', 'failed', {
       error: err.message,
       stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
@@ -3641,11 +3255,6 @@ The BitHash Capital Team
     });
   }
 });
-
-
-
-
-
 app.post('/api/auth/verify-2fa', [
   body('token').notEmpty().withMessage('Token is required'),
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
@@ -13817,544 +13426,6 @@ app.delete('/api/admin/notifications/delete-all-read', adminProtect, async (req,
 
 
 
-// OTP Schema for storing verification codes
-const OTPSchema = new mongoose.Schema({
-  email: {
-    type: String,
-    required: [true, 'Email is required'],
-    index: true
-  },
-  code: {
-    type: String,
-    required: [true, 'OTP code is required']
-  },
-  type: {
-    type: String,
-    enum: ['login', 'signup', 'password_reset', 'withdrawal'],
-    default: 'login'
-  },
-  expiresAt: {
-    type: Date,
-    required: true,
-    index: { expireAfterSeconds: 0 } // Auto-delete expired documents
-  },
-  attempts: {
-    type: Number,
-    default: 0
-  },
-  maxAttempts: {
-    type: Number,
-    default: 5
-  },
-  verified: {
-    type: Boolean,
-    default: false
-  },
-  ipAddress: String,
-  userAgent: String
-}, {
-  timestamps: true
-});
-
-// Index for efficient queries
-OTPSchema.index({ email: 1, type: 1 });
-OTPSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-
-const OTP = mongoose.model('OTP', OTPSchema);
-
-// Generate a 6-digit OTP code
-const generateOTP = () => {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-};
-
-// Send OTP Email with Professional Design
-const sendOTPEmail = async (email, otpCode, userName = 'User') => {
-  try {
-    const otpSubject = `Your BitHash Capital Verification Code: ${otpCode}`;
-    
-    const otpHtml = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BitHash Capital - Verification Code</title>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; line-height: 1.6; color: #333; background-color: #f8fafc; }
-        .email-container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-        .header { background: linear-gradient(135deg, #000000 0%, #1a202c 100%); padding: 40px 30px; text-align: center; border-bottom: 4px solid #f59e0b; }
-        .header h1 { color: #ffffff; font-size: 28px; font-weight: 700; margin-bottom: 10px; }
-        .header p { color: #e2e8f0; font-size: 16px; font-weight: 400; }
-        .content { padding: 40px 30px; }
-        .welcome-section { text-align: center; margin-bottom: 30px; }
-        .welcome-section h2 { color: #1a202c; font-size: 24px; font-weight: 600; margin-bottom: 15px; }
-        
-        .otp-section { background: linear-gradient(135deg, #fef3c7 0%, #fef7cd 100%); border: 2px solid #fcd34d; border-radius: 12px; padding: 30px; text-align: center; margin: 30px 0; }
-        .otp-code { font-size: 42px; font-weight: 700; color: #000000; letter-spacing: 8px; margin: 20px 0; font-family: 'Courier New', monospace; background: #ffffff; padding: 20px; border-radius: 8px; border: 2px dashed #f59e0b; }
-        .otp-expiry { color: #dc2626; font-weight: 600; margin: 15px 0; }
-        
-        .security-section { background: #f0f9ff; padding: 25px; border-radius: 8px; border-left: 4px solid #0369a1; margin: 25px 0; }
-        .security-tips { text-align: left; margin-top: 15px; }
-        .security-tips li { margin-bottom: 8px; color: #475569; }
-        
-        .mining-image { width: 100%; max-width: 400px; margin: 20px auto; border-radius: 8px; overflow: hidden; }
-        .mining-image img { width: 100%; height: auto; display: block; }
-        
-        .footer { background: #1a202c; color: #e2e8f0; padding: 30px; text-align: center; }
-        @media (max-width: 600px) { .header, .content { padding: 25px 20px; } .otp-code { font-size: 32px; letter-spacing: 6px; } }
-    </style>
-</head>
-<body>
-    <div class="email-container">
-        <div class="header">
-            <h1>BitHash Capital</h1>
-            <p>Secure Bitcoin Cloud Mining Platform</p>
-        </div>
-        <div class="content">
-            <div class="welcome-section">
-                <h2>Hello, ${userName}!</h2>
-                <p>To complete your secure login, please use the verification code below:</p>
-            </div>
-            
-            <div class="otp-section">
-                <h3>Your Verification Code</h3>
-                <div class="otp-code">${otpCode}</div>
-                <p class="otp-expiry">⏰ This code expires in 5 minutes</p>
-                <p>Enter this code in the verification window to access your account.</p>
-            </div>
-            
-            <div class="mining-image">
-                <img src="https://images.unsplash.com/photo-1518546305927-5a555bb7020d?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" alt="Bitcoin Mining Facility" style="border-radius: 8px;">
-                <p style="text-align: center; margin-top: 10px; color: #64748b; font-size: 0.9rem;">Our state-of-the-art Bitcoin mining facility</p>
-            </div>
-            
-            <div class="security-section">
-                <h3>🔒 Security Tips</h3>
-                <div class="security-tips">
-                    <ul>
-                        <li>Never share this code with anyone</li>
-                        <li>BitHash Capital will never ask for your password or verification code</li>
-                        <li>Ensure you're on our official website: https://www.bithashcapital.live</li>
-                        <li>This code is valid for one-time use only</li>
-                    </ul>
-                </div>
-            </div>
-            
-            <div style="text-align: center; margin-top: 30px; padding: 20px; background: #f1f5f9; border-radius: 8px;">
-                <h4>Ready to Start Mining?</h4>
-                <p>Once verified, you can access your dashboard and continue your Bitcoin mining journey with us.</p>
-            </div>
-        </div>
-        <div class="footer">
-            <p>© 2024 BitHash Capital LLC. All rights reserved.<br>
-            This email was sent to ${email} as part of your BitHash Capital account security.</p>
-            <p style="font-size: 0.8rem; margin-top: 10px; color: #94a3b8;">
-                Institutional-grade Bitcoin mining • 256-bit encryption • 24/7 monitoring
-            </p>
-        </div>
-    </div>
-</body>
-</html>
-    `;
-
-    const otpText = `
-BitHash Capital - Verification Code
-
-Hello ${userName}!
-
-Your verification code is: ${otpCode}
-
-This code expires in 5 minutes. Enter it in the verification window to access your account.
-
-Security Tips:
-• Never share this code with anyone
-• BitHash Capital will never ask for your password or verification code
-• Ensure you're on our official website: https://www.bithashcapital.live
-• This code is valid for one-time use only
-
-Ready to continue your Bitcoin mining journey? Verify your code to access your dashboard.
-
-© 2024 BitHash Capital LLC. All rights reserved.
-This email was sent to ${email} as part of your BitHash Capital account security.
-    `;
-
-    await sendEmail({
-      email: email,
-      subject: otpSubject,
-      message: otpText,
-      html: otpHtml
-    });
-
-    console.log(`OTP email sent successfully to ${email}`);
-    return true;
-  } catch (error) {
-    console.error('Failed to send OTP email:', error);
-    throw new Error('Failed to send verification email');
-  }
-};
-
-// Send OTP Endpoint - Matches frontend expectation
-app.post('/api/send-otp', [
-  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { email } = req.body;
-
-    // Check if user exists
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found with this email address'
-      });
-    }
-
-    // Generate OTP
-    const otpCode = generateOTP();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
-
-    // Delete any existing OTPs for this email
-    await OTP.deleteMany({ email, type: 'login' });
-
-    // Create new OTP
-    const otpRecord = await OTP.create({
-      email,
-      code: otpCode,
-      type: 'login',
-      expiresAt,
-      ipAddress: req.ip,
-      userAgent: req.headers['user-agent']
-    });
-
-    // Send OTP email
-    await sendOTPEmail(email, otpCode, user.firstName);
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Verification code sent to your email',
-      data: {
-        email: email,
-        expiresIn: '5 minutes',
-        // Note: We don't send the OTP code in response for security
-      }
-    });
-
-    await logActivity('otp_sent', 'auth', user._id, user._id, 'User', req, {
-      email: email,
-      type: 'login'
-    });
-
-  } catch (err) {
-    console.error('Send OTP error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to send verification code. Please try again.'
-    });
-  }
-});
-
-// Verify OTP Endpoint - Matches frontend expectation
-app.post('/api/verify-otp', [
-  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
-  body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { email, otp } = req.body;
-
-    // Find the OTP record
-    const otpRecord = await OTP.findOne({
-      email,
-      code: otp,
-      type: 'login',
-      expiresAt: { $gt: new Date() },
-      verified: false
-    });
-
-    if (!otpRecord) {
-      // Increment attempts if OTP exists but is invalid
-      await OTP.updateOne(
-        { email, type: 'login' },
-        { $inc: { attempts: 1 } }
-      );
-
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Invalid or expired verification code. Please request a new one.'
-      });
-    }
-
-    // Check if max attempts exceeded
-    if (otpRecord.attempts >= otpRecord.maxAttempts) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Too many failed attempts. Please request a new verification code.'
-      });
-    }
-
-    // Mark OTP as verified
-    otpRecord.verified = true;
-    await otpRecord.save();
-
-    // Find the user
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-
-    // Generate JWT token for the user
-    const token = generateJWT(user._id);
-
-    // Update user's last login
-    user.lastLogin = new Date();
-    const deviceInfo = await getUserDeviceInfo(req);
-    user.loginHistory.push(deviceInfo);
-    await user.save();
-
-    // Set HTTP-only cookie
-    res.cookie('jwt', token, {
-      expires: new Date(Date.now() + JWT_COOKIE_EXPIRES * 24 * 60 * 60 * 1000),
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict'
-    });
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Verification successful! Welcome back to BitHash Capital.',
-      data: {
-        user: {
-          id: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email
-        },
-        token: token
-      }
-    });
-
-    await logActivity('otp_verified', 'auth', user._id, user._id, 'User', req, {
-      email: email,
-      type: 'login'
-    });
-
-    // Send successful login notification email
-    try {
-      const loginNotificationHtml = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Successful Login - BitHash Capital</title>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; line-height: 1.6; color: #333; background-color: #f8fafc; }
-        .email-container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-        .header { background: linear-gradient(135deg, #000000 0%, #1a202c 100%); padding: 40px 30px; text-align: center; border-bottom: 4px solid #10b981; }
-        .header h1 { color: #ffffff; font-size: 28px; font-weight: 700; margin-bottom: 10px; }
-        .content { padding: 40px 30px; }
-        .success-section { background: #f0fdf4; border: 2px solid #bbf7d0; border-radius: 8px; padding: 25px; margin-bottom: 30px; text-align: center; }
-        .success-icon { font-size: 48px; margin-bottom: 15px; }
-        .login-details { background: #f8fafc; border-radius: 8px; padding: 20px; margin: 25px 0; border-left: 4px solid #3b82f6; }
-        .details-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px; }
-        .detail-item { display: flex; flex-direction: column; }
-        .detail-label { font-size: 12px; color: #64748b; font-weight: 500; margin-bottom: 5px; }
-        .detail-value { font-size: 14px; color: #1e293b; font-weight: 600; }
-        .action-buttons { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 15px; }
-        .action-button { display: block; background: linear-gradient(135deg, #000000 0%, #374151 100%); color: #ffffff; padding: 12px 16px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 14px; text-align: center; }
-        .security-note { background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 15px; margin: 20px 0; text-align: center; }
-        .footer { background: #1a202c; color: #e2e8f0; padding: 30px; text-align: center; }
-        @media (max-width: 600px) { .header, .content { padding: 25px 20px; } .details-grid, .action-buttons { grid-template-columns: 1fr; } }
-    </style>
-</head>
-<body>
-    <div class="email-container">
-        <div class="header">
-            <h1>Login Successful</h1>
-            <p>Welcome back to BitHash Capital</p>
-        </div>
-        <div class="content">
-            <div class="success-section">
-                <div class="success-icon">✅</div>
-                <h2>Hello, ${user.firstName}!</h2>
-                <p>You've successfully logged into your BitHash Capital account with two-step verification.</p>
-            </div>
-            
-            <div class="login-details">
-                <h3>Login Information</h3>
-                <div class="details-grid">
-                    <div class="detail-item">
-                        <span class="detail-label">Time</span>
-                        <span class="detail-value">${new Date().toLocaleString()}</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">Device</span>
-                        <span class="detail-value">${getDeviceType(req)}</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">IP Address</span>
-                        <span class="detail-value">${deviceInfo.ip}</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">Location</span>
-                        <span class="detail-value">${deviceInfo.location}</span>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="security-note">
-                <h4>🔒 Security Notice</h4>
-                <p>If this wasn't you, please secure your account immediately by changing your password and contacting our support team.</p>
-            </div>
-            
-            <div class="action-buttons">
-                <a href="https://www.bithashcapital.live/dashboard" class="action-button">View Dashboard</a>
-                <a href="https://www.bithashcapital.live/invest" class="action-button">Make Investment</a>
-                <a href="https://www.bithashcapital.live/portfolio" class="action-button">Check Portfolio</a>
-            </div>
-        </div>
-        <div class="footer">
-            <p>© 2024 BitHash Capital LLC. All rights reserved.<br>This login notification was sent to ${email} for security purposes.</p>
-        </div>
-    </div>
-</body>
-</html>
-      `;
-
-      const loginNotificationText = `
-SUCCESSFUL LOGIN: BitHash Capital
-
-Hello ${user.firstName}!
-
-You've successfully logged into your BitHash Capital account with two-step verification.
-
-Login Details:
-- Time: ${new Date().toLocaleString()}
-- Device: ${getDeviceType(req)}
-- IP Address: ${deviceInfo.ip}
-- Location: ${deviceInfo.location}
-
-Security Notice:
-If this wasn't you, please secure your account immediately by changing your password and contacting our support team.
-
-Quick Access:
-• Dashboard: https://www.bithashcapital.live/dashboard
-• Make Investment: https://www.bithashcapital.live/invest
-• Portfolio: https://www.bithashcapital.live/portfolio
-
-Stay secure,
-The BitHash Capital Team
-      `;
-
-      await sendEmail({
-        email: email,
-        subject: 'Successful Login - BitHash Capital',
-        message: loginNotificationText,
-        html: loginNotificationHtml
-      });
-
-    } catch (emailError) {
-      console.error('Failed to send login notification:', emailError);
-    }
-
-  } catch (err) {
-    console.error('Verify OTP error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to verify code. Please try again.'
-    });
-  }
-});
-
-// Resend OTP Endpoint
-app.post('/api/resend-otp', [
-  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      status: 'fail',
-      errors: errors.array()
-    });
-  }
-
-  try {
-    const { email } = req.body;
-
-    // Check if user exists
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-
-    // Generate new OTP
-    const otpCode = generateOTP();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
-
-    // Delete any existing OTPs for this email
-    await OTP.deleteMany({ email, type: 'login' });
-
-    // Create new OTP
-    const otpRecord = await OTP.create({
-      email,
-      code: otpCode,
-      type: 'login',
-      expiresAt,
-      ipAddress: req.ip,
-      userAgent: req.headers['user-agent']
-    });
-
-    // Send OTP email
-    await sendOTPEmail(email, otpCode, user.firstName);
-
-    res.status(200).json({
-      status: 'success',
-      message: 'New verification code sent to your email',
-      data: {
-        email: email,
-        expiresIn: '5 minutes'
-      }
-    });
-
-    await logActivity('otp_resent', 'auth', user._id, user._id, 'User', req, {
-      email: email,
-      type: 'login'
-    });
-
-  } catch (err) {
-    console.error('Resend OTP error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to resend verification code. Please try again.'
-    });
-  }
-});
-
 
 
 // Error handling middleware
@@ -14484,3 +13555,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
