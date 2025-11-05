@@ -2832,7 +2832,45 @@ initializeLanguages();
 // Routes
 
 
-// User Signup with Comprehensive Tracking - FIXED VERSION
+
+
+
+
+// Referral link handler - ADD THIS ROUTE
+app.get('/:referralCode', async (req, res) => {
+  try {
+    const { referralCode } = req.params;
+    
+    // Validate referral code format (6-8 alphanumeric characters)
+    if (!referralCode || !/^[A-Z0-9]{6,8}$/.test(referralCode)) {
+      return res.redirect('/signup.html');
+    }
+    
+    // Check if referral code exists in database
+    const referringUser = await User.findOne({ referralCode });
+    
+    if (referringUser) {
+      // Redirect to signup page with referral code as query parameter
+      res.redirect(`/signup.html?ref=${referralCode}`);
+    } else {
+      // Invalid referral code, redirect to normal signup
+      res.redirect('/signup.html');
+    }
+  } catch (err) {
+    console.error('Referral link error:', err);
+    // Fallback to normal signup on error
+    res.redirect('/signup.html');
+  }
+});
+
+
+
+
+
+
+
+
+// Enhanced User Signup with Referral and Downline Support
 app.post('/api/signup', [
   body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
   body('lastName').trim().notEmpty().withMessage('Last name is required').escape(),
@@ -2869,6 +2907,9 @@ app.post('/api/signup', [
     const referralCode = generateReferralCode();
 
     let referredByUser = null;
+    let downlineRelationship = null;
+
+    // Handle referral if provided
     if (referredBy) {
       referredByUser = await User.findOne({ referralCode: referredBy });
       if (!referredByUser) {
@@ -2879,6 +2920,7 @@ app.post('/api/signup', [
       }
     }
 
+    // Create new user
     const newUser = await User.create({
       firstName,
       lastName,
@@ -2889,9 +2931,42 @@ app.post('/api/signup', [
       referredBy: referredByUser ? referredByUser._id : undefined
     });
 
+    // Create downline relationship if referred
+    if (referredByUser) {
+      // Get current commission settings
+      const commissionSettings = await CommissionSettings.findOne({ isActive: true }) || 
+        await CommissionSettings.create({
+          commissionPercentage: 5,
+          commissionRounds: 3,
+          updatedBy: null // System-initiated
+        });
+
+      // Create downline relationship
+      downlineRelationship = await DownlineRelationship.create({
+        upline: referredByUser._id,
+        downline: newUser._id,
+        commissionPercentage: commissionSettings.commissionPercentage,
+        commissionRounds: commissionSettings.commissionRounds,
+        remainingRounds: commissionSettings.commissionRounds,
+        assignedBy: null, // System-assigned for referral signups
+        status: 'active'
+      });
+
+      // Update upline user's referral stats
+      await User.findByIdAndUpdate(referredByUser._id, {
+        $inc: {
+          'referralStats.totalReferrals': 1,
+          'downlineStats.totalDownlines': 1,
+          'downlineStats.activeDownlines': 1
+        }
+      });
+
+      console.log(`✅ Downline relationship created: ${referredByUser.email} -> ${newUser.email}`);
+    }
+
     const token = generateJWT(newUser._id);
 
-    // Send welcome email (fire and forget)
+    // Send welcome email
     try {
       const welcomeMessage = `Welcome to BitHash, ${firstName}! Your account has been successfully created.`;
       await sendEmail({
@@ -2902,7 +2977,6 @@ app.post('/api/signup', [
       });
     } catch (emailError) {
       console.error('Failed to send welcome email:', emailError);
-      // Don't fail the signup if email fails
     }
 
     // Set cookie
@@ -2913,7 +2987,7 @@ app.post('/api/signup', [
       sameSite: 'strict'
     });
 
-    // Return success response with user data
+    // Return success response
     res.status(201).json({
       status: 'success',
       token,
@@ -2922,12 +2996,17 @@ app.post('/api/signup', [
           id: newUser._id,
           firstName: newUser.firstName,
           lastName: newUser.lastName,
-          email: newUser.email
+          email: newUser.email,
+          referralCode: newUser.referralCode,
+          referredBy: referredByUser ? {
+            id: referredByUser._id,
+            name: `${referredByUser.firstName} ${referredByUser.lastName}`
+          } : null
         }
       }
     });
 
-    // Log successful signup AFTER sending response (non-blocking)
+    // Log successful signup
     try {
       const deviceInfo = await getUserDeviceInfo(req);
       await SystemLog.create({
@@ -2942,9 +3021,18 @@ app.post('/api/signup', [
         changes: {
           userId: newUser._id,
           referralUsed: !!referredByUser,
-          referralSource: referredByUser ? referredByUser._id : 'organic'
+          referralSource: referredByUser ? referredByUser._id : 'organic',
+          downlineCreated: !!downlineRelationship
         }
       });
+
+      // Also log referral activity if applicable
+      if (referredByUser) {
+        await logActivity('referral_signup', 'user', newUser._id, referredByUser._id, 'User', req, {
+          newUser: newUser._id,
+          referralCode: referredBy
+        });
+      }
     } catch (logError) {
       console.error('Failed to log signup activity:', logError);
     }
@@ -13386,6 +13474,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
