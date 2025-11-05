@@ -2835,30 +2835,72 @@ initializeLanguages();
 
 
 
-
-// Referral link handler - ADD THIS ROUTE
+// Enhanced Referral link handler - handles various referral code formats
 app.get('/:referralCode', async (req, res) => {
   try {
-    const { referralCode } = req.params;
+    let { referralCode } = req.params;
     
-    // Validate referral code format (6-8 alphanumeric characters)
-    if (!referralCode || !/^[A-Z0-9]{6,8}$/.test(referralCode)) {
+    console.log('Referral link accessed:', referralCode);
+    
+    // Handle referral codes with colons (like "6364B00B:1")
+    if (referralCode.includes(':')) {
+      const parts = referralCode.split(':');
+      referralCode = parts[0]; // Take only the part before the colon
+    }
+    
+    // Validate referral code format (alphanumeric, 6-8 characters)
+    if (!referralCode || !/^[A-Z0-9]{6,8}$/i.test(referralCode)) {
+      console.log('Invalid referral code format, redirecting to normal signup');
       return res.redirect('/signup.html');
     }
+    
+    // Convert to uppercase for consistency
+    referralCode = referralCode.toUpperCase();
     
     // Check if referral code exists in database
     const referringUser = await User.findOne({ referralCode });
     
     if (referringUser) {
+      console.log(`Valid referral code ${referralCode} found for user: ${referringUser.email}`);
       // Redirect to signup page with referral code as query parameter
       res.redirect(`/signup.html?ref=${referralCode}`);
     } else {
+      console.log(`Invalid referral code: ${referralCode}`);
       // Invalid referral code, redirect to normal signup
       res.redirect('/signup.html');
     }
   } catch (err) {
     console.error('Referral link error:', err);
     // Fallback to normal signup on error
+    res.redirect('/signup.html');
+  }
+});
+
+// Additional route to handle referral codes with colons explicitly
+app.get('/:referralCode::version', async (req, res) => {
+  try {
+    const { referralCode, version } = req.params;
+    
+    console.log('Versioned referral link accessed:', { referralCode, version });
+    
+    // Validate referral code format
+    if (!referralCode || !/^[A-Z0-9]{6,8}$/i.test(referralCode)) {
+      return res.redirect('/signup.html');
+    }
+    
+    const formattedCode = referralCode.toUpperCase();
+    
+    // Check if referral code exists
+    const referringUser = await User.findOne({ referralCode: formattedCode });
+    
+    if (referringUser) {
+      console.log(`Valid versioned referral code ${formattedCode} found`);
+      res.redirect(`/signup.html?ref=${formattedCode}`);
+    } else {
+      res.redirect('/signup.html');
+    }
+  } catch (err) {
+    console.error('Versioned referral link error:', err);
     res.redirect('/signup.html');
   }
 });
@@ -2870,7 +2912,9 @@ app.get('/:referralCode', async (req, res) => {
 
 
 
-// Enhanced User Signup with Referral and Downline Support
+
+
+// Enhanced User Signup with Comprehensive Referral Handling
 app.post('/api/signup', [
   body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
   body('lastName').trim().notEmpty().withMessage('Last name is required').escape(),
@@ -2894,6 +2938,8 @@ app.post('/api/signup', [
   try {
     const { firstName, lastName, email, password, city, referredBy } = req.body;
 
+    console.log('Signup attempt:', { email, referredBy });
+
     // Check if email already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
@@ -2908,16 +2954,45 @@ app.post('/api/signup', [
 
     let referredByUser = null;
     let downlineRelationship = null;
+    let cleanedReferralCode = referredBy;
 
-    // Handle referral if provided
-    if (referredBy) {
-      referredByUser = await User.findOne({ referralCode: referredBy });
+    // Clean and validate referral code
+    if (cleanedReferralCode) {
+      // Remove any colons and version numbers
+      if (cleanedReferralCode.includes(':')) {
+        cleanedReferralCode = cleanedReferralCode.split(':')[0];
+      }
+      
+      // Convert to uppercase
+      cleanedReferralCode = cleanedReferralCode.toUpperCase().trim();
+      
+      console.log('Processing referral code:', cleanedReferralCode);
+
+      // Validate format
+      if (!/^[A-Z0-9]{6,8}$/.test(cleanedReferralCode)) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Invalid referral code format'
+        });
+      }
+
+      referredByUser = await User.findOne({ referralCode: cleanedReferralCode });
       if (!referredByUser) {
         return res.status(400).json({
           status: 'fail',
-          message: 'Invalid referral code'
+          message: 'Invalid referral code - user not found'
         });
       }
+
+      // Prevent self-referral
+      if (email === referredByUser.email) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Cannot use your own referral code'
+        });
+      }
+
+      console.log(`Referral validated: ${referredByUser.email} referring ${email}`);
     }
 
     // Create new user
@@ -2928,40 +3003,75 @@ app.post('/api/signup', [
       password: hashedPassword,
       city,
       referralCode,
-      referredBy: referredByUser ? referredByUser._id : undefined
+      referredBy: referredByUser ? referredByUser._id : undefined,
+      referralStats: {
+        totalReferrals: 0,
+        totalEarnings: 0,
+        availableBalance: 0,
+        withdrawn: 0,
+        referralTier: 1
+      },
+      downlineStats: {
+        totalDownlines: 0,
+        activeDownlines: 0,
+        totalCommissionEarned: 0,
+        thisMonthCommission: 0
+      }
     });
 
     // Create downline relationship if referred
     if (referredByUser) {
-      // Get current commission settings
-      const commissionSettings = await CommissionSettings.findOne({ isActive: true }) || 
-        await CommissionSettings.create({
+      try {
+        // Get current commission settings
+        const commissionSettings = await CommissionSettings.findOne({ isActive: true });
+        const defaultSettings = {
           commissionPercentage: 5,
-          commissionRounds: 3,
-          updatedBy: null // System-initiated
+          commissionRounds: 3
+        };
+
+        const settings = commissionSettings || defaultSettings;
+
+        // Create downline relationship
+        downlineRelationship = await DownlineRelationship.create({
+          upline: referredByUser._id,
+          downline: newUser._id,
+          commissionPercentage: settings.commissionPercentage,
+          commissionRounds: settings.commissionRounds,
+          remainingRounds: settings.commissionRounds,
+          assignedBy: null, // System-assigned
+          status: 'active',
+          assignedAt: new Date()
         });
 
-      // Create downline relationship
-      downlineRelationship = await DownlineRelationship.create({
-        upline: referredByUser._id,
-        downline: newUser._id,
-        commissionPercentage: commissionSettings.commissionPercentage,
-        commissionRounds: commissionSettings.commissionRounds,
-        remainingRounds: commissionSettings.commissionRounds,
-        assignedBy: null, // System-assigned for referral signups
-        status: 'active'
-      });
+        // Update upline user's referral stats
+        await User.findByIdAndUpdate(referredByUser._id, {
+          $inc: {
+            'referralStats.totalReferrals': 1,
+            'downlineStats.totalDownlines': 1,
+            'downlineStats.activeDownlines': 1
+          }
+        });
 
-      // Update upline user's referral stats
-      await User.findByIdAndUpdate(referredByUser._id, {
-        $inc: {
-          'referralStats.totalReferrals': 1,
-          'downlineStats.totalDownlines': 1,
-          'downlineStats.activeDownlines': 1
-        }
-      });
+        // Add to upline's referral history
+        await User.findByIdAndUpdate(referredByUser._id, {
+          $push: {
+            referralHistory: {
+              referredUser: newUser._id,
+              amount: 0,
+              percentage: settings.commissionPercentage,
+              level: 1,
+              date: new Date(),
+              status: 'pending'
+            }
+          }
+        });
 
-      console.log(`✅ Downline relationship created: ${referredByUser.email} -> ${newUser.email}`);
+        console.log(`✅ Downline relationship created: ${referredByUser.email} -> ${newUser.email}`);
+
+      } catch (relationshipError) {
+        console.error('Failed to create downline relationship:', relationshipError);
+        // Continue with user creation even if relationship fails
+      }
     }
 
     const token = generateJWT(newUser._id);
@@ -2973,7 +3083,16 @@ app.post('/api/signup', [
         email: newUser.email,
         subject: 'Welcome to BitHash',
         message: welcomeMessage,
-        html: `<p>${welcomeMessage}</p>`
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #003366;">Welcome to BitHash, ${firstName}!</h2>
+            <p>Your account has been successfully created.</p>
+            ${referredByUser ? `<p>You were referred by: ${referredByUser.firstName} ${referredByUser.lastName}</p>` : ''}
+            <p><strong>Your Referral Code:</strong> ${referralCode}</p>
+            <p>Share your referral link: https://www.bithashcapital.live/${referralCode}</p>
+            <p>Start earning referral bonuses when your friends sign up and invest!</p>
+          </div>
+        `
       });
     } catch (emailError) {
       console.error('Failed to send welcome email:', emailError);
@@ -3000,7 +3119,8 @@ app.post('/api/signup', [
           referralCode: newUser.referralCode,
           referredBy: referredByUser ? {
             id: referredByUser._id,
-            name: `${referredByUser.firstName} ${referredByUser.lastName}`
+            name: `${referredByUser.firstName} ${referredByUser.lastName}`,
+            referralCode: referredByUser.referralCode
           } : null
         }
       }
@@ -3021,16 +3141,17 @@ app.post('/api/signup', [
         changes: {
           userId: newUser._id,
           referralUsed: !!referredByUser,
-          referralSource: referredByUser ? referredByUser._id : 'organic',
+          referralCode: cleanedReferralCode,
           downlineCreated: !!downlineRelationship
         }
       });
 
-      // Also log referral activity if applicable
+      // Log referral activity if applicable
       if (referredByUser) {
         await logActivity('referral_signup', 'user', newUser._id, referredByUser._id, 'User', req, {
           newUser: newUser._id,
-          referralCode: referredBy
+          referralCode: cleanedReferralCode,
+          downlineRelationship: downlineRelationship?._id
         });
       }
     } catch (logError) {
@@ -3046,6 +3167,17 @@ app.post('/api/signup', [
     });
   }
 });
+
+
+
+
+
+
+
+
+
+
+
 
 
 // User Login with Comprehensive Tracking
@@ -13474,6 +13606,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
