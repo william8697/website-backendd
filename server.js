@@ -3592,8 +3592,7 @@ app.post('/api/auth/google', async (req, res) => {
 
       console.log('New user created via Google:', email);
 
-      // NEW (correct):
-await sendEmail({
+  await sendProfessionalEmail({
   email,
   template: 'otp',
   data: {
@@ -14153,6 +14152,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
