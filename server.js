@@ -4702,6 +4702,16 @@ app.post('/api/auth/verify-2fa', [
 app.post('/api/auth/google', async (req, res) => {
   try {
     const { credential } = req.body;
+    
+    if (!credential) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Google credential is required'
+      });
+    }
+
+    console.log('Google auth attempt received');
+
     const ticket = await googleClient.verifyIdToken({
       idToken: credential,
       audience: process.env.GOOGLE_CLIENT_ID || '634814462335-9o4t8q95c4orcsd9sijjl52374g6vm85.apps.googleusercontent.com'
@@ -4709,6 +4719,8 @@ app.post('/api/auth/google', async (req, res) => {
 
     const payload = ticket.getPayload();
     const { email, given_name, family_name, sub } = payload;
+
+    console.log('Google auth successful for:', email);
 
     let user = await User.findOne({ email });
     const isNewUser = !user;
@@ -4718,12 +4730,15 @@ app.post('/api/auth/google', async (req, res) => {
       const referralCode = generateReferralCode();
       user = await User.create({
         firstName: given_name,
-        lastName: family_name,
+        lastName: family_name || '',
         email,
         googleId: sub,
-        isVerified: true, // Google emails are pre-verified
-        referralCode
+        isVerified: true,
+        referralCode,
+        status: 'active'
       });
+
+      console.log('New user created via Google:', email);
 
       // Send welcome email
       await sendProfessionalEmail({
@@ -4738,6 +4753,15 @@ app.post('/api/auth/google', async (req, res) => {
       user.googleId = sub;
       user.isVerified = true;
       await user.save();
+      console.log('Existing user linked with Google:', email);
+    }
+
+    // Check if user is active
+    if (user.status !== 'active') {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Your account has been suspended. Please contact support.'
+      });
     }
 
     // Generate OTP for Google sign-in as well (for extra security)
@@ -4764,9 +4788,16 @@ app.post('/api/auth/google', async (req, res) => {
       }
     });
 
-    // Generate temporary token
+    // Generate temporary token - MATCHING YOUR ORIGINAL STRUCTURE
     const tempToken = generateJWT(user._id);
 
+    // Update last login
+    user.lastLogin = new Date();
+    const deviceInfo = await getUserDeviceInfo(req);
+    user.loginHistory.push(deviceInfo);
+    await user.save();
+
+    // SUCCESS RESPONSE - MATCHING YOUR ORIGINAL STRUCTURE EXACTLY
     res.status(200).json({
       status: 'success',
       message: 'OTP sent to your email. Please verify to complete Google sign-in.',
@@ -4790,13 +4821,30 @@ app.post('/api/auth/google', async (req, res) => {
 
   } catch (err) {
     console.error('Google auth error:', err);
+    
+    // More detailed error logging
+    if (err.message.includes('Token used too late')) {
+      console.error('Google token expired');
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Google sign-in session expired. Please try again.'
+      });
+    }
+    
+    if (err.message.includes('Invalid token')) {
+      console.error('Invalid Google token');
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Invalid Google sign-in token. Please try again.'
+      });
+    }
+
     res.status(500).json({
       status: 'error',
       message: 'An error occurred during Google authentication'
     });
   }
 });
-
 app.post('/api/auth/forgot-password', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
 ], async (req, res) => {
@@ -15251,6 +15299,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
