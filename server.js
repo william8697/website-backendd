@@ -29,7 +29,7 @@ const { createServer } = require('http');
 const { Server } = require('socket.io');
 
 
-// Enhanced Security Middleware
+/// Enhanced Security Middleware
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -42,8 +42,8 @@ app.use(helmet({
       objectSrc: ["'none'"],
       upgradeInsecureRequests: []
     }
-  }
-  crossOriginOpenerPolicy: { policy: "unsafe-none" } // Add this line
+  },
+  crossOriginOpenerPolicy: { policy: "unsafe-none" }
 }));
 
 app.use(cors({
@@ -15217,6 +15217,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
