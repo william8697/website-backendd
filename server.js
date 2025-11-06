@@ -3551,6 +3551,8 @@ app.post('/api/auth/verify-2fa', [
   }
 });
 
+
+
 app.post('/api/auth/google', async (req, res) => {
   try {
     const { credential } = req.body;
@@ -3592,15 +3594,14 @@ app.post('/api/auth/google', async (req, res) => {
 
       console.log('New user created via Google:', email);
 
-  await sendProfessionalEmail({
-  email,
-  template: 'otp',
-  data: {
-    name: user.firstName,
-    otp: otp,
-    action: 'Google sign-in verification'
-  }
-});
+      // Send welcome email
+      await sendProfessionalEmail({
+        email,
+        template: 'welcome',
+        data: {
+          firstName: given_name
+        }
+      });
     } else if (!user.googleId) {
       // Existing user, add Google auth
       user.googleId = sub;
@@ -3698,6 +3699,10 @@ app.post('/api/auth/google', async (req, res) => {
     });
   }
 });
+
+
+
+
 app.post('/api/auth/forgot-password', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
 ], async (req, res) => {
@@ -14152,6 +14157,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
