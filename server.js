@@ -13641,22 +13641,9 @@ app.delete('/api/admin/notifications/delete-all-read', adminProtect, async (req,
 
 
 
-
-
-
-// =============================================
-// FIXED OTP VERIFICATION ENDPOINTS
-// Resolving the "Invalid verification code" error
-// =============================================
-
-/**
- * @api {post} /api/auth/send-otp Send OTP
- */
+// Send OTP Endpoint - REWRITTEN to match frontend expectations
 app.post('/api/auth/send-otp', [
-  body('email')
-    .isEmail()
-    .withMessage('VALID_EMAIL_REQUIRED')
-    .normalizeEmail()
+  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -13666,250 +13653,235 @@ app.post('/api/auth/send-otp', [
     });
   }
 
-  const { email } = req.body;
-  const clientIP = req.ip || req.connection.remoteAddress;
-
   try {
-    // Rate limiting
-    const rateLimitKey = `otp_rate_limit:${email}:${clientIP}`;
-    const recentAttempts = await redis.get(rateLimitKey);
-    
-    if (recentAttempts && parseInt(recentAttempts) >= 3) {
-      return res.status(429).json({
+    const { email } = req.body;
+
+    // Check if user exists
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({
         status: 'fail',
-        message: 'Too many attempts. Please try again in 5 minutes.'
+        message: 'User not found'
       });
     }
 
-    // Check for recent OTP
-    const existingOtp = await OTP.findOne({
-      email: email.toLowerCase(),
-      used: false,
-      expiresAt: { $gt: new Date() },
-      createdAt: { $gte: new Date(Date.now() - 60000) }
+    // Check for recent OTP attempts to prevent spam (60 seconds cooldown)
+    const recentOtp = await OTP.findOne({
+      email,
+      createdAt: { $gte: new Date(Date.now() - 60 * 1000) } // Last 60 seconds
     });
 
-    if (existingOtp) {
-      const timeLeft = Math.ceil((existingOtp.expiresAt - new Date()) / 1000);
+    if (recentOtp) {
       return res.status(429).json({
         status: 'fail',
-        message: `Please wait ${timeLeft} seconds before requesting a new code`
+        message: 'Please wait before requesting a new OTP'
       });
     }
 
-    // Generate OTP - STORE AS PLAIN TEXT FOR VERIFICATION
-    const otp = crypto.randomInt(100000, 999999).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    // Generate OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
-    // Create OTP record - STORE PLAIN TEXT OTP
-    const otpRecord = new OTP({
-      email: email.toLowerCase(),
-      otp: otp, // STORE AS PLAIN TEXT for direct comparison
+    // Delete any existing OTPs for this email
+    await OTP.deleteMany({ email, used: false });
+
+    // Create new OTP
+    await OTP.create({
+      email,
+      otp,
       type: 'login',
-      expiresAt: expiresAt,
-      ipAddress: clientIP,
-      userAgent: req.headers['user-agent'],
-      attempts: 0
+      expiresAt,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
     });
 
-    await otpRecord.save();
-
-    // Update rate limiting
-    await redis.setex(rateLimitKey, 300, (parseInt(recentAttempts) || 0) + 1);
-
-    // Send email
-    try {
-      await sendProfessionalEmail({
-        email: email.toLowerCase(),
-        template: 'otp',
-        data: {
-          otp: otp,
-          action: 'login',
-          expiresIn: '5 minutes'
-        }
-      });
-      
-      console.log(`OTP sent to ${email}: ${otp}`); // Log for debugging
-    } catch (emailError) {
-      console.error('Email failed:', emailError);
-    }
+    // Send OTP email
+    await sendProfessionalEmail({
+      email,
+      template: 'otp',
+      data: {
+        name: user.firstName,
+        otp: otp,
+        action: 'login'
+      }
+    });
 
     res.status(200).json({
       status: 'success',
-      message: 'Verification code sent to your email'
+      message: 'OTP sent successfully to your email'
     });
 
-  } catch (error) {
-    console.error('Send OTP Error:', error);
+    await logActivity('otp_sent', 'otp', null, user._id, 'User', req, {
+      email,
+      type: 'login'
+    });
+
+  } catch (err) {
+    console.error('Send OTP error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Unable to send verification code'
+      message: 'Failed to send OTP. Please try again.'
     });
   }
 });
 
-/**
- * @api {post} /api/auth/verify-otp Verify OTP - FIXED VERSION
- */
+// Verify OTP Endpoint - REWRITTEN to match frontend expectations
 app.post('/api/auth/verify-otp', [
-  body('email').isEmail().withMessage('VALID_EMAIL_REQUIRED').normalizeEmail(),
-  body('otp').isLength({ min: 6, max: 6 }).withMessage('INVALID_OTP_LENGTH')
+  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
+  body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({
       status: 'fail',
-      message: 'Invalid verification code format'
+      message: 'Please enter a valid 6-digit OTP code'
     });
   }
-
-  const { email, otp } = req.body;
-  const authHeader = req.headers.authorization;
-  const clientIP = req.ip || req.connection.remoteAddress;
-
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({
-      status: 'fail',
-      message: 'Authentication required'
-    });
-  }
-
-  const tempToken = authHeader.replace('Bearer ', '');
 
   try {
+    const { email, otp } = req.body;
+    const token = req.headers.authorization?.replace('Bearer ', '');
+
+    if (!token) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Authentication required. Please try logging in again.'
+      });
+    }
+
     // Verify temporary token
     let decoded;
     try {
-      decoded = verifyJWT(tempToken);
-    } catch (tokenError) {
+      decoded = verifyJWT(token);
+    } catch (err) {
       return res.status(401).json({
         status: 'fail',
-        message: 'Session expired'
+        message: 'Session expired. Please try logging in again.'
       });
     }
 
-    // Rate limiting
-    const verifyLimitKey = `otp_verify_limit:${email}:${clientIP}`;
-    const verifyAttempts = await redis.get(verifyLimitKey);
-    
-    if (verifyAttempts && parseInt(verifyAttempts) >= 5) {
-      return res.status(429).json({
+    // Find user
+    const user = await User.findById(decoded.id);
+    if (!user || user.email !== email) {
+      return res.status(404).json({
         status: 'fail',
-        message: 'Too many failed attempts. Try again later.'
+        message: 'User not found'
       });
     }
 
-    // Find valid OTP record - FIXED QUERY
+    // Find valid OTP
     const otpRecord = await OTP.findOne({
-      email: email.toLowerCase(),
+      email,
+      otp,
       used: false,
-      expiresAt: { $gt: new Date() },
-      attempts: { $lt: 5 }
-    });
-
-    console.log('OTP Record found:', {
-      exists: !!otpRecord,
-      email: email.toLowerCase(),
-      storedOTP: otpRecord?.otp,
-      receivedOTP: otp,
-      expiresAt: otpRecord?.expiresAt,
-      now: new Date()
+      expiresAt: { $gt: new Date() }
     });
 
     if (!otpRecord) {
-      await redis.incr(verifyLimitKey);
-      await redis.expire(verifyLimitKey, 900);
-      
+      // Increment attempts
+      await OTP.updateOne(
+        { email, otp, used: false },
+        { $inc: { attempts: 1 } }
+      );
+
+      // Check if max attempts reached
+      const failedAttempts = await OTP.countDocuments({
+        email,
+        used: false,
+        createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }, // Last 24 hours
+        attempts: { $gte: 5 }
+      });
+
+      if (failedAttempts >= 5) {
+        // Suspend user for 24 hours
+        await User.findByIdAndUpdate(user._id, {
+          status: 'suspended',
+          suspensionLiftAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+        });
+
+        await logActivity('account_suspended_otp', 'user', user._id, user._id, 'System', req, {
+          reason: 'Too many failed OTP attempts'
+        });
+
+        return res.status(429).json({
+          status: 'fail',
+          message: 'Too many failed attempts. Account suspended for 24 hours.'
+        });
+      }
+
+      // Check if OTP exists but is expired
+      const expiredOtp = await OTP.findOne({
+        email,
+        otp,
+        used: false,
+        expiresAt: { $lte: new Date() }
+      });
+
+      if (expiredOtp) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Verification code has expired. Please request a new one.'
+        });
+      }
+
+      // Send security alert for failed OTP
+      const deviceInfo = await getUserDeviceInfo(req);
+      await sendProfessionalEmail({
+        email: user.email,
+        template: 'login_failed_otp',
+        data: {
+          name: user.firstName,
+          method: 'OTP Verification',
+          ip: deviceInfo.ip,
+          location: deviceInfo.location
+        }
+      });
+
       return res.status(400).json({
         status: 'fail',
-        message: 'Invalid or expired verification code.'
+        message: 'Invalid verification code. Please try again.'
       });
     }
 
-    // DIRECT COMPARISON - FIXED VERIFICATION
-    const isValidOtp = otpRecord.otp === otp; // Direct string comparison
-    
-    console.log('OTP Comparison:', {
-      stored: otpRecord.otp,
-      received: otp,
-      isValid: isValidOtp,
-      typeStored: typeof otpRecord.otp,
-      typeReceived: typeof otp
-    });
-
-    if (!isValidOtp) {
-      // Increment failed attempts
-      otpRecord.attempts += 1;
-      await otpRecord.save();
-
-      await redis.incr(verifyLimitKey);
-      await redis.expire(verifyLimitKey, 900);
-
-      const attemptsLeft = 5 - otpRecord.attempts;
-      
-      return res.status(400).json({
-        status: 'fail',
-        message: `Invalid verification code. ${attemptsLeft} attempts remaining.`,
-        attemptsRemaining: attemptsLeft
-      });
-    }
-
-    // OTP is valid - mark as used
+    // Mark OTP as used
     otpRecord.used = true;
-    otpRecord.usedAt = new Date();
     await otpRecord.save();
 
-    // Clear rate limiting
-    await redis.del(verifyLimitKey);
-    await redis.del(`otp_rate_limit:${email}:${clientIP}`);
-
-    // Find user
-    const user = await User.findOne({ 
-      email: email.toLowerCase(),
-      status: 'active'
-    });
-
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Account not found'
-      });
-    }
-
-    // Update user
+    // Update user verification status if this was for signup
     if (!user.isVerified) {
       user.isVerified = true;
+      await user.save();
     }
 
-    // Update login history
-    const deviceInfo = await getUserDeviceInfo(req);
-    user.lastLogin = new Date();
-    user.loginHistory.unshift({
-      ip: deviceInfo.ip,
-      device: deviceInfo.device,
-      location: deviceInfo.location,
-      timestamp: new Date(),
-      type: 'otp_verified'
-    });
-
-    if (user.loginHistory.length > 10) {
-      user.loginHistory = user.loginHistory.slice(0, 10);
-    }
-
-    await user.save();
-
-    // Generate final token
+    // Generate final JWT token
     const finalToken = generateJWT(user._id);
+
+    // Update last login
+    user.lastLogin = new Date();
+    const deviceInfo = await getUserDeviceInfo(req);
+    user.loginHistory.push(deviceInfo);
+    await user.save();
 
     // Set cookie
     res.cookie('jwt', finalToken, {
-      expires: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      expires: new Date(Date.now() + 2 * 60 * 60 * 1000), // 2 hours
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict'
     });
 
-    // Success response
+    // Send login success notification
+    await sendProfessionalEmail({
+      email: user.email,
+      template: 'login_success',
+      data: {
+        name: user.firstName,
+        device: deviceInfo.device,
+        location: deviceInfo.location,
+        ip: deviceInfo.ip
+      }
+    });
+
     res.status(200).json({
       status: 'success',
       message: 'Verification successful! Redirecting to dashboard...',
@@ -13925,14 +13897,21 @@ app.post('/api/auth/verify-otp', [
       }
     });
 
-  } catch (error) {
-    console.error('Verify OTP Error:', error);
+    await logActivity('otp_verified', 'otp', otpRecord._id, user._id, 'User', req, {
+      type: otpRecord.type
+    });
+
+  } catch (err) {
+    console.error('Verify OTP error:', err);
     res.status(500).json({
       status: 'error',
-      message: 'Verification failed. Please try again.'
+      message: 'An error occurred during verification. Please try again.'
     });
   }
 });
+
+
+
 
 
 
@@ -14069,6 +14048,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
