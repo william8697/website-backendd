@@ -29,7 +29,7 @@ const { createServer } = require('http');
 const { Server } = require('socket.io');
 
 
-/// Enhanced Security Middleware
+// Enhanced Security Middleware
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -42,9 +42,15 @@ app.use(helmet({
       objectSrc: ["'none'"],
       upgradeInsecureRequests: []
     }
-  },
-  crossOriginOpenerPolicy: false
+  }
 }));
+
+// MANUALLY SET COOP HEADER - Add this after helmet
+app.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
+  next();
+});
+
 
 app.use(cors({
   origin: ['https://www.bithashcapital.live', 'https://website-backendd-1.onrender.com'],
@@ -15217,6 +15223,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
