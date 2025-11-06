@@ -14495,7 +14495,13 @@ app.post('/api/auth/send-otp', [
   }
 });
 
-// ENHANCED OTP Verification Endpoint - Handles all email formats including Gmail variations
+
+
+
+
+
+
+// ENHANCED OTP Verification Endpoint - FIXED Gmail dot issue
 app.post('/api/auth/verify-otp', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
   body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
@@ -14540,15 +14546,15 @@ app.post('/api/auth/verify-otp', [
       });
     }
 
-    // ENHANCED: Gmail-specific email normalization for comparison
+    // FIXED: Enhanced Gmail normalization that matches ALL variations
     const normalizeGmailForComparison = (email) => {
       if (!email) return email;
       
       const [localPart, domain] = email.toLowerCase().trim().split('@');
       
-      // Only process Gmail domains
+      // Process ALL Gmail-like domains
       if (domain === 'gmail.com' || domain === 'googlemail.com') {
-        // Remove dots from local part and strip everything after +
+        // Remove ALL dots from local part and strip everything after +
         const cleanLocalPart = localPart.replace(/\./g, '').split('+')[0];
         return `${cleanLocalPart}@gmail.com`;
       }
@@ -14557,8 +14563,18 @@ app.post('/api/auth/verify-otp', [
       return email.toLowerCase().trim();
     };
 
+    // FIXED: Use the SAME normalization for both comparison and OTP lookup
     const normalizedUserEmail = normalizeGmailForComparison(user.email);
     const normalizedInputEmail = normalizeGmailForComparison(email);
+
+    // Enhanced comparison with debug logging
+    console.log('Email comparison:', {
+      userEmail: user.email,
+      inputEmail: email,
+      normalizedUserEmail,
+      normalizedInputEmail,
+      match: normalizedUserEmail === normalizedInputEmail
+    });
 
     if (normalizedUserEmail !== normalizedInputEmail) {
       return res.status(400).json({
@@ -14567,56 +14583,58 @@ app.post('/api/auth/verify-otp', [
       });
     }
 
-    // ENHANCED: Comprehensive OTP lookup handling all Gmail variations
-    const findOTPRecord = async (email) => {
-      const normalizedEmail = normalizeGmailForComparison(email);
+    // FIXED: Comprehensive OTP lookup that checks ALL possible email variations
+    const findOTPRecord = async (searchEmail) => {
+      console.log('OTP search for email:', searchEmail);
       
-      // Try exact match first
-      let otpRecord = await OTP.findOne({
-        email: normalizedEmail,
-        otp,
-        used: false,
-        expiresAt: { $gt: new Date() }
-      });
-
-      if (otpRecord) return otpRecord;
-
-      // If not found, try with original email format
-      otpRecord = await OTP.findOne({
-        email: email,
-        otp,
-        used: false,
-        expiresAt: { $gt: new Date() }
-      });
-
-      if (otpRecord) return otpRecord;
-
-      // For Gmail addresses, try additional variations
-      if (email.includes('@gmail.') || email.includes('@googlemail.')) {
+      // Get all possible email variations for Gmail
+      const getEmailVariations = (email) => {
+        const variations = new Set();
         const [localPart, domain] = email.toLowerCase().trim().split('@');
         
-        // Try without dots in local part
-        const withoutDots = `${localPart.replace(/\./g, '')}@gmail.com`;
-        otpRecord = await OTP.findOne({
-          email: withoutDots,
+        variations.add(email.toLowerCase().trim());
+        variations.add(normalizeGmailForComparison(email));
+        
+        // Only process Gmail domains for variations
+        if (domain === 'gmail.com' || domain === 'googlemail.com') {
+          // Original with dots
+          variations.add(email.toLowerCase().trim());
+          
+          // Without dots
+          const withoutDots = `${localPart.replace(/\./g, '')}@gmail.com`;
+          variations.add(withoutDots);
+          
+          // Without plus addressing
+          const withoutPlus = `${localPart.split('+')[0]}@gmail.com`;
+          variations.add(withoutPlus);
+          
+          // Without dots and plus
+          const withoutDotsAndPlus = `${localPart.replace(/\./g, '').split('+')[0]}@gmail.com`;
+          variations.add(withoutDotsAndPlus);
+          
+          // Try with googlemail.com domain
+          variations.add(email.replace('@gmail.com', '@googlemail.com'));
+          variations.add(withoutDots.replace('@gmail.com', '@googlemail.com'));
+        }
+        
+        return Array.from(variations);
+      };
+
+      const emailVariations = getEmailVariations(searchEmail);
+      console.log('Checking OTP for email variations:', emailVariations);
+
+      // Try ALL variations
+      for (const emailVar of emailVariations) {
+        const otpRecord = await OTP.findOne({
+          email: emailVar,
           otp,
           used: false,
           expiresAt: { $gt: new Date() }
         });
 
-        if (otpRecord) return otpRecord;
-
-        // Try without plus addressing
-        const withoutPlus = `${localPart.split('+')[0]}@gmail.com`;
-        if (withoutPlus !== withoutDots) {
-          otpRecord = await OTP.findOne({
-            email: withoutPlus,
-            otp,
-            used: false,
-            expiresAt: { $gt: new Date() }
-          });
-
-          if (otpRecord) return otpRecord;
+        if (otpRecord) {
+          console.log('OTP found with email variation:', emailVar);
+          return otpRecord;
         }
       }
 
@@ -14626,27 +14644,21 @@ app.post('/api/auth/verify-otp', [
     const otpRecord = await findOTPRecord(email);
 
     if (!otpRecord) {
-      // Increment attempts with comprehensive email search
-      await OTP.updateOne(
+      // FIXED: Increment attempts across ALL email variations
+      const emailVariations = getEmailVariations(email);
+      
+      await OTP.updateMany(
         { 
-          $or: [
-            { email: normalizedInputEmail },
-            { email: email },
-            { email: normalizeGmailForComparison(email) }
-          ],
+          email: { $in: emailVariations },
           otp, 
           used: false 
         },
         { $inc: { attempts: 1 } }
       );
 
-      // Check if max attempts reached with comprehensive email search
+      // Check if max attempts reached
       const failedAttempts = await OTP.countDocuments({
-        $or: [
-          { email: normalizedInputEmail },
-          { email: email },
-          { email: normalizeGmailForComparison(email) }
-        ],
+        email: { $in: emailVariations },
         used: false,
         createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
         attempts: { $gte: 5 }
@@ -14665,21 +14677,12 @@ app.post('/api/auth/verify-otp', [
       }
 
       // Check if OTP exists but is expired
-      const findExpiredOTP = async (email) => {
-        const normalizedEmail = normalizeGmailForComparison(email);
-        
-        return await OTP.findOne({
-          $or: [
-            { email: normalizedEmail },
-            { email: email }
-          ],
-          otp,
-          used: false,
-          expiresAt: { $lte: new Date() }
-        });
-      };
-
-      const expiredOtp = await findExpiredOTP(email);
+      const expiredOtp = await OTP.findOne({
+        email: { $in: emailVariations },
+        otp,
+        used: false,
+        expiresAt: { $lte: new Date() }
+      });
 
       if (expiredOtp) {
         return res.status(400).json({
@@ -14740,7 +14743,9 @@ app.post('/api/auth/verify-otp', [
     await logActivity('otp_verified', 'otp', otpRecord._id, user._id, 'User', req, {
       type: otpRecord.type,
       isGoogleUser: !!user.googleId,
-      emailVariationUsed: otpRecord.email // Log which email variation was matched
+      emailVariationUsed: otpRecord.email,
+      originalEmail: email,
+      normalizedEmail: normalizedInputEmail
     });
 
   } catch (err) {
@@ -14751,6 +14756,42 @@ app.post('/api/auth/verify-otp', [
     });
   }
 });
+
+// Helper function for email variations (add this outside the endpoint)
+function getEmailVariations(email) {
+  const variations = new Set();
+  const [localPart, domain] = email.toLowerCase().trim().split('@');
+  
+  variations.add(email.toLowerCase().trim());
+  
+  // Gmail normalization
+  if (domain === 'gmail.com' || domain === 'googlemail.com') {
+    // Original with dots
+    variations.add(email.toLowerCase().trim());
+    
+    // Without dots
+    const withoutDots = `${localPart.replace(/\./g, '')}@gmail.com`;
+    variations.add(withoutDots);
+    
+    // Without plus addressing
+    const withoutPlus = `${localPart.split('+')[0]}@gmail.com`;
+    variations.add(withoutPlus);
+    
+    // Without dots and plus
+    const withoutDotsAndPlus = `${localPart.replace(/\./g, '').split('+')[0]}@gmail.com`;
+    variations.add(withoutDotsAndPlus);
+    
+    // Try with googlemail.com domain
+    variations.add(email.replace('@gmail.com', '@googlemail.com'));
+    variations.add(withoutDots.replace('@gmail.com', '@googlemail.com'));
+  }
+  
+  return Array.from(variations);
+}
+
+
+
+
 
 
 
@@ -14918,6 +14959,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
