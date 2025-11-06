@@ -28,7 +28,6 @@ const app = express();
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 
-
 // FIXED Helmet Configuration - Remove unsafe Cross-Origin-Opener-Policy
 app.use(helmet({
   contentSecurityPolicy: {
@@ -43,7 +42,7 @@ app.use(helmet({
       frameSrc: ["'self'", "https://accounts.google.com"] // Added for Google OAuth
     }
   },
-  crossOriginOpenerPolicy: false // This fixes the window.postMessage block
+  crossOriginOpenerPolicy: { policy: "unsafe-none" } // FIXED: This resolves the window.postMessage block
 }));
 
 
@@ -14958,6 +14957,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
