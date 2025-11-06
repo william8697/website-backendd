@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Backend for BitHash cryptocurrency platform",
   "main": "server.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
@@ -35,8 +36,8 @@
     "google-auth-library": "^9.1.1",
     "helmet": "^7.0.0",
     "multer": "^1.4.5-lts.1",
-     "socket.io": "^4.7.2",
-  "socket.io-client": "^4.7.2",
+    "socket.io": "^4.7.2",
+    "socket.io-client": "^4.7.2",
     "hpp": "^0.2.3",
     "openai": "^5.11.0",
     "ioredis": "^5.3.2",
@@ -45,6 +46,7 @@
     "mongoose": "^8.0.3",
     "nodemailer": "^6.9.5",
     "speakeasy": "^2.0.0",
+    "uuid": "^9.0.1",
     "validator": "^13.11.0",
     "xss-clean": "^0.1.1"
   },
@@ -56,10 +58,8 @@
     "nodemon": "^3.0.1",
     "prettier": "^3.0.3",
     "supertest": "^6.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
-
-
-
-
-
