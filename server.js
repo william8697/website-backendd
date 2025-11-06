@@ -14464,55 +14464,6 @@ app.post('/api/auth/verify-otp', [
 
 
 
-// In your investment creation route - after investment is created
-await sendEmailNotification(req.user, 'investment_created', {
-  amount: investment.amount,
-  planName: plan.name,
-  duration: plan.duration,
-  expectedReturn: plan.percentage
-});
-
-// In your deposit route - when deposit is successful (including admin adjustments)
-await sendEmailNotification(req.user, 'deposit_success', {
-  amount: amount,
-  method: method,
-  newBalance: user.balances.main,
-  note: 'Balance adjustment completed successfully' // For admin adjustments
-});
-
-// In withdrawal route - when withdrawal is processed
-await sendEmailNotification(req.user, 'withdrawal_success', {
-  amount: amount,
-  netAmount: netAmount,
-  fee: fee,
-  method: method,
-  transactionId: reference
-});
-
-// In password change route
-await sendEmailNotification(req.user, 'password_changed', {
-  device: deviceInfo.device,
-  ip: deviceInfo.ip
-});
-
-// Automatic investment maturity detection
-const checkMaturedInvestments = async () => {
-  const maturedInvestments = await Investment.find({
-    status: 'active',
-    endDate: { $lte: new Date() }
-  }).populate('user');
-
-  for (const investment of maturedInvestments) {
-    await sendEmailNotification(investment.user, 'investment_matured', {
-      totalReturn: investment.expectedReturn,
-      initialAmount: investment.amount
-    });
-  }
-};
-
-// Run every hour
-setInterval(checkMaturedInvestments, 60 * 60 * 1000);
-
 
 
 
@@ -14645,6 +14596,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
