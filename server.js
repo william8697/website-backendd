@@ -2872,7 +2872,6 @@ const calculateReferralCommissions = async (investment) => {
 
 
 
-
 // Enhanced email service with professional Bitcoin mining templates
 const sendProfessionalEmail = async (options) => {
   try {
@@ -2881,7 +2880,7 @@ const sendProfessionalEmail = async (options) => {
     const emailTemplates = {
       // WELCOME EMAIL - Enhanced with Bitcoin theme
       welcome: {
-        subject: 'Welcome to BitHash - Your Bitcoin Mining Journey Begins 🚀',
+        subject: 'Welcome to BitHash - Your Bitcoin Mining Journey Begins',
         html: `
           <!DOCTYPE html>
           <html>
@@ -2890,7 +2889,6 @@ const sendProfessionalEmail = async (options) => {
               <meta name="viewport" content="width=device-width, initial-scale=1.0">
               <title>Welcome to BitHash</title>
               <style>
-                  /* Bitcoin-themed styling */
                   body { 
                       font-family: 'Inter', 'Arial', sans-serif; 
                       line-height: 1.6; 
@@ -3016,14 +3014,14 @@ const sendProfessionalEmail = async (options) => {
               <div class="container">
                   <div class="header">
                       <div class="logo">
-                          <span class="bitcoin-animation">₿</span>itHash
+                          <span class="bitcoin-animation">B</span>itHash
                       </div>
                       <h1 style="margin: 0; font-size: 28px; font-weight: 700;">Welcome to Institutional Bitcoin Mining</h1>
                   </div>
                   <div class="content">
                       <h2 style="color: #333; margin-bottom: 20px;">Hello ${data.firstName},</h2>
                       <p style="color: #555; font-size: 16px; line-height: 1.6;">
-                          Welcome to BitHash! We're excited to have you join our community of institutional Bitcoin miners. 
+                          Welcome to BitHash! We are excited to have you join our community of institutional Bitcoin miners. 
                           Your journey to professional cryptocurrency mining starts now.
                       </p>
                       
@@ -3051,23 +3049,23 @@ const sendProfessionalEmail = async (options) => {
 
                       <div class="features-grid">
                           <div class="feature-card">
-                              <div class="feature-icon">💰</div>
+                              <div class="feature-icon">$</div>
                               <strong style="color: #333;">Start with $30</strong>
                               <p style="color: #666; font-size: 14px; margin: 8px 0 0 0;">Begin mining with our affordable plans</p>
                           </div>
                           <div class="feature-card">
-                              <div class="feature-icon">⛏️</div>
+                              <div class="feature-icon">M</div>
                               <strong style="color: #333;">Cloud Mining</strong>
                               <p style="color: #666; font-size: 14px; margin: 8px 0 0 0;">Mine BTC with our infrastructure</p>
                           </div>
                           <div class="feature-card">
-                              <div class="feature-icon">📈</div>
+                              <div class="feature-icon">R</div>
                               <strong style="color: #333;">High Returns</strong>
                               <p style="color: #666; font-size: 14px; margin: 8px 0 0 0;">Competitive mining returns</p>
                           </div>
                           <div class="feature-card">
-                              <div class="feature-icon">🔒</div>
-                              <strong style="color: #333;">Secure & Safe</strong>
+                              <div class="feature-icon">S</div>
+                              <strong style="color: #333;">Secure and Safe</strong>
                               <p style="color: #666; font-size: 14px; margin: 8px 0 0 0;">Enterprise-grade security</p>
                           </div>
                       </div>
@@ -3087,16 +3085,16 @@ const sendProfessionalEmail = async (options) => {
                       <p style="color: #555; font-size: 16px; line-height: 1.6;">
                           Our mining operations team is available 24/7 to support your mining journey. 
                           If you have any questions about our mining infrastructure or investment plans, 
-                          don't hesitate to reach out.
+                          do not hesitate to reach out.
                       </p>
                       
                       <p style="color: #333; font-weight: 600;">
-                          Best regards,<br>
+                          Best regards,
                           The BitHash Mining Team
                       </p>
                   </div>
                   <div class="footer">
-                      <p>© 2024 BitHash LLC. All rights reserved.</p>
+                      <p>Copyright 2024 BitHash LLC. All rights reserved.</p>
                       <p>Institutional Bitcoin Mining | SOC 2 Type II Certified</p>
                       <p>This email was sent to ${email}. Please do not reply to this email.</p>
                   </div>
@@ -3197,7 +3195,7 @@ const sendProfessionalEmail = async (options) => {
               <div class="container">
                   <div class="header">
                       <div class="logo">
-                          <span class="bitcoin-animation">₿</span>itHash Security
+                          <span class="bitcoin-animation">B</span>itHash Security
                       </div>
                       <h1 style="margin: 0; font-size: 24px; font-weight: 600;">Verification Required</h1>
                   </div>
@@ -3220,17 +3218,17 @@ const sendProfessionalEmail = async (options) => {
                       </div>
                       
                       <p style="color: #555; font-size: 16px; line-height: 1.6;">
-                          If you didn't request this verification code, please secure your account immediately 
+                          If you did not request this verification code, please secure your account immediately 
                           by contacting our security team or ignoring this email.
                       </p>
                       
                       <p style="color: #333; font-weight: 600;">
-                          Best regards,<br>
+                          Best regards,
                           The BitHash Security Team
                       </p>
                   </div>
                   <div class="footer">
-                      <p>© 2024 BitHash LLC. All rights reserved.</p>
+                      <p>Copyright 2024 BitHash LLC. All rights reserved.</p>
                       <p>This is an automated security message. Please do not reply to this email.</p>
                   </div>
               </div>
@@ -3325,7 +3323,7 @@ const sendProfessionalEmail = async (options) => {
               <div class="container">
                   <div class="header">
                       <div class="logo">
-                          <span class="bitcoin-animation">₿</span>itHash Security
+                          <span class="bitcoin-animation">B</span>itHash Security
                       </div>
                       <h1 style="margin: 0; font-size: 24px; font-weight: 600;">Login Successful</h1>
                   </div>
@@ -3361,17 +3359,17 @@ const sendProfessionalEmail = async (options) => {
                       ${data.suspicious ? `
                       <div class="security-alert">
                           <strong>Security Alert:</strong> This login attempt seems unusual. 
-                          If this wasn't you, please secure your account immediately by changing your password.
+                          If this was not you, please secure your account immediately by changing your password.
                       </div>
                       ` : ''}
                       
                       <p style="color: #333; font-weight: 600;">
-                          Best regards,<br>
+                          Best regards,
                           The BitHash Security Team
                       </p>
                   </div>
                   <div class="footer">
-                      <p>© 2024 BitHash LLC. All rights reserved.</p>
+                      <p>Copyright 2024 BitHash LLC. All rights reserved.</p>
                       <p>This is an automated security notification.</p>
                   </div>
               </div>
@@ -3474,7 +3472,7 @@ const sendProfessionalEmail = async (options) => {
               <div class="container">
                   <div class="header">
                       <div class="logo">
-                          <span class="bitcoin-animation">₿</span>itHash Mining
+                          <span class="bitcoin-animation">B</span>itHash Mining
                       </div>
                       <h1 style="margin: 0; font-size: 24px; font-weight: 600;">Mining Plan Activated</h1>
                   </div>
@@ -3526,12 +3524,12 @@ const sendProfessionalEmail = async (options) => {
                       </p>
                       
                       <p style="color: #333; font-weight: 600;">
-                          Happy Mining!<br>
+                          Happy Mining,
                           The BitHash Mining Team
                       </p>
                   </div>
                   <div class="footer">
-                      <p>© 2024 BitHash LLC. All rights reserved.</p>
+                      <p>Copyright 2024 BitHash LLC. All rights reserved.</p>
                       <p>Institutional Bitcoin Mining Operations</p>
                   </div>
               </div>
@@ -3605,7 +3603,7 @@ const sendProfessionalEmail = async (options) => {
               <div class="container">
                   <div class="header">
                       <div class="logo">
-                          <span style="color: #ffd700;">₿</span>itHash Finance
+                          <span style="color: #ffd700;">B</span>itHash Finance
                       </div>
                       <h1 style="margin: 0; font-size: 24px; font-weight: 600;">Withdrawal Processed</h1>
                   </div>
@@ -3630,12 +3628,12 @@ const sendProfessionalEmail = async (options) => {
                       </p>
                       
                       <p style="color: #333; font-weight: 600;">
-                          Best regards,<br>
+                          Best regards,
                           The BitHash Finance Team
                       </p>
                   </div>
                   <div class="footer">
-                      <p>© 2024 BitHash LLC. All rights reserved.</p>
+                      <p>Copyright 2024 BitHash LLC. All rights reserved.</p>
                       <p>This is an automated transaction notification.</p>
                   </div>
               </div>
@@ -3709,7 +3707,7 @@ const sendProfessionalEmail = async (options) => {
               <div class="container">
                   <div class="header">
                       <div class="logo">
-                          <span style="color: #ffd700;">₿</span>itHash Finance
+                          <span style="color: #ffd700;">B</span>itHash Finance
                       </div>
                       <h1 style="margin: 0; font-size: 24px; font-weight: 600;">Deposit Received</h1>
                   </div>
@@ -3733,12 +3731,12 @@ const sendProfessionalEmail = async (options) => {
                       </p>
                       
                       <p style="color: #333; font-weight: 600;">
-                          Best regards,<br>
+                          Best regards,
                           The BitHash Finance Team
                       </p>
                   </div>
                   <div class="footer">
-                      <p>© 2024 BitHash LLC. All rights reserved.</p>
+                      <p>Copyright 2024 BitHash LLC. All rights reserved.</p>
                       <p>This is an automated transaction notification.</p>
                   </div>
               </div>
@@ -3812,7 +3810,7 @@ const sendProfessionalEmail = async (options) => {
               <div class="container">
                   <div class="header">
                       <div class="logo">
-                          <span style="color: #ffd700;">₿</span>itHash Mining
+                          <span style="color: #ffd700;">B</span>itHash Mining
                       </div>
                       <h1 style="margin: 0; font-size: 24px; font-weight: 600;">Investment Matured</h1>
                   </div>
@@ -3843,12 +3841,12 @@ const sendProfessionalEmail = async (options) => {
                       </p>
                       
                       <p style="color: #333; font-weight: 600;">
-                          Happy Mining!<br>
+                          Happy Mining,
                           The BitHash Mining Team
                       </p>
                   </div>
                   <div class="footer">
-                      <p>© 2024 BitHash LLC. All rights reserved.</p>
+                      <p>Copyright 2024 BitHash LLC. All rights reserved.</p>
                       <p>Institutional Bitcoin Mining Excellence</p>
                   </div>
               </div>
@@ -3922,7 +3920,7 @@ const sendProfessionalEmail = async (options) => {
               <div class="container">
                   <div class="header">
                       <div class="logo">
-                          <span style="color: #ffd700;">₿</span>itHash Security
+                          <span style="color: #ffd700;">B</span>itHash Security
                       </div>
                       <h1 style="margin: 0; font-size: 24px; font-weight: 600;">Password Updated</h1>
                   </div>
@@ -3950,12 +3948,12 @@ const sendProfessionalEmail = async (options) => {
                       </p>
                       
                       <p style="color: #333; font-weight: 600;">
-                          Stay Secure,<br>
+                          Stay Secure,
                           The BitHash Security Team
                       </p>
                   </div>
                   <div class="footer">
-                      <p>© 2024 BitHash LLC. All rights reserved.</p>
+                      <p>Copyright 2024 BitHash LLC. All rights reserved.</p>
                       <p>This is an automated security notification.</p>
                   </div>
               </div>
@@ -3984,107 +3982,6 @@ const sendProfessionalEmail = async (options) => {
     throw new Error('Failed to send email');
   }
 };
-
-// Enhanced function to send email notifications for various activities
-const sendActivityNotification = async (user, activityType, data = {}) => {
-  try {
-    const userEmail = user.email;
-    const userName = `${user.firstName} ${user.lastName}`;
-
-    switch (activityType) {
-      case 'NEW_INVESTMENT':
-        await sendProfessionalEmail({
-          email: userEmail,
-          template: 'investment_created',
-          data: {
-            name: user.firstName,
-            planName: data.planName,
-            amount: data.amount,
-            expectedReturn: data.expectedReturn,
-            duration: data.duration,
-            investmentId: data.investmentId
-          }
-        });
-        break;
-
-      case 'WITHDRAWAL_SUCCESS':
-        await sendProfessionalEmail({
-          email: userEmail,
-          template: 'withdrawal_success',
-          data: {
-            name: user.firstName,
-            amount: data.amount,
-            method: data.method,
-            transactionId: data.transactionId,
-            walletAddress: data.walletAddress
-          }
-        });
-        break;
-
-      case 'DEPOSIT_SUCCESS':
-        await sendProfessionalEmail({
-          email: userEmail,
-          template: 'deposit_success',
-          data: {
-            name: user.firstName,
-            amount: data.amount,
-            transactionId: data.transactionId,
-            newBalance: data.newBalance
-          }
-        });
-        break;
-
-      case 'INVESTMENT_MATURED':
-        await sendProfessionalEmail({
-          email: userEmail,
-          template: 'investment_matured',
-          data: {
-            name: user.firstName,
-            planName: data.planName,
-            initialAmount: data.initialAmount,
-            totalReturns: data.totalReturns,
-            profit: data.profit,
-            roi: data.roi
-          }
-        });
-        break;
-
-      case 'PASSWORD_CHANGED':
-        await sendProfessionalEmail({
-          email: userEmail,
-          template: 'password_changed',
-          data: {
-            name: user.firstName,
-            device: data.device,
-            location: data.location,
-            ip: data.ip
-          }
-        });
-        break;
-
-      case 'LOGIN_SUCCESS':
-        await sendProfessionalEmail({
-          email: userEmail,
-          template: 'login_success',
-          data: {
-            name: user.firstName,
-            device: data.device,
-            location: data.location,
-            ip: data.ip,
-            suspicious: data.suspicious
-          }
-        });
-        break;
-
-      default:
-        console.log(`No email template for activity type: ${activityType}`);
-    }
-  } catch (error) {
-    console.error('Error sending activity notification:', error);
-  }
-};
-
-
 
 
 
@@ -15066,6 +14963,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
