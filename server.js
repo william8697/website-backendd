@@ -4304,6 +4304,7 @@ app.post('/api/auth/verify-2fa', [
 
 
 
+
 app.post('/api/auth/google', async (req, res) => {
   try {
     const { credential } = req.body;
@@ -4327,41 +4328,38 @@ app.post('/api/auth/google', async (req, res) => {
 
     console.log('Google auth successful for:', email);
 
-    // Use the EXACT email from Google - no normalization
-    const originalEmail = email;
-
-    let user = await User.findOne({ email: originalEmail });
+    let user = await User.findOne({ email });
     const isNewUser = !user;
 
     if (!user) {
-      // Create new user with Google auth using exact email
+      // Create new user with Google auth
       const referralCode = generateReferralCode();
       user = await User.create({
         firstName: given_name,
         lastName: family_name || '',
-        email: originalEmail, // Store exact email from Google
+        email,
         googleId: sub,
         isVerified: true,
         referralCode,
         status: 'active'
       });
 
-      console.log('New user created via Google:', originalEmail);
+      console.log('New user created via Google:', email);
 
-      // Send welcome email to exact email address
+      // Send welcome email
       await sendProfessionalEmail({
-        email: originalEmail,
+        email,
         template: 'welcome',
         data: {
           firstName: given_name
         }
       });
     } else if (!user.googleId) {
-      // Existing user, add Google auth - keep original email
+      // Existing user, add Google auth
       user.googleId = sub;
       user.isVerified = true;
       await user.save();
-      console.log('Existing user linked with Google:', originalEmail);
+      console.log('Existing user linked with Google:', email);
     }
 
     // Check if user is active
@@ -4376,9 +4374,8 @@ app.post('/api/auth/google', async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-    // Store OTP with exact email from Google
     await OTP.create({
-      email: originalEmail,
+      email,
       otp,
       type: 'login',
       expiresAt,
@@ -4386,9 +4383,9 @@ app.post('/api/auth/google', async (req, res) => {
       userAgent: req.headers['user-agent']
     });
 
-    // Send OTP email to exact email address from Google
+    // Send OTP email
     await sendProfessionalEmail({
-      email: originalEmail,
+      email,
       template: 'otp',
       data: {
         name: user.firstName,
@@ -4418,15 +4415,14 @@ app.post('/api/auth/google', async (req, res) => {
           id: user._id,
           firstName: user.firstName,
           lastName: user.lastName,
-          email: user.email // Return exact email from database
+          email: user.email
         }
       }
     });
 
     await logActivity('google_signin_otp_sent', 'user', user._id, user._id, 'User', req, {
       isNewUser,
-      provider: 'google',
-      email: originalEmail
+      provider: 'google'
     });
 
   } catch (err) {
@@ -4455,6 +4451,7 @@ app.post('/api/auth/google', async (req, res) => {
     });
   }
 });
+
 
 
 
@@ -14992,6 +14989,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
