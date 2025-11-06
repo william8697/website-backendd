@@ -29,7 +29,7 @@ const { createServer } = require('http');
 const { Server } = require('socket.io');
 
 
-// Enhanced Security Middleware
+// FIXED Helmet Configuration - Remove unsafe Cross-Origin-Opener-Policy
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -37,19 +37,14 @@ app.use(helmet({
       scriptSrc: ["'self'", "'unsafe-inline'", "https://apis.google.com"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       imgSrc: ["'self'", "data:", "https://www.google-analytics.com"],
-      connectSrc: ["'self'", "https://api.ipinfo.io"],
+      connectSrc: ["'self'", "https://api.ipinfo.io", "https://website-backendd-1.onrender.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       objectSrc: ["'none'"],
-      upgradeInsecureRequests: []
+      frameSrc: ["'self'", "https://accounts.google.com"] // Added for Google OAuth
     }
-  }
+  },
+  crossOriginOpenerPolicy: false // This fixes the window.postMessage block
 }));
-
-// Add this RIGHT AFTER your helmet configuration
-app.use((req, res, next) => {
-  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
-  next();
-});
 
 
 app.use(cors({
@@ -14963,6 +14958,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
