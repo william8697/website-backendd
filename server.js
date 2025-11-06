@@ -2861,81 +2861,315 @@ const calculateReferralCommissions = async (investment) => {
 
 
 
-
-// Comprehensive notification triggers
-const triggerUserNotifications = async (userId, activityType, metadata = {}) => {
+// REPLACE BOTH EMAIL FUNCTIONS WITH THIS SINGLE FUNCTION
+const sendEmail = async (options) => {
   try {
-    const user = await User.findById(userId);
-    if (!user) return;
+    const { email, subject, template, data, message, html } = options;
+    
+    // Bitcoin Mining Email Templates
+    const emailTemplates = {
+      // Enhanced Welcome Email with Bitcoin Mining Theme
+      welcome: {
+        subject: '🚀 Welcome to BitHash Capital - Start Your Bitcoin Mining Journey!',
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Welcome to BitHash Capital</title>
+              <style>
+                  body { 
+                      font-family: 'Arial', 'Segoe UI', sans-serif; 
+                      line-height: 1.6; 
+                      color: #e9ecef; 
+                      margin: 0; 
+                      padding: 0; 
+                      background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
+                  }
+                  .container { 
+                      max-width: 600px; 
+                      margin: 0 auto; 
+                      background: #0c0c0c; 
+                      border: 1px solid #f7931a; 
+                      border-radius: 12px;
+                      overflow: hidden;
+                      box-shadow: 0 8px 32px rgba(247, 147, 26, 0.1);
+                  }
+                  .header { 
+                      background: linear-gradient(135deg, #f7931a 0%, #fbb03b 100%);
+                      padding: 40px 30px; 
+                      text-align: center; 
+                      color: #0c0c0c;
+                  }
+                  .logo { 
+                      font-size: 32px; 
+                      font-weight: bold; 
+                      margin-bottom: 15px;
+                      text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                  }
+                  .content { 
+                      background: #0c0c0c; 
+                      padding: 40px 30px; 
+                  }
+                  .button { 
+                      background: linear-gradient(135deg, #f7931a 0%, #fbb03b 100%);
+                      color: #0c0c0c; 
+                      padding: 14px 35px; 
+                      text-decoration: none; 
+                      border-radius: 8px; 
+                      display: inline-block; 
+                      margin: 25px 0; 
+                      font-weight: bold;
+                      font-size: 16px;
+                      transition: all 0.3s ease;
+                      box-shadow: 0 4px 15px rgba(247, 147, 26, 0.3);
+                  }
+                  .features { 
+                      display: grid; 
+                      grid-template-columns: 1fr 1fr; 
+                      gap: 15px; 
+                      margin: 30px 0; 
+                  }
+                  .feature { 
+                      text-align: center; 
+                      padding: 20px; 
+                      background: rgba(247, 147, 26, 0.1); 
+                      border-radius: 8px; 
+                      border: 1px solid rgba(247, 147, 26, 0.3);
+                  }
+                  .footer { 
+                      text-align: center; 
+                      padding: 30px; 
+                      color: #6c757d; 
+                      font-size: 12px; 
+                      background: rgba(247, 147, 26, 0.05);
+                  }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <div class="header">
+                      <div class="logo">⛏️ BitHash Capital</div>
+                      <h1 style="margin: 0; font-size: 28px;">Start Mining Bitcoin Today</h1>
+                  </div>
+                  <div class="content">
+                      <h2 style="color: #f7931a; text-align: center;">Welcome to the Future of Mining, ${data.firstName}!</h2>
+                      <p style="text-align: center; font-size: 16px;">Your Bitcoin mining journey begins now with our state-of-the-art cloud mining platform.</p>
+                      
+                      <div class="features">
+                          <div class="feature">
+                              <strong>⚡ Instant Setup</strong>
+                              <p>Start mining in seconds with our cloud infrastructure</p>
+                          </div>
+                          <div class="feature">
+                              <strong>🛡️ Secure & Reliable</strong>
+                              <p>Enterprise-grade security for your mining operations</p>
+                          </div>
+                          <div class="feature">
+                              <strong>📈 Real-time Monitoring</strong>
+                              <p>Track your mining performance 24/7</p>
+                          </div>
+                          <div class="feature">
+                              <strong>💸 Daily Payouts</strong>
+                              <p>Receive your mining rewards daily</p>
+                          </div>
+                      </div>
+                      
+                      <div style="text-align: center;">
+                          <a href="https://www.bithashcapital.live/dashboard.html" class="button">Start Mining Now</a>
+                      </div>
+                      
+                      <p style="color: #f7931a; text-align: center;"><strong>Happy Mining!<br>The BitHash Capital Team</strong></p>
+                  </div>
+                  <div class="footer">
+                      <p>© 2024 BitHash Capital. All rights reserved.</p>
+                      <p>This email was sent to ${email}. Please do not reply to this email.</p>
+                  </div>
+              </div>
+          </body>
+          </html>
+        `
+      },
 
-    // Add notification to user's notification array
-    const notification = {
-      title: getNotificationTitle(activityType),
-      message: getNotificationMessage(activityType, metadata),
-      type: getNotificationType(activityType),
-      isRead: false,
-      createdAt: new Date()
+      // OTP Email Template
+      otp: {
+        subject: '🔐 BitHash Capital Verification Code',
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Verification Code</title>
+              <style>
+                  body { 
+                      font-family: 'Arial', sans-serif; 
+                      line-height: 1.6; 
+                      color: #e9ecef; 
+                      margin: 0; 
+                      padding: 0; 
+                      background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%);
+                  }
+                  .container { 
+                      max-width: 600px; 
+                      margin: 0 auto; 
+                      background: #0c0c0c; 
+                      border: 1px solid #f7931a; 
+                      border-radius: 12px;
+                      overflow: hidden;
+                  }
+                  .header { 
+                      background: linear-gradient(135deg, #f7931a 0%, #fbb03b 100%);
+                      padding: 30px; 
+                      text-align: center; 
+                      color: #0c0c0c;
+                  }
+                  .logo { 
+                      font-size: 28px; 
+                      font-weight: bold; 
+                      margin-bottom: 10px; 
+                  }
+                  .content { 
+                      background: #0c0c0c; 
+                      padding: 40px 30px; 
+                  }
+                  .otp-code { 
+                      background: linear-gradient(135deg, #f7931a 0%, #fbb03b 100%);
+                      color: #0c0c0c; 
+                      padding: 20px; 
+                      font-size: 36px; 
+                      font-weight: bold; 
+                      text-align: center; 
+                      letter-spacing: 10px; 
+                      margin: 30px 0; 
+                      border-radius: 10px;
+                      font-family: 'Courier New', monospace;
+                  }
+                  .footer { 
+                      text-align: center; 
+                      padding: 20px; 
+                      color: #6c757d; 
+                      font-size: 12px; 
+                      background: rgba(247, 147, 26, 0.05);
+                  }
+                  .security-note { 
+                      background: rgba(247, 147, 26, 0.1); 
+                      border: 1px solid rgba(247, 147, 26, 0.3); 
+                      padding: 20px; 
+                      border-radius: 8px; 
+                      margin: 25px 0; 
+                  }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <div class="header">
+                      <div class="logo">⛏️ BitHash Capital</div>
+                      <h1>Secure Verification Required</h1>
+                  </div>
+                  <div class="content">
+                      <h2 style="color: #f7931a; text-align: center;">Hello ${data.name || 'there'},</h2>
+                      <p style="text-align: center;">Please use the following verification code to complete your ${data.action || 'action'}:</p>
+                      
+                      <div class="otp-code">${data.otp}</div>
+                      
+                      <p style="text-align: center; color: #adb5bd;">This code will expire in 5 minutes.</p>
+                      
+                      <div class="security-note">
+                          <strong style="color: #f7931a;">🔐 Security Notice:</strong>
+                          <p>This code is valid for one-time use only. Do not share this code with anyone.</p>
+                      </div>
+                      
+                      <p style="color: #f7931a; text-align: center;"><strong>Stay Secure,<br>BitHash Capital Security Team</strong></p>
+                  </div>
+                  <div class="footer">
+                      <p>© 2024 BitHash Capital. All rights reserved.</p>
+                      <p>This is an automated security message.</p>
+                  </div>
+              </div>
+          </body>
+          </html>
+        `
+      },
+
+      // Login Success Template
+      login_success: {
+        subject: '✅ Successful Login - BitHash Mining Account',
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Login Notification</title>
+              <style>
+                  body { font-family: 'Arial', sans-serif; line-height: 1.6; color: #e9ecef; margin: 0; padding: 0; background: #0a0a0a; }
+                  .container { max-width: 600px; margin: 0 auto; background: #0c0c0c; border: 1px solid #28a745; border-radius: 12px; overflow: hidden; }
+                  .header { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); padding: 30px; text-align: center; color: white; }
+                  .logo { font-size: 28px; font-weight: bold; margin-bottom: 10px; }
+                  .content { background: #0c0c0c; padding: 30px; }
+                  .login-info { background: rgba(40, 167, 69, 0.1); padding: 20px; border-radius: 8px; margin: 20px 0; border: 1px solid rgba(40, 167, 69, 0.3); }
+                  .footer { text-align: center; padding: 20px; color: #6c757d; font-size: 12px; background: rgba(40, 167, 69, 0.05); }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <div class="header">
+                      <div class="logo">⛏️ BitHash Capital</div>
+                      <h1>Login Successful</h1>
+                  </div>
+                  <div class="content">
+                      <h2 style="color: #28a745;">Hello ${data.name},</h2>
+                      <p>Your BitHash Capital account was successfully accessed:</p>
+                      
+                      <div class="login-info">
+                          <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+                          <p><strong>Device:</strong> ${data.device || 'Unknown device'}</p>
+                          <p><strong>Location:</strong> ${data.location || 'Unknown location'}</p>
+                          <p><strong>IP Address:</strong> ${data.ip || 'Unknown'}</p>
+                      </div>
+                      
+                      <p style="color: #28a745;"><strong>Happy Mining!<br>BitHash Capital Team</strong></p>
+                  </div>
+                  <div class="footer">
+                      <p>© 2024 BitHash Capital. All rights reserved.</p>
+                  </div>
+              </div>
+          </body>
+          </html>
+        `
+      }
     };
 
-    await User.findByIdAndUpdate(userId, {
-      $push: { notifications: notification }
-    });
+    // Determine email content
+    let finalSubject = subject;
+    let finalHtml = html;
+    let finalText = message;
 
-    // Send email based on user preferences
-    if (user.preferences?.notifications?.email) {
-      await sendActivityEmail(user, activityType, metadata);
+    // If template is provided, use template content
+    if (template && emailTemplates[template]) {
+      finalSubject = emailTemplates[template].subject;
+      finalHtml = emailTemplates[template].html;
+      finalText = `Please view this email in an HTML-enabled client.`;
     }
 
-    // Real-time notification via Socket.IO if needed
-    // io.to(userId).emit('newNotification', notification);
+    const mailOptions = {
+      from: `BitHash Capital <${process.env.EMAIL_FROM || 'no-reply@bithash.com'}>`,
+      to: email,
+      subject: finalSubject,
+      text: finalText,
+      html: finalHtml
+    };
 
+    await transporter.sendMail(mailOptions);
+    console.log('Email sent successfully to:', email);
+    
   } catch (err) {
-    console.error('Notification trigger error:', err);
+    console.error('Error sending email:', err);
+    throw new Error('Failed to send email');
   }
 };
-
-// Notification content helpers
-const getNotificationTitle = (activityType) => {
-  const titles = {
-    'signup_success': 'Welcome to BitHash Mining!',
-    'login_success': 'Account Accessed',
-    'investment_created': 'Mining Investment Started',
-    'deposit_received': 'Funds Added',
-    'withdrawal_processed': 'Withdrawal Completed',
-    'kyc_approved': 'Identity Verified',
-    'password_reset_success': 'Password Updated'
-  };
-  return titles[activityType] || 'System Notification';
-};
-
-const getNotificationMessage = (activityType, metadata) => {
-  const messages = {
-    'signup_success': 'Your Bitcoin mining journey begins now! Start with as little as $30.',
-    'login_success': `Your account was accessed from ${metadata.device || 'new device'}.`,
-    'investment_created': `Your ${metadata.planName} mining investment of $${metadata.amount} is now active.`,
-    'deposit_received': `$${metadata.amount} has been added to your mining balance.`,
-    'withdrawal_processed': `$${metadata.amount} has been sent to your ${metadata.method} account.`,
-    'kyc_approved': 'Your identity is verified. Enjoy enhanced mining limits and faster withdrawals.',
-    'password_reset_success': 'Your mining account password has been successfully updated.'
-  };
-  return messages[activityType] || 'Activity completed successfully.';
-};
-
-const getNotificationType = (activityType) => {
-  const types = {
-    'signup_success': 'success',
-    'login_success': 'info', 
-    'investment_created': 'success',
-    'deposit_received': 'success',
-    'withdrawal_processed': 'success',
-    'kyc_approved': 'success',
-    'password_reset_success': 'info'
-  };
-  return types[activityType] || 'info';
-};
-
-
-
 
 
 
@@ -3358,14 +3592,16 @@ app.post('/api/auth/google', async (req, res) => {
 
       console.log('New user created via Google:', email);
 
-      // Send welcome email
-      await sendProfessionalEmail({
-        email,
-        template: 'welcome',
-        data: {
-          firstName: given_name
-        }
-      });
+      // NEW (correct):
+await sendEmail({
+  email,
+  template: 'otp',
+  data: {
+    name: user.firstName,
+    otp: otp,
+    action: 'Google sign-in verification'
+  }
+});
     } else if (!user.googleId) {
       // Existing user, add Google auth
       user.googleId = sub;
@@ -13917,6 +14153,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
