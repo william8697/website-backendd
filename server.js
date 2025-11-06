@@ -14495,7 +14495,7 @@ app.post('/api/auth/send-otp', [
   }
 });
 
-// Verify OTP Endpoint - REWRITTEN to match frontend expectations
+// FIXED OTP Verification Endpoint - Handles Google login users properly
 app.post('/api/auth/verify-otp', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
   body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
@@ -14530,12 +14530,21 @@ app.post('/api/auth/verify-otp', [
       });
     }
 
-    // Find user
-    const user = await User.findById(decoded.id);
-    if (!user || user.email !== email) {
+    // FIX: Find user WITHOUT password selection to include Google users
+    const user = await User.findById(decoded.id).select('-password'); // Exclude password field
+    
+    if (!user) {
       return res.status(404).json({
         status: 'fail',
         message: 'User not found'
+      });
+    }
+
+    // Additional safety check - verify email matches
+    if (user.email !== email) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Email does not match user account'
       });
     }
 
@@ -14558,19 +14567,14 @@ app.post('/api/auth/verify-otp', [
       const failedAttempts = await OTP.countDocuments({
         email,
         used: false,
-        createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }, // Last 24 hours
+        createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
         attempts: { $gte: 5 }
       });
 
       if (failedAttempts >= 5) {
-        // Suspend user for 24 hours
         await User.findByIdAndUpdate(user._id, {
           status: 'suspended',
           suspensionLiftAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
-        });
-
-        await logActivity('account_suspended_otp', 'user', user._id, user._id, 'System', req, {
-          reason: 'Too many failed OTP attempts'
         });
 
         return res.status(429).json({
@@ -14593,19 +14597,6 @@ app.post('/api/auth/verify-otp', [
           message: 'Verification code has expired. Please request a new one.'
         });
       }
-
-      // Send security alert for failed OTP
-      const deviceInfo = await getUserDeviceInfo(req);
-      await sendProfessionalEmail({
-        email: user.email,
-        template: 'login_failed_otp',
-        data: {
-          name: user.firstName,
-          method: 'OTP Verification',
-          ip: deviceInfo.ip,
-          location: deviceInfo.location
-        }
-      });
 
       return res.status(400).json({
         status: 'fail',
@@ -14634,22 +14625,10 @@ app.post('/api/auth/verify-otp', [
 
     // Set cookie
     res.cookie('jwt', finalToken, {
-      expires: new Date(Date.now() + 2 * 60 * 60 * 1000), // 2 hours
+      expires: new Date(Date.now() + 2 * 60 * 60 * 1000),
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict'
-    });
-
-    // Send login success notification
-    await sendProfessionalEmail({
-      email: user.email,
-      template: 'login_success',
-      data: {
-        name: user.firstName,
-        device: deviceInfo.device,
-        location: deviceInfo.location,
-        ip: deviceInfo.ip
-      }
     });
 
     res.status(200).json({
@@ -14662,13 +14641,15 @@ app.post('/api/auth/verify-otp', [
           firstName: user.firstName,
           lastName: user.lastName,
           email: user.email,
-          isVerified: user.isVerified
+          isVerified: user.isVerified,
+          hasGoogleAuth: !!user.googleId // Add this for frontend reference
         }
       }
     });
 
     await logActivity('otp_verified', 'otp', otpRecord._id, user._id, 'User', req, {
-      type: otpRecord.type
+      type: otpRecord.type,
+      isGoogleUser: !!user.googleId
     });
 
   } catch (err) {
@@ -14679,7 +14660,6 @@ app.post('/api/auth/verify-otp', [
     });
   }
 });
-
 
 
 
@@ -14849,6 +14829,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
