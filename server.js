@@ -14495,7 +14495,7 @@ app.post('/api/auth/send-otp', [
   }
 });
 
-// FIXED OTP Verification Endpoint - Handles Google login users properly
+// ENHANCED OTP Verification Endpoint - Handles all email formats including Gmail variations
 app.post('/api/auth/verify-otp', [
   body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
   body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
@@ -14530,8 +14530,8 @@ app.post('/api/auth/verify-otp', [
       });
     }
 
-    // FIX: Find user WITHOUT password selection to include Google users
-    const user = await User.findById(decoded.id).select('-password'); // Exclude password field
+    // Find user WITHOUT password selection to include Google users
+    const user = await User.findById(decoded.id).select('-password');
     
     if (!user) {
       return res.status(404).json({
@@ -14540,32 +14540,113 @@ app.post('/api/auth/verify-otp', [
       });
     }
 
-    // Additional safety check - verify email matches
-    if (user.email !== email) {
+    // ENHANCED: Gmail-specific email normalization for comparison
+    const normalizeGmailForComparison = (email) => {
+      if (!email) return email;
+      
+      const [localPart, domain] = email.toLowerCase().trim().split('@');
+      
+      // Only process Gmail domains
+      if (domain === 'gmail.com' || domain === 'googlemail.com') {
+        // Remove dots from local part and strip everything after +
+        const cleanLocalPart = localPart.replace(/\./g, '').split('+')[0];
+        return `${cleanLocalPart}@gmail.com`;
+      }
+      
+      // For non-Gmail addresses, just normalize case and trim
+      return email.toLowerCase().trim();
+    };
+
+    const normalizedUserEmail = normalizeGmailForComparison(user.email);
+    const normalizedInputEmail = normalizeGmailForComparison(email);
+
+    if (normalizedUserEmail !== normalizedInputEmail) {
       return res.status(400).json({
         status: 'fail',
         message: 'Email does not match user account'
       });
     }
 
-    // Find valid OTP
-    const otpRecord = await OTP.findOne({
-      email,
-      otp,
-      used: false,
-      expiresAt: { $gt: new Date() }
-    });
+    // ENHANCED: Comprehensive OTP lookup handling all Gmail variations
+    const findOTPRecord = async (email) => {
+      const normalizedEmail = normalizeGmailForComparison(email);
+      
+      // Try exact match first
+      let otpRecord = await OTP.findOne({
+        email: normalizedEmail,
+        otp,
+        used: false,
+        expiresAt: { $gt: new Date() }
+      });
+
+      if (otpRecord) return otpRecord;
+
+      // If not found, try with original email format
+      otpRecord = await OTP.findOne({
+        email: email,
+        otp,
+        used: false,
+        expiresAt: { $gt: new Date() }
+      });
+
+      if (otpRecord) return otpRecord;
+
+      // For Gmail addresses, try additional variations
+      if (email.includes('@gmail.') || email.includes('@googlemail.')) {
+        const [localPart, domain] = email.toLowerCase().trim().split('@');
+        
+        // Try without dots in local part
+        const withoutDots = `${localPart.replace(/\./g, '')}@gmail.com`;
+        otpRecord = await OTP.findOne({
+          email: withoutDots,
+          otp,
+          used: false,
+          expiresAt: { $gt: new Date() }
+        });
+
+        if (otpRecord) return otpRecord;
+
+        // Try without plus addressing
+        const withoutPlus = `${localPart.split('+')[0]}@gmail.com`;
+        if (withoutPlus !== withoutDots) {
+          otpRecord = await OTP.findOne({
+            email: withoutPlus,
+            otp,
+            used: false,
+            expiresAt: { $gt: new Date() }
+          });
+
+          if (otpRecord) return otpRecord;
+        }
+      }
+
+      return null;
+    };
+
+    const otpRecord = await findOTPRecord(email);
 
     if (!otpRecord) {
-      // Increment attempts
+      // Increment attempts with comprehensive email search
       await OTP.updateOne(
-        { email, otp, used: false },
+        { 
+          $or: [
+            { email: normalizedInputEmail },
+            { email: email },
+            { email: normalizeGmailForComparison(email) }
+          ],
+          otp, 
+          used: false 
+        },
         { $inc: { attempts: 1 } }
       );
 
-      // Check if max attempts reached
+      // Check if max attempts reached with comprehensive email search
       const failedAttempts = await OTP.countDocuments({
-        email,
+        $or: [
+          { email: normalizedInputEmail },
+          { email: email },
+          { email: normalizeGmailForComparison(email) }
+        ],
         used: false,
         createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
         attempts: { $gte: 5 }
@@ -14584,12 +14665,21 @@ app.post('/api/auth/verify-otp', [
       }
 
       // Check if OTP exists but is expired
-      const expiredOtp = await OTP.findOne({
-        email,
-        otp,
-        used: false,
-        expiresAt: { $lte: new Date() }
-      });
+      const findExpiredOTP = async (email) => {
+        const normalizedEmail = normalizeGmailForComparison(email);
+        
+        return await OTP.findOne({
+          $or: [
+            { email: normalizedEmail },
+            { email: email }
+          ],
+          otp,
+          used: false,
+          expiresAt: { $lte: new Date() }
+        });
+      };
+
+      const expiredOtp = await findExpiredOTP(email);
 
       if (expiredOtp) {
         return res.status(400).json({
@@ -14642,14 +14732,15 @@ app.post('/api/auth/verify-otp', [
           lastName: user.lastName,
           email: user.email,
           isVerified: user.isVerified,
-          hasGoogleAuth: !!user.googleId // Add this for frontend reference
+          hasGoogleAuth: !!user.googleId
         }
       }
     });
 
     await logActivity('otp_verified', 'otp', otpRecord._id, user._id, 'User', req, {
       type: otpRecord.type,
-      isGoogleUser: !!user.googleId
+      isGoogleUser: !!user.googleId,
+      emailVariationUsed: otpRecord.email // Log which email variation was matched
     });
 
   } catch (err) {
@@ -14660,8 +14751,6 @@ app.post('/api/auth/verify-otp', [
     });
   }
 });
-
-
 
 
 
@@ -14829,6 +14918,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
