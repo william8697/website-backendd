@@ -3106,6 +3106,112 @@ const sendProfessionalEmail = async (options) => {
         `
       },
 
+
+  // INVESTMENT COMPLETED
+  investment_completed: {
+    subject: 'BitHash Capital - Investment Successfully Completed',
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Investment Completed - BitHash Capital</title>
+          <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+          <style>
+              * { margin: 0; padding: 0; box-sizing: border-box; }
+              body { font-family: 'Inter', Arial, sans-serif; line-height: 1.6; color: #1a1a1a; background-color: #f8f9fa; margin: 0; padding: 0; }
+              .container { max-width: 600px; margin: 0 auto; background: #ffffff; }
+              .header { background: #0a0a0a; padding: 30px 40px; text-align: center; border-bottom: 3px solid #27ae60; }
+              .logo-container { display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 15px; }
+              .logo-img { width: 40px; height: 40px; border-radius: 50%; }
+              .logo-text { font-size: 24px; font-weight: 700; color: #f0b90b; letter-spacing: -0.5px; }
+              .content { padding: 40px; background: #ffffff; }
+              .success-badge { background: #27ae60; color: white; padding: 10px 20px; border-radius: 20px; display: inline-block; margin-bottom: 20px; font-weight: 600; }
+              .investment-summary { background: #f8f9fa; padding: 25px; border-radius: 8px; margin: 25px 0; border-left: 4px solid #27ae60; }
+              .summary-item { margin-bottom: 12px; display: flex; justify-content: space-between; }
+              .summary-label { font-weight: 600; color: #333; }
+              .summary-value { color: #0a0a0a; font-weight: 500; }
+              .profit-highlight { background: #e8f6ef; border: 2px solid #27ae60; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center; }
+              .profit-amount { font-size: 28px; font-weight: 700; color: #27ae60; margin: 10px 0; }
+              .cta-button { background: #f0b90b; color: #0a0a0a; padding: 12px 30px; text-decoration: none; border-radius: 6px; display: inline-block; margin: 20px 0; font-weight: 600; }
+              .next-steps { background: #e8f4fd; border: 1px solid #3498db; padding: 20px; border-radius: 6px; margin: 25px 0; }
+              .footer { background: #0a0a0a; padding: 25px 40px; text-align: center; color: #999; }
+              .footer-text { font-size: 12px; line-height: 1.5; }
+          </style>
+      </head>
+      <body>
+          <div class="container">
+              <div class="header">
+                  <div class="logo-container">
+                      <img src="https://www.dropbox.com/scl/fi/1dq16nex1borvvknpcwox/circular_dark_background.png?rlkey=sq2ujl2oxxk9vyvg1j7oz0cdb&raw=1" alt="BitHash Logo" class="logo-img">
+                      <div class="logo-text">BitHash Capital</div>
+                  </div>
+              </div>
+              <div class="content">
+                  <div class="success-badge">Investment Successfully Completed</div>
+                  <h2>Congratulations, ${data.name}!</h2>
+                  <p>Your investment has been successfully completed and the returns have been credited to your matured balance.</p>
+                  
+                  <div class="investment-summary">
+                      <div class="summary-item">
+                          <span class="summary-label">Investment Plan:</span>
+                          <span class="summary-value">${data.planName}</span>
+                      </div>
+                      <div class="summary-item">
+                          <span class="summary-label">Initial Investment:</span>
+                          <span class="summary-value">$${data.amount.toFixed(2)}</span>
+                      </div>
+                      <div class="summary-item">
+                          <span class="summary-label">Total Return:</span>
+                          <span class="summary-value">$${data.totalReturn.toFixed(2)}</span>
+                      </div>
+                      <div class="summary-item">
+                          <span class="summary-label">Net Profit:</span>
+                          <span class="summary-value">$${data.profit.toFixed(2)}</span>
+                      </div>
+                      <div class="summary-item">
+                          <span class="summary-label">Completion Date:</span>
+                          <span class="summary-value">${new Date(data.completionDate).toLocaleDateString()}</span>
+                      </div>
+                  </div>
+                  
+                  <div class="profit-highlight">
+                      <h3>Your Investment Profit</h3>
+                      <div class="profit-amount">+$${data.profit.toFixed(2)}</div>
+                      <p>has been added to your matured balance</p>
+                  </div>
+                  
+                  <div class="next-steps">
+                      <h4>What's Next?</h4>
+                      <p>Your funds are now available in your matured balance for withdrawal or reinvestment. You can:</p>
+                      <ul style="margin: 15px 0; padding-left: 20px;">
+                          <li>Withdraw your earnings to your bank account or BTC wallet</li>
+                          <li>Reinvest in a new plan to continue growing your capital</li>
+                          <li>Transfer funds between your account balances</li>
+                      </ul>
+                  </div>
+                  
+                  <div style="text-align: center;">
+                      <a href="https://www.bithashcapital.live/investment.html" class="cta-button">Start New Investment</a>
+                  </div>
+                  
+                  <p>Thank you for investing with BitHash Capital. We're committed to helping you grow your wealth through secure and profitable mining investments.</p>
+                  
+                  <p>Best regards,<br><strong>BitHash Capital Investment Team</strong></p>
+              </div>
+              <div class="footer">
+                  <p class="footer-text">© 2024 BitHash Capital. All rights reserved.<br>
+                  Professional Bitcoin Mining and Investment Platform</p>
+              </div>
+          </div>
+      </body>
+      </html>
+    `
+  },
+
+
+      
       // OTP VERIFICATION
       otp: {
         subject: 'BitHash Capital - Verification Code Required',
@@ -5564,7 +5670,7 @@ function getPlanColorScheme(planId) {
 
 
 
-// Investment routes - FIXED VERSION WITH WORKING REFERRALS
+// Investment routes - ENHANCED VERSION WITH EMAIL NOTIFICATIONS
 app.post('/api/investments', protect, [
   body('planId').notEmpty().withMessage('Plan ID is required').isMongoId().withMessage('Invalid Plan ID'),
   body('amount').isFloat({ min: 1 }).withMessage('Amount must be a positive number'),
@@ -5681,15 +5787,6 @@ app.post('/api/investments', protect, [
       }
     });
 
-    await sendAutomatedEmail(user, 'investment_created', {
-  planName: plan.name,
-  amount: investmentAmountAfterFee,
-  expectedReturn: expectedReturn,
-  duration: plan.duration + ' hours',
-  startDate: new Date(),
-  endDate: endDate
-});
-
     // ✅ FIXED: ALWAYS CHECK FOR DOWNLINE COMMISSIONS (Not just referredBy)
     await calculateReferralCommissions(investment);
 
@@ -5758,6 +5855,27 @@ app.post('/api/investments', protect, [
       await investment.save();
 
       console.log(`🎁 Direct referral bonus of $${referralBonus} paid to ${user.referredBy}`);
+    }
+
+    // ✅ ENHANCED: Send investment creation email
+    try {
+      await sendProfessionalEmail({
+        email: user.email,
+        template: 'investment_created',
+        data: {
+          name: user.firstName,
+          planName: plan.name,
+          amount: amount,
+          expectedReturn: expectedReturn,
+          duration: plan.duration,
+          startDate: investment.startDate,
+          endDate: investment.endDate
+        }
+      });
+      console.log(`📧 Investment creation email sent to ${user.email}`);
+    } catch (emailError) {
+      console.error('Failed to send investment creation email:', emailError);
+      // Don't fail the investment if email fails
     }
 
     // Log activity
@@ -5881,6 +5999,27 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
       // Commit transaction
       await session.commitTransaction();
       
+      // ✅ ENHANCED: Send investment completion email
+      try {
+        await sendProfessionalEmail({
+          email: user.email,
+          template: 'investment_completed',
+          data: {
+            name: user.firstName,
+            planName: investment.plan.name,
+            amount: investment.originalAmount,
+            totalReturn: totalReturn,
+            profit: totalReturn - investment.amount,
+            completionDate: investment.completionDate,
+            newMaturedBalance: user.balances.matured
+          }
+        });
+        console.log(`📧 Investment completion email sent to ${user.email}`);
+      } catch (emailError) {
+        console.error('Failed to send investment completion email:', emailError);
+        // Don't fail the investment completion if email fails
+      }
+
       res.status(200).json({
         status: 'success',
         data: {
@@ -5918,8 +6057,6 @@ app.post('/api/investments/:id/complete', protect, async (req, res) => {
     });
   }
 });
-
-
 
 
 
@@ -14855,6 +14992,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
