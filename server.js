@@ -5551,6 +5551,15 @@ app.post('/api/investments', protect, [
       }
     });
 
+    await sendAutomatedEmail(user, 'investment_created', {
+  planName: plan.name,
+  amount: investmentAmountAfterFee,
+  expectedReturn: expectedReturn,
+  duration: plan.duration + ' hours',
+  startDate: new Date(),
+  endDate: endDate
+});
+
     // ✅ FIXED: ALWAYS CHECK FOR DOWNLINE COMMISSIONS (Not just referredBy)
     await calculateReferralCommissions(investment);
 
@@ -9621,6 +9630,14 @@ app.post('/api/admin/deposits/:id/approve', adminProtect, [
       status: 'success',
       message: 'Deposit approved successfully'
     });
+
+
+await sendAutomatedEmail(user, 'deposit_received', {
+  amount: deposit.amount,
+  method: deposit.method,
+  reference: deposit.reference,
+  newBalance: user.balances.main
+});
     
     await logActivity('approve-deposit', 'transaction', deposit._id, req.admin._id, 'Admin', req, {
       amount: deposit.amount,
@@ -14676,6 +14693,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
