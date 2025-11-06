@@ -3821,11 +3821,11 @@ const sendProfessionalEmail = async (options) => {
 
 
 
-// Enhanced Signup Endpoint with OTP
+// Enhanced Signup Endpoint with OTP - FIXED email handling
 app.post('/api/auth/signup', [
   body('firstName').trim().notEmpty().withMessage('First name is required').escape(),
   body('lastName').trim().notEmpty().withMessage('Last name is required').escape(),
-  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
+  body('email').isEmail().withMessage('Please provide a valid email'),
   body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
       .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
       .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
@@ -3845,8 +3845,11 @@ app.post('/api/auth/signup', [
   try {
     const { firstName, lastName, email, password, city, referralCode } = req.body;
 
-    // Check if email already exists
-    const existingUser = await User.findOne({ email });
+    // Use exact email for all operations
+    const originalEmail = email;
+
+    // Check if email already exists - exact match only
+    const existingUser = await User.findOne({ email: originalEmail });
     if (existingUser) {
       return res.status(400).json({
         status: 'fail',
@@ -3880,11 +3883,11 @@ app.post('/api/auth/signup', [
       }
     }
 
-    // Create user but don't mark as verified yet
+    // Create user with exact email - no normalization
     const newUser = await User.create({
       firstName,
       lastName,
-      email,
+      email: originalEmail, // Store exact email as provided
       password: hashedPassword,
       city,
       referralCode: newReferralCode,
@@ -3892,12 +3895,12 @@ app.post('/api/auth/signup', [
       isVerified: false // User needs to verify via OTP first
     });
 
-    // Generate OTP
+    // Generate OTP with exact email
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
     await OTP.create({
-      email,
+      email: originalEmail, // Exact email
       otp,
       type: 'signup',
       expiresAt,
@@ -3905,9 +3908,9 @@ app.post('/api/auth/signup', [
       userAgent: req.headers['user-agent']
     });
 
-    // Send OTP email
+    // Send OTP email to exact email address
     await sendProfessionalEmail({
-      email,
+      email: originalEmail, // Exact email
       template: 'otp',
       data: {
         name: firstName,
@@ -3916,9 +3919,9 @@ app.post('/api/auth/signup', [
       }
     });
 
-    // Send welcome email (but user still needs to verify)
+    // Send welcome email to exact email address
     await sendProfessionalEmail({
-      email,
+      email: originalEmail, // Exact email
       template: 'welcome',
       data: {
         firstName,
@@ -3938,7 +3941,7 @@ app.post('/api/auth/signup', [
           id: newUser._id,
           firstName: newUser.firstName,
           lastName: newUser.lastName,
-          email: newUser.email,
+          email: newUser.email, // Return exact email from database
           needsVerification: true
         }
       }
@@ -3955,7 +3958,6 @@ app.post('/api/auth/signup', [
     });
   }
 });
-
 
 
 
@@ -4025,10 +4027,9 @@ app.get('/api/referrals/validate/:code', async (req, res) => {
 
 
 
-
-// Enhanced Login Endpoint with OTP
+// Enhanced Login Endpoint with OTP - FIXED email handling
 app.post('/api/auth/login', [
-  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
+  body('email').isEmail().withMessage('Please provide a valid email'),
   body('password').notEmpty().withMessage('Password is required'),
   body('rememberMe').optional().isBoolean().withMessage('Remember me must be a boolean')
 ], async (req, res) => {
@@ -4043,12 +4044,13 @@ app.post('/api/auth/login', [
   try {
     const { email, password, rememberMe } = req.body;
 
+    // Use exact email for lookup - no normalization
     const user = await User.findOne({ email }).select('+password +twoFactorAuth.secret');
     if (!user || !(await bcrypt.compare(password, user.password))) {
       // Log failed attempt
       await logUserActivity(req, 'login_attempt', 'failed', {
         error: 'Invalid credentials',
-        email
+        email: email // Log exact email used
       });
       
       return res.status(401).json({
@@ -4074,8 +4076,9 @@ app.post('/api/auth/login', [
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
+    // Store OTP with exact email
     await OTP.create({
-      email,
+      email: email, // Exact email from request
       otp,
       type: 'login',
       expiresAt,
@@ -4083,9 +4086,9 @@ app.post('/api/auth/login', [
       userAgent: req.headers['user-agent']
     });
 
-    // Send OTP email
+    // Send OTP email to exact email address
     await sendProfessionalEmail({
-      email,
+      email: email, // Exact email from request
       template: 'otp',
       data: {
         name: user.firstName,
@@ -4107,13 +4110,13 @@ app.post('/api/auth/login', [
           id: user._id,
           firstName: user.firstName,
           lastName: user.lastName,
-          email: user.email
+          email: user.email // Return exact email from database
         }
       }
     });
 
     await logUserActivity(req, 'login_otp_sent', 'pending', {
-      email,
+      email: email, // Log exact email used
       userId: user._id
     }, user);
 
@@ -4122,7 +4125,7 @@ app.post('/api/auth/login', [
     
     await logUserActivity(req, 'login_error', 'failed', {
       error: err.message,
-      email: req.body.email
+      email: req.body.email // Log exact email used
     });
 
     res.status(500).json({
@@ -4218,38 +4221,41 @@ app.post('/api/auth/google', async (req, res) => {
 
     console.log('Google auth successful for:', email);
 
-    let user = await User.findOne({ email });
+    // Use the EXACT email from Google - no normalization
+    const originalEmail = email;
+
+    let user = await User.findOne({ email: originalEmail });
     const isNewUser = !user;
 
     if (!user) {
-      // Create new user with Google auth
+      // Create new user with Google auth using exact email
       const referralCode = generateReferralCode();
       user = await User.create({
         firstName: given_name,
         lastName: family_name || '',
-        email,
+        email: originalEmail, // Store exact email from Google
         googleId: sub,
         isVerified: true,
         referralCode,
         status: 'active'
       });
 
-      console.log('New user created via Google:', email);
+      console.log('New user created via Google:', originalEmail);
 
-      // Send welcome email
+      // Send welcome email to exact email address
       await sendProfessionalEmail({
-        email,
+        email: originalEmail,
         template: 'welcome',
         data: {
           firstName: given_name
         }
       });
     } else if (!user.googleId) {
-      // Existing user, add Google auth
+      // Existing user, add Google auth - keep original email
       user.googleId = sub;
       user.isVerified = true;
       await user.save();
-      console.log('Existing user linked with Google:', email);
+      console.log('Existing user linked with Google:', originalEmail);
     }
 
     // Check if user is active
@@ -4264,8 +4270,9 @@ app.post('/api/auth/google', async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
+    // Store OTP with exact email from Google
     await OTP.create({
-      email,
+      email: originalEmail,
       otp,
       type: 'login',
       expiresAt,
@@ -4273,9 +4280,9 @@ app.post('/api/auth/google', async (req, res) => {
       userAgent: req.headers['user-agent']
     });
 
-    // Send OTP email
+    // Send OTP email to exact email address from Google
     await sendProfessionalEmail({
-      email,
+      email: originalEmail,
       template: 'otp',
       data: {
         name: user.firstName,
@@ -4305,14 +4312,15 @@ app.post('/api/auth/google', async (req, res) => {
           id: user._id,
           firstName: user.firstName,
           lastName: user.lastName,
-          email: user.email
+          email: user.email // Return exact email from database
         }
       }
     });
 
     await logActivity('google_signin_otp_sent', 'user', user._id, user._id, 'User', req, {
       isNewUser,
-      provider: 'google'
+      provider: 'google',
+      email: originalEmail
     });
 
   } catch (err) {
@@ -4341,7 +4349,6 @@ app.post('/api/auth/google', async (req, res) => {
     });
   }
 });
-
 
 
 
@@ -14411,9 +14418,9 @@ app.delete('/api/admin/notifications/delete-all-read', adminProtect, async (req,
 
 
 
-// Send OTP Endpoint - REWRITTEN to match frontend expectations
+// Send OTP Endpoint - FIXED to preserve original email format
 app.post('/api/auth/send-otp', [
-  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail()
+  body('email').isEmail().withMessage('Please provide a valid email')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -14426,8 +14433,11 @@ app.post('/api/auth/send-otp', [
   try {
     const { email } = req.body;
 
-    // Check if user exists
-    const user = await User.findOne({ email });
+    // Use the EXACT email as provided (no normalization)
+    const originalEmail = email;
+
+    // Check if user exists - use exact email match
+    const user = await User.findOne({ email: originalEmail });
     if (!user) {
       return res.status(404).json({
         status: 'fail',
@@ -14435,9 +14445,9 @@ app.post('/api/auth/send-otp', [
       });
     }
 
-    // Check for recent OTP attempts to prevent spam (60 seconds cooldown)
+    // Check for recent OTP attempts using exact email
     const recentOtp = await OTP.findOne({
-      email,
+      email: originalEmail,
       createdAt: { $gte: new Date(Date.now() - 60 * 1000) } // Last 60 seconds
     });
 
@@ -14452,12 +14462,12 @@ app.post('/api/auth/send-otp', [
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
-    // Delete any existing OTPs for this email
-    await OTP.deleteMany({ email, used: false });
+    // Delete any existing OTPs for this exact email
+    await OTP.deleteMany({ email: originalEmail, used: false });
 
-    // Create new OTP
+    // Create new OTP with exact email
     await OTP.create({
-      email,
+      email: originalEmail,
       otp,
       type: 'login',
       expiresAt,
@@ -14465,9 +14475,9 @@ app.post('/api/auth/send-otp', [
       userAgent: req.headers['user-agent']
     });
 
-    // Send OTP email
+    // Send OTP email to the exact email address
     await sendProfessionalEmail({
-      email,
+      email: originalEmail,
       template: 'otp',
       data: {
         name: user.firstName,
@@ -14482,7 +14492,7 @@ app.post('/api/auth/send-otp', [
     });
 
     await logActivity('otp_sent', 'otp', null, user._id, 'User', req, {
-      email,
+      email: originalEmail,
       type: 'login'
     });
 
@@ -14501,9 +14511,9 @@ app.post('/api/auth/send-otp', [
 
 
 
-// ENHANCED OTP Verification Endpoint - FIXED Gmail dot issue
+// OTP Verification Endpoint - FIXED to use exact email matching
 app.post('/api/auth/verify-otp', [
-  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
+  body('email').isEmail().withMessage('Please provide a valid email'),
   body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -14546,119 +14556,42 @@ app.post('/api/auth/verify-otp', [
       });
     }
 
-    // FIXED: Enhanced Gmail normalization that matches ALL variations
-    const normalizeGmailForComparison = (email) => {
-      if (!email) return email;
-      
-      const [localPart, domain] = email.toLowerCase().trim().split('@');
-      
-      // Process ALL Gmail-like domains
-      if (domain === 'gmail.com' || domain === 'googlemail.com') {
-        // Remove ALL dots from local part and strip everything after +
-        const cleanLocalPart = localPart.replace(/\./g, '').split('+')[0];
-        return `${cleanLocalPart}@gmail.com`;
-      }
-      
-      // For non-Gmail addresses, just normalize case and trim
-      return email.toLowerCase().trim();
-    };
-
-    // FIXED: Use the SAME normalization for both comparison and OTP lookup
-    const normalizedUserEmail = normalizeGmailForComparison(user.email);
-    const normalizedInputEmail = normalizeGmailForComparison(email);
-
-    // Enhanced comparison with debug logging
-    console.log('Email comparison:', {
+    // FIXED: Compare EXACT emails without any normalization
+    console.log('Email comparison (exact match):', {
       userEmail: user.email,
       inputEmail: email,
-      normalizedUserEmail,
-      normalizedInputEmail,
-      match: normalizedUserEmail === normalizedInputEmail
+      match: user.email === email
     });
 
-    if (normalizedUserEmail !== normalizedInputEmail) {
+    if (user.email !== email) {
       return res.status(400).json({
         status: 'fail',
         message: 'Email does not match user account'
       });
     }
 
-    // FIXED: Comprehensive OTP lookup that checks ALL possible email variations
-    const findOTPRecord = async (searchEmail) => {
-      console.log('OTP search for email:', searchEmail);
-      
-      // Get all possible email variations for Gmail
-      const getEmailVariations = (email) => {
-        const variations = new Set();
-        const [localPart, domain] = email.toLowerCase().trim().split('@');
-        
-        variations.add(email.toLowerCase().trim());
-        variations.add(normalizeGmailForComparison(email));
-        
-        // Only process Gmail domains for variations
-        if (domain === 'gmail.com' || domain === 'googlemail.com') {
-          // Original with dots
-          variations.add(email.toLowerCase().trim());
-          
-          // Without dots
-          const withoutDots = `${localPart.replace(/\./g, '')}@gmail.com`;
-          variations.add(withoutDots);
-          
-          // Without plus addressing
-          const withoutPlus = `${localPart.split('+')[0]}@gmail.com`;
-          variations.add(withoutPlus);
-          
-          // Without dots and plus
-          const withoutDotsAndPlus = `${localPart.replace(/\./g, '').split('+')[0]}@gmail.com`;
-          variations.add(withoutDotsAndPlus);
-          
-          // Try with googlemail.com domain
-          variations.add(email.replace('@gmail.com', '@googlemail.com'));
-          variations.add(withoutDots.replace('@gmail.com', '@googlemail.com'));
-        }
-        
-        return Array.from(variations);
-      };
-
-      const emailVariations = getEmailVariations(searchEmail);
-      console.log('Checking OTP for email variations:', emailVariations);
-
-      // Try ALL variations
-      for (const emailVar of emailVariations) {
-        const otpRecord = await OTP.findOne({
-          email: emailVar,
-          otp,
-          used: false,
-          expiresAt: { $gt: new Date() }
-        });
-
-        if (otpRecord) {
-          console.log('OTP found with email variation:', emailVar);
-          return otpRecord;
-        }
-      }
-
-      return null;
-    };
-
-    const otpRecord = await findOTPRecord(email);
+    // FIXED: Look for OTP with EXACT email only
+    const otpRecord = await OTP.findOne({
+      email: email, // Exact match only
+      otp,
+      used: false,
+      expiresAt: { $gt: new Date() }
+    });
 
     if (!otpRecord) {
-      // FIXED: Increment attempts across ALL email variations
-      const emailVariations = getEmailVariations(email);
-      
+      // Increment attempts for exact email
       await OTP.updateMany(
         { 
-          email: { $in: emailVariations },
+          email: email, // Exact match only
           otp, 
           used: false 
         },
         { $inc: { attempts: 1 } }
       );
 
-      // Check if max attempts reached
+      // Check if max attempts reached for exact email
       const failedAttempts = await OTP.countDocuments({
-        email: { $in: emailVariations },
+        email: email, // Exact match only
         used: false,
         createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
         attempts: { $gte: 5 }
@@ -14676,9 +14609,9 @@ app.post('/api/auth/verify-otp', [
         });
       }
 
-      // Check if OTP exists but is expired
+      // Check if OTP exists but is expired for exact email
       const expiredOtp = await OTP.findOne({
-        email: { $in: emailVariations },
+        email: email, // Exact match only
         otp,
         used: false,
         expiresAt: { $lte: new Date() }
@@ -14733,7 +14666,7 @@ app.post('/api/auth/verify-otp', [
           id: user._id,
           firstName: user.firstName,
           lastName: user.lastName,
-          email: user.email,
+          email: user.email, // Return the exact email from database
           isVerified: user.isVerified,
           hasGoogleAuth: !!user.googleId
         }
@@ -14743,9 +14676,8 @@ app.post('/api/auth/verify-otp', [
     await logActivity('otp_verified', 'otp', otpRecord._id, user._id, 'User', req, {
       type: otpRecord.type,
       isGoogleUser: !!user.googleId,
-      emailVariationUsed: otpRecord.email,
-      originalEmail: email,
-      normalizedEmail: normalizedInputEmail
+      emailUsed: email,
+      exactMatch: true
     });
 
   } catch (err) {
@@ -14756,42 +14688,6 @@ app.post('/api/auth/verify-otp', [
     });
   }
 });
-
-// Helper function for email variations (add this outside the endpoint)
-function getEmailVariations(email) {
-  const variations = new Set();
-  const [localPart, domain] = email.toLowerCase().trim().split('@');
-  
-  variations.add(email.toLowerCase().trim());
-  
-  // Gmail normalization
-  if (domain === 'gmail.com' || domain === 'googlemail.com') {
-    // Original with dots
-    variations.add(email.toLowerCase().trim());
-    
-    // Without dots
-    const withoutDots = `${localPart.replace(/\./g, '')}@gmail.com`;
-    variations.add(withoutDots);
-    
-    // Without plus addressing
-    const withoutPlus = `${localPart.split('+')[0]}@gmail.com`;
-    variations.add(withoutPlus);
-    
-    // Without dots and plus
-    const withoutDotsAndPlus = `${localPart.replace(/\./g, '').split('+')[0]}@gmail.com`;
-    variations.add(withoutDotsAndPlus);
-    
-    // Try with googlemail.com domain
-    variations.add(email.replace('@gmail.com', '@googlemail.com'));
-    variations.add(withoutDots.replace('@gmail.com', '@googlemail.com'));
-  }
-  
-  return Array.from(variations);
-}
-
-
-
-
 
 
 
@@ -14959,6 +14855,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
