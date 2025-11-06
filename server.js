@@ -43,7 +43,7 @@ app.use(helmet({
       upgradeInsecureRequests: []
     }
   },
-  crossOriginOpenerPolicy: { policy: "unsafe-none" }
+  crossOriginOpenerPolicy: false
 }));
 
 app.use(cors({
@@ -15217,6 +15217,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
