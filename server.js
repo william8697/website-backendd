@@ -2539,16 +2539,36 @@ const logActivity = async (action, entity, entityId, performedBy, performedByMod
   try {
     const deviceInfo = await getUserDeviceInfo(req);
     
+    // Enhanced location data
+    const locationData = {
+      ip: deviceInfo.ip,
+      location: deviceInfo.location,
+      isPublicIP: deviceInfo.isPublicIP,
+      userAgent: deviceInfo.device,
+      detectedAt: new Date()
+    };
+    
     await SystemLog.create({
       action,
       entity,
       entityId,
       performedBy,
       performedByModel,
-      ip: deviceInfo.ip,
-      device: deviceInfo.device,
-      location: deviceInfo.location,
-      changes
+      ip: locationData.ip,
+      device: locationData.userAgent,
+      location: locationData.location,
+      changes: {
+        ...changes,
+        locationData: locationData
+      }
+    });
+    
+    console.log(`Activity Logged: ${action}`, {
+      entity,
+      entityId,
+      location: locationData.location,
+      ip: locationData.ip,
+      isPublicIP: locationData.isPublicIP
     });
   } catch (err) {
     console.error('Error logging activity:', err);
@@ -14669,6 +14689,39 @@ app.post('/api/auth/verify-otp', [
 
 
 
+// Enhanced location logging middleware
+app.use(async (req, res, next) => {
+  try {
+    const deviceInfo = await getUserDeviceInfo(req);
+    
+    // Attach location info to request for use in other routes
+    req.clientLocation = {
+      ip: deviceInfo.ip,
+      location: deviceInfo.location,
+      isPublicIP: deviceInfo.isPublicIP,
+      userAgent: deviceInfo.device,
+      timestamp: new Date().toISOString()
+    };
+    
+    // Log enhanced location information
+    console.log('Client Connection Details:', {
+      time: new Date().toLocaleString(),
+      ip: deviceInfo.ip,
+      location: deviceInfo.location,
+      isPublicIP: deviceInfo.isPublicIP,
+      userAgent: deviceInfo.device.substring(0, 100) // Truncate for readability
+    });
+    
+    next();
+  } catch (error) {
+    console.error('Location middleware error:', error);
+    next();
+  }
+});
+
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -14796,6 +14849,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
