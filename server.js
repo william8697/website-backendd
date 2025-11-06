@@ -3078,7 +3078,7 @@ const sendProfessionalEmail = async (options) => {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login Notification</title>
     <style>
-        ${/* Same animation styles as welcome email */}
+           
         @keyframes bitcoinFloat {
             0%, 100% { transform: translateY(0) rotate(0deg); }
             25% { transform: translateY(-3px) rotate(90deg); }
@@ -14673,6 +14673,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
