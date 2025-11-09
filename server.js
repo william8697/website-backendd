@@ -14657,6 +14657,10 @@ app.use(async (req, res, next) => {
 
 
 
+
+
+
+
 // Stats endpoint with Redis caching and real-time updates
 app.get('/api/stats', async (req, res) => {
     try {
@@ -14667,9 +14671,10 @@ app.get('/api/stats', async (req, res) => {
             return res.status(200).json(JSON.parse(cachedStats));
         }
 
-        // Get current UTC time for daily tracking
+        // Get current UTC time to determine if we need to reset daily stats
         const now = new Date();
-        const todayUTC = now.toISOString().split('T')[0]; // YYYY-MM-DD
+        const currentHourUTC = now.getUTCHours();
+        const isNewDay = currentHourUTC === 0 && now.getUTCMinutes() < 5; // Reset window 00:00-00:05 UTC
 
         // Initialize base stats
         let stats = {
@@ -14688,6 +14693,7 @@ app.get('/api/stats', async (req, res) => {
         // Get or initialize persistent investor count
         let investorCount = await redis.get('persistent-investor-count');
         if (!investorCount) {
+            // Initialize with your specified starting value
             investorCount = 7087098;
             await redis.set('persistent-investor-count', investorCount.toString());
         } else {
@@ -14695,37 +14701,22 @@ app.get('/api/stats', async (req, res) => {
         }
         stats.totalInvestors = investorCount;
 
-        // Get daily tracking data
-        let dailyData = await redis.get('daily-stats');
-        if (!dailyData) {
-            dailyData = {
-                date: todayUTC,
-                dailyInvestment: 0,
-                dailyInvestmentVolume: 0,
-                dailyWithdrawal: 0,
-                dailyLoan: 0
-            };
-        } else {
-            dailyData = JSON.parse(dailyData);
-            // Reset if it's a new day
-            if (dailyData.date !== todayUTC) {
-                dailyData = {
-                    date: todayUTC,
-                    dailyInvestment: 0,
-                    dailyInvestmentVolume: 0,
-                    dailyWithdrawal: 0,
-                    dailyLoan: 0
-                };
-            }
-        }
-
-        // If we have previous stats in Redis, use them as base
+        // If we have previous stats in Redis (even if expired), use them as base for other metrics
         const previousStats = await redis.get('previous-stats');
         if (previousStats) {
             const previous = JSON.parse(previousStats);
-            stats.totalInvested = previous.totalInvested;
-            stats.totalWithdrawals = previous.totalWithdrawals;
-            stats.totalLoans = previous.totalLoans;
+            
+            // Only reset daily stats if it's a new day
+            if (isNewDay) {
+                // Generate new base values for daily stats
+                stats.totalInvested = getRandomInRange(6000000, 8000000);
+                stats.totalWithdrawals = getRandomInRange(4000000, 6000000);
+                stats.totalLoans = getRandomInRange(1000000, 3000000);
+            } else {
+                stats.totalInvested = previous.totalInvested;
+                stats.totalWithdrawals = previous.totalWithdrawals;
+                stats.totalLoans = previous.totalLoans;
+            }
         }
 
         // Calculate change rates (random between -11.3% to 31%)
@@ -14739,7 +14730,6 @@ app.get('/api/stats', async (req, res) => {
         // Cache the stats for 30 seconds
         await redis.set('stats-data', JSON.stringify(stats), 'EX', 30);
         await redis.set('previous-stats', JSON.stringify(stats));
-        await redis.set('daily-stats', JSON.stringify(dailyData));
 
         res.status(200).json(stats);
     } catch (err) {
@@ -14757,49 +14747,21 @@ function getRandomInRange(min, max, decimals = 2) {
     return parseFloat(rand.toFixed(decimals));
 }
 
-// Real-time stats updater with daily limits
+// Real-time stats updater with constraints
 setInterval(async () => {
     try {
-        // Get current UTC date for daily tracking
-        const now = new Date();
-        const todayUTC = now.toISOString().split('T')[0];
-        const seconds = now.getSeconds();
-
-        // Get or initialize daily tracking data
-        let dailyData = await redis.get('daily-stats');
-        if (!dailyData) {
-            dailyData = {
-                date: todayUTC,
-                dailyInvestment: 0,
-                dailyInvestmentVolume: 0,
-                dailyWithdrawal: 0,
-                dailyLoan: 0
-            };
-        } else {
-            dailyData = JSON.parse(dailyData);
-            // Reset if it's a new day
-            if (dailyData.date !== todayUTC) {
-                dailyData = {
-                    date: todayUTC,
-                    dailyInvestment: 0,
-                    dailyInvestmentVolume: 0,
-                    dailyWithdrawal: 0,
-                    dailyLoan: 0
-                };
-            }
-        }
-
         // Get current stats or initialize if not exists
         let stats = {
             totalInvested: 61236234.21,
             totalWithdrawals: 47236585.06,
             totalLoans: 13236512.17,
-            lastUpdated: now.toISOString()
+            lastUpdated: new Date().toISOString()
         };
 
         // Get persistent investor count
         let investorCount = await redis.get('persistent-investor-count');
         if (!investorCount) {
+            // Initialize with your specified starting value if not exists
             investorCount = 7087098;
             await redis.set('persistent-investor-count', investorCount.toString());
         } else {
@@ -14814,68 +14776,71 @@ setInterval(async () => {
             stats.totalLoans = parsedStats.totalLoans;
         }
 
-        // Update investors every 15-30 seconds (13-999 increment)
+        // Update each stat with different intervals and random increments
+        const now = new Date();
+        const seconds = now.getSeconds();
+
+        // Update investors every 15-30 seconds (13-999 increment) with constraint
         if (seconds % getRandomInRange(15, 30, 0) === 0) {
-            investorCount += getRandomInRange(13, 999, 0);
+            const newInvestorCount = investorCount + getRandomInRange(13, 999, 0);
+            // Ensure investors never exceed 99,000,000
+            investorCount = Math.min(newInvestorCount, 99000000);
             await redis.set('persistent-investor-count', investorCount.toString());
         }
         stats.totalInvestors = investorCount;
 
-        // Update invested with daily limit of 50,000
+        // Update invested every 5-20 seconds with daily constraint
         if (seconds % getRandomInRange(5, 20, 0) === 0) {
-            const availableInvestment = 50000 - dailyData.dailyInvestment;
-            if (availableInvestment > 0) {
-                const increment = getRandomInRange(1200.33, 111368.21, 2);
-                const actualIncrement = Math.min(increment, availableInvestment);
-                
-                if (actualIncrement > 0) {
-                    stats.totalInvested += actualIncrement;
-                    dailyData.dailyInvestment += actualIncrement;
-                }
+            const dailyInvestKey = `daily-invested-${now.toISOString().split('T')[0]}`;
+            let dailyInvested = await redis.get(dailyInvestKey);
+            dailyInvested = dailyInvested ? parseFloat(dailyInvested) : 0;
+            
+            const increment = getRandomInRange(1200.33, 111368.21, 2);
+            // Ensure daily investment never exceeds 50,000
+            if (dailyInvested + increment <= 50000) {
+                stats.totalInvested += increment;
+                await redis.set(dailyInvestKey, (dailyInvested + increment).toString(), 'EX', 86400);
             }
         }
 
-        // Update investment volume with daily limit of 650,003,000
-        if (seconds % getRandomInRange(5, 20, 0) === 0) {
-            const availableVolume = 650003000 - dailyData.dailyInvestmentVolume;
-            if (availableVolume > 0) {
-                const increment = getRandomInRange(1200.33, 111368.21, 2);
-                const actualIncrement = Math.min(increment, availableVolume);
-                
-                if (actualIncrement > 0) {
-                    // Assuming investment volume contributes to total invested
-                    stats.totalInvested += actualIncrement;
-                    dailyData.dailyInvestmentVolume += actualIncrement;
-                }
-            }
-        }
-
-        // Update withdrawals with daily limit of 370,423,500
+        // Update withdrawals every 10-25 seconds with daily constraint
         if (seconds % getRandomInRange(10, 25, 0) === 0) {
-            const availableWithdrawal = 370423500 - dailyData.dailyWithdrawal;
-            if (availableWithdrawal > 0) {
-                const increment = getRandomInRange(4997.33, 321238.11, 2);
-                const actualIncrement = Math.min(increment, availableWithdrawal);
-                
-                if (actualIncrement > 0) {
-                    stats.totalWithdrawals += actualIncrement;
-                    dailyData.dailyWithdrawal += actualIncrement;
-                }
+            const dailyWithdrawalKey = `daily-withdrawals-${now.toISOString().split('T')[0]}`;
+            let dailyWithdrawals = await redis.get(dailyWithdrawalKey);
+            dailyWithdrawals = dailyWithdrawals ? parseFloat(dailyWithdrawals) : 0;
+            
+            const increment = getRandomInRange(4997.33, 321238.11, 2);
+            // Ensure daily withdrawals never exceed 370,423,500
+            if (dailyWithdrawals + increment <= 370423500) {
+                stats.totalWithdrawals += increment;
+                await redis.set(dailyWithdrawalKey, (dailyWithdrawals + increment).toString(), 'EX', 86400);
             }
         }
 
-        // Update loans with daily limit of 545,000,000
+        // Update loans every 8-18 seconds with daily constraint
         if (seconds % getRandomInRange(8, 18, 0) === 0) {
-            const availableLoan = 545000000 - dailyData.dailyLoan;
-            if (availableLoan > 0) {
-                const increment = getRandomInRange(1000, 100000, 2);
-                const actualIncrement = Math.min(increment, availableLoan);
-                
-                if (actualIncrement > 0) {
-                    stats.totalLoans += actualIncrement;
-                    dailyData.dailyLoan += actualIncrement;
-                }
+            const dailyLoansKey = `daily-loans-${now.toISOString().split('T')[0]}`;
+            let dailyLoans = await redis.get(dailyLoansKey);
+            dailyLoans = dailyLoans ? parseFloat(dailyLoans) : 0;
+            
+            const increment = getRandomInRange(1000, 100000, 2);
+            // Ensure daily loans never exceed 545,000,000
+            if (dailyLoans + increment <= 545000000) {
+                stats.totalLoans += increment;
+                await redis.set(dailyLoansKey, (dailyLoans + increment).toString(), 'EX', 86400);
             }
+        }
+
+        // Additional constraint for investment volume (not to exceed 650,003,000 per day)
+        const dailyInvestmentVolumeKey = `daily-investment-volume-${now.toISOString().split('T')[0]}`;
+        let dailyInvestmentVolume = await redis.get(dailyInvestmentVolumeKey);
+        dailyInvestmentVolume = dailyInvestmentVolume ? parseFloat(dailyInvestmentVolume) : 0;
+        
+        // If we're approaching the daily limit, reduce increments
+        if (dailyInvestmentVolume > 600000000) {
+            // Reduce investment increments when close to daily limit
+            const reductionFactor = Math.max(0.1, 1 - ((dailyInvestmentVolume - 600000000) / 50000000));
+            stats.totalInvested *= reductionFactor;
         }
 
         // Recalculate change rates periodically
@@ -14887,26 +14852,21 @@ setInterval(async () => {
                 loans: getRandomInRange(-11.3, 31, 1)
             };
         } else if (cachedStats) {
+            // Preserve existing change rates if not recalculating
             const parsedStats = JSON.parse(cachedStats);
             stats.changeRates = parsedStats.changeRates;
         }
 
         stats.lastUpdated = now.toISOString();
 
-        // Update cache and daily tracking
+        // Update cache
         await redis.set('stats-data', JSON.stringify(stats), 'EX', 30);
         await redis.set('previous-stats', JSON.stringify(stats));
-        await redis.set('daily-stats', JSON.stringify(dailyData));
 
     } catch (err) {
         console.error('Stats updater error:', err);
     }
 }, 1000); // Run every second to check for updates
-
-
-
-
-
 
 
 
@@ -15039,6 +14999,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
