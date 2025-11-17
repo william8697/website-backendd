@@ -14760,8 +14760,6 @@ setInterval(async () => {
 
 
 
-
-
 // Admin Get User Details Endpoint - ENTERPRISE STANDARD
 app.get('/api/admin/users/:id', adminProtect, async (req, res) => {
   try {
@@ -14789,28 +14787,16 @@ app.get('/api/admin/users/:id', adminProtect, async (req, res) => {
   }
 });
 
-// Admin Update User Endpoint - ENTERPRISE STANDARD (COMPLETE USER DATA EDITING)
+// Admin Update User Endpoint - ENTERPRISE STANDARD WITH BALANCE EDITING
 app.put('/api/admin/users/:id', adminProtect, [
   body('firstName').optional().trim().notEmpty().withMessage('First name cannot be empty'),
   body('lastName').optional().trim().notEmpty().withMessage('Last name cannot be empty'),
   body('email').optional().isEmail().withMessage('Please provide a valid email'),
-  body('phone').optional().trim().isMobilePhone().withMessage('Please provide a valid phone number'),
-  body('country').optional().trim().notEmpty().withMessage('Country cannot be empty'),
-  body('city').optional().trim().notEmpty().withMessage('City cannot be empty'),
-  body('status').optional().isIn(['active', 'suspended', 'banned']).withMessage('Invalid status'),
-  body('kycStatus.identity').optional().isIn(['pending', 'verified', 'rejected', 'not-submitted']).withMessage('Invalid KYC identity status'),
-  body('kycStatus.address').optional().isIn(['pending', 'verified', 'rejected', 'not-submitted']).withMessage('Invalid KYC address status'),
-  body('kycStatus.facial').optional().isIn(['pending', 'verified', 'rejected', 'not-submitted']).withMessage('Invalid KYC facial status'),
   body('balances.main').optional().isFloat({ min: 0 }).withMessage('Main balance must be a positive number'),
   body('balances.active').optional().isFloat({ min: 0 }).withMessage('Active balance must be a positive number'),
   body('balances.matured').optional().isFloat({ min: 0 }).withMessage('Matured balance must be a positive number'),
   body('balances.savings').optional().isFloat({ min: 0 }).withMessage('Savings balance must be a positive number'),
-  body('balances.loan').optional().isFloat({ min: 0 }).withMessage('Loan balance must be a positive number'),
-  body('referralStats.totalReferrals').optional().isInt({ min: 0 }).withMessage('Total referrals must be a positive number'),
-  body('referralStats.totalEarnings').optional().isFloat({ min: 0 }).withMessage('Total earnings must be positive'),
-  body('referralStats.availableBalance').optional().isFloat({ min: 0 }).withMessage('Available balance must be positive'),
-  body('referralStats.withdrawn').optional().isFloat({ min: 0 }).withMessage('Withdrawn amount must be positive'),
-  body('referralStats.referralTier').optional().isInt({ min: 1, max: 5 }).withMessage('Referral tier must be between 1-5')
+  body('balances.loan').optional().isFloat({ min: 0 }).withMessage('Loan balance must be a positive number')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -14821,26 +14807,7 @@ app.put('/api/admin/users/:id', adminProtect, [
       });
     }
     
-    const { 
-      firstName, 
-      lastName, 
-      email, 
-      phone,
-      country,
-      city,
-      address,
-      status, 
-      kycStatus,
-      balances,
-      referralStats,
-      downlineStats,
-      preferences,
-      twoFactorAuth,
-      referralCode,
-      referredBy,
-      isVerified,
-      adminNotes
-    } = req.body;
+    const { firstName, lastName, email, status, balances, kycStatus, referralStats, downlineStats } = req.body;
     
     // Check if email is already taken by another user
     if (email) {
@@ -14857,47 +14824,47 @@ app.put('/api/admin/users/:id', adminProtect, [
       }
     }
     
-    // Check if referral code is already taken by another user
-    if (referralCode) {
-      const existingUserWithCode = await User.findOne({ 
-        referralCode, 
-        _id: { $ne: req.params.id } 
-      });
-      
-      if (existingUserWithCode) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'Referral code is already taken by another user'
-        });
-      }
+    // Prepare update data
+    const updateData = {};
+    if (firstName) updateData.firstName = firstName;
+    if (lastName) updateData.lastName = lastName;
+    if (email) updateData.email = email;
+    if (status) updateData.status = status;
+    
+    // ENTERPRISE FEATURE: Direct balance editing by admin
+    if (balances) {
+      updateData.balances = {};
+      if (balances.main !== undefined) updateData.balances.main = parseFloat(balances.main);
+      if (balances.active !== undefined) updateData.balances.active = parseFloat(balances.active);
+      if (balances.matured !== undefined) updateData.balances.matured = parseFloat(balances.matured);
+      if (balances.savings !== undefined) updateData.balances.savings = parseFloat(balances.savings);
+      if (balances.loan !== undefined) updateData.balances.loan = parseFloat(balances.loan);
     }
     
-    // Prepare update data - ALL USER FIELDS CAN BE EDITED
-    const updateData = {};
-    if (firstName !== undefined) updateData.firstName = firstName;
-    if (lastName !== undefined) updateData.lastName = lastName;
-    if (email !== undefined) updateData.email = email;
-    if (phone !== undefined) updateData.phone = phone;
-    if (country !== undefined) updateData.country = country;
-    if (city !== undefined) updateData.city = city;
-    if (address !== undefined) updateData.address = address;
-    if (status !== undefined) updateData.status = status;
-    if (kycStatus !== undefined) updateData.kycStatus = kycStatus;
-    if (balances !== undefined) updateData.balances = balances;
-    if (referralStats !== undefined) updateData.referralStats = referralStats;
-    if (downlineStats !== undefined) updateData.downlineStats = downlineStats;
-    if (preferences !== undefined) updateData.preferences = preferences;
-    if (twoFactorAuth !== undefined) updateData.twoFactorAuth = twoFactorAuth;
-    if (referralCode !== undefined) updateData.referralCode = referralCode;
-    if (referredBy !== undefined) updateData.referredBy = referredBy;
-    if (isVerified !== undefined) updateData.isVerified = isVerified;
-    if (adminNotes !== undefined) updateData.adminNotes = adminNotes;
+    // ENTERPRISE FEATURE: KYC status management
+    if (kycStatus) {
+      updateData.kycStatus = kycStatus;
+    }
     
-    // Update user with ALL fields
+    // ENTERPRISE FEATURE: Referral stats management
+    if (referralStats) {
+      updateData.referralStats = referralStats;
+    }
+    
+    // ENTERPRISE FEATURE: Downline stats management
+    if (downlineStats) {
+      updateData.downlineStats = downlineStats;
+    }
+    
+    // Update user with enhanced options
     const user = await User.findByIdAndUpdate(
       req.params.id,
       updateData,
-      { new: true, runValidators: true }
+      { 
+        new: true, 
+        runValidators: true,
+        context: 'query'
+      }
     ).select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires');
     
     if (!user) {
@@ -14905,6 +14872,66 @@ app.put('/api/admin/users/:id', adminProtect, [
         status: 'fail',
         message: 'User not found'
       });
+    }
+    
+    // ENTERPRISE FEATURE: Create audit log for balance changes
+    if (balances) {
+      const balanceChanges = {};
+      Object.keys(balances).forEach(key => {
+        if (balances[key] !== undefined) {
+          balanceChanges[key] = {
+            oldValue: user.balances[key],
+            newValue: parseFloat(balances[key])
+          };
+        }
+      });
+      
+      // Log the balance modification
+      await SystemLog.create({
+        action: 'admin_balance_adjustment',
+        entity: 'User',
+        entityId: user._id,
+        performedBy: req.admin._id,
+        performedByModel: 'Admin',
+        ip: req.ip,
+        device: req.headers['user-agent'],
+        location: req.clientLocation?.location || 'Unknown',
+        changes: {
+          balances: balanceChanges,
+          reason: req.body.adjustmentReason || 'Administrative adjustment',
+          adminNote: req.body.adminNote || 'Balance updated by admin'
+        },
+        metadata: {
+          adminEmail: req.admin.email,
+          adminName: req.admin.name,
+          userId: user._id,
+          userEmail: user.email
+        }
+      });
+      
+      // ENTERPRISE FEATURE: Create transaction record for balance adjustments
+      if (Object.keys(balanceChanges).length > 0) {
+        await Transaction.create({
+          user: user._id,
+          type: 'admin_adjustment',
+          amount: 0, // Specific amounts handled in details
+          currency: 'USD',
+          status: 'completed',
+          method: 'internal',
+          reference: `ADJ-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          details: {
+            balanceChanges: balanceChanges,
+            adjustedBy: req.admin._id,
+            adminName: req.admin.name,
+            reason: req.body.adjustmentReason || 'Administrative adjustment',
+            note: req.body.adminNote || 'Balance updated by admin'
+          },
+          fee: 0,
+          netAmount: 0,
+          processedBy: req.admin._id,
+          processedAt: new Date()
+        });
+      }
     }
     
     res.status(200).json({
@@ -14921,11 +14948,6 @@ app.put('/api/admin/users/:id', adminProtect, [
     });
   }
 });
-
-
-
-
-
 
 
 
@@ -15062,6 +15084,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
