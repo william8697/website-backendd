@@ -14760,6 +14760,13 @@ setInterval(async () => {
 
 
 
+
+
+
+
+
+
+
 // Admin Get User Details Endpoint - ENTERPRISE STANDARD
 app.get('/api/admin/users/:id', adminProtect, async (req, res) => {
   try {
@@ -14787,7 +14794,7 @@ app.get('/api/admin/users/:id', adminProtect, async (req, res) => {
   }
 });
 
-// Admin Update User Endpoint - ENTERPRISE STANDARD WITH BALANCE EDITING
+// Admin Update User Endpoint - ENTERPRISE STANDARD WITH DIRECT BALANCE EDITING
 app.put('/api/admin/users/:id', adminProtect, [
   body('firstName').optional().trim().notEmpty().withMessage('First name cannot be empty'),
   body('lastName').optional().trim().notEmpty().withMessage('Last name cannot be empty'),
@@ -14807,7 +14814,7 @@ app.put('/api/admin/users/:id', adminProtect, [
       });
     }
     
-    const { firstName, lastName, email, status, balances, kycStatus, referralStats, downlineStats } = req.body;
+    const { firstName, lastName, email, status, balances, twoFactorAuth, adjustmentReason, adminNote } = req.body;
     
     // Check if email is already taken by another user
     if (email) {
@@ -14830,6 +14837,9 @@ app.put('/api/admin/users/:id', adminProtect, [
     if (lastName) updateData.lastName = lastName;
     if (email) updateData.email = email;
     if (status) updateData.status = status;
+    if (twoFactorAuth !== undefined) {
+      updateData.twoFactorAuth = { enabled: twoFactorAuth };
+    }
     
     // ENTERPRISE FEATURE: Direct balance editing by admin
     if (balances) {
@@ -14839,21 +14849,6 @@ app.put('/api/admin/users/:id', adminProtect, [
       if (balances.matured !== undefined) updateData.balances.matured = parseFloat(balances.matured);
       if (balances.savings !== undefined) updateData.balances.savings = parseFloat(balances.savings);
       if (balances.loan !== undefined) updateData.balances.loan = parseFloat(balances.loan);
-    }
-    
-    // ENTERPRISE FEATURE: KYC status management
-    if (kycStatus) {
-      updateData.kycStatus = kycStatus;
-    }
-    
-    // ENTERPRISE FEATURE: Referral stats management
-    if (referralStats) {
-      updateData.referralStats = referralStats;
-    }
-    
-    // ENTERPRISE FEATURE: Downline stats management
-    if (downlineStats) {
-      updateData.downlineStats = downlineStats;
     }
     
     // Update user with enhanced options
@@ -14898,8 +14893,8 @@ app.put('/api/admin/users/:id', adminProtect, [
         location: req.clientLocation?.location || 'Unknown',
         changes: {
           balances: balanceChanges,
-          reason: req.body.adjustmentReason || 'Administrative adjustment',
-          adminNote: req.body.adminNote || 'Balance updated by admin'
+          reason: adjustmentReason || 'Administrative adjustment',
+          adminNote: adminNote || 'Balance updated by admin'
         },
         metadata: {
           adminEmail: req.admin.email,
@@ -14923,8 +14918,8 @@ app.put('/api/admin/users/:id', adminProtect, [
             balanceChanges: balanceChanges,
             adjustedBy: req.admin._id,
             adminName: req.admin.name,
-            reason: req.body.adjustmentReason || 'Administrative adjustment',
-            note: req.body.adminNote || 'Balance updated by admin'
+            reason: adjustmentReason || 'Administrative adjustment',
+            note: adminNote || 'Balance updated by admin'
           },
           fee: 0,
           netAmount: 0,
@@ -14948,9 +14943,6 @@ app.put('/api/admin/users/:id', adminProtect, [
     });
   }
 });
-
-
-
 
 
 
@@ -15084,6 +15076,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
