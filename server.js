@@ -9448,168 +9448,13 @@ app.get('/api/admin/investment/plans', adminProtect, async (req, res) => {
   }
 });
 
-// Admin Add User Endpoint
-app.post('/api/admin/users', adminProtect, [
-  body('firstName').trim().notEmpty().withMessage('First name is required'),
-  body('lastName').trim().notEmpty().withMessage('Last name is required'),
-  body('email').isEmail().withMessage('Please provide a valid email'),
-  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'fail',
-        errors: errors.array()
-      });
-    }
-    
-    const { firstName, lastName, email, password, city, country } = req.body;
-    
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'User with this email already exists'
-      });
-    }
-    
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 12);
-    
-    // Generate referral code
-    const referralCode = generateReferralCode();
-    
-    // Create user
-    const user = await User.create({
-      firstName,
-      lastName,
-      email,
-      password: hashedPassword,
-      city,
-      country,
-      referralCode,
-      isVerified: true
-    });
-    
-    res.status(201).json({
-      status: 'success',
-      data: {
-        user: {
-          id: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email
-        }
-      }
-    });
-    
-    await logActivity('create-user', 'user', user._id, req.admin._id, 'Admin', req);
-  } catch (err) {
-    console.error('Admin add user error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to create user'
-    });
-  }
-});
 
-// Admin Get User Details Endpoint
-app.get('/api/admin/users/:id', adminProtect, async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id)
-      .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires')
-      .lean();
-    
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      data: { user }
-    });
-  } catch (err) {
-    console.error('Admin get user error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch user details'
-    });
-  }
-});
 
-// Admin Update User Endpoint
-app.put('/api/admin/users/:id', adminProtect, [
-  body('firstName').optional().trim().notEmpty().withMessage('First name cannot be empty'),
-  body('lastName').optional().trim().notEmpty().withMessage('Last name cannot be empty'),
-  body('email').optional().isEmail().withMessage('Please provide a valid email')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'fail',
-        errors: errors.array()
-      });
-    }
-    
-    const { firstName, lastName, email, status, balances } = req.body;
-    
-    // Check if email is already taken by another user
-    if (email) {
-      const existingUser = await User.findOne({ 
-        email, 
-        _id: { $ne: req.params.id } 
-      });
-      
-      if (existingUser) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'Email is already taken by another user'
-        });
-      }
-    }
-    
-    // Prepare update data
-    const updateData = {};
-    if (firstName) updateData.firstName = firstName;
-    if (lastName) updateData.lastName = lastName;
-    if (email) updateData.email = email;
-    if (status) updateData.status = status;
-    if (balances) updateData.balances = balances;
-    
-    // Update user
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true, runValidators: true }
-    ).select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires');
-    
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      data: { user }
-    });
-    
-    await logActivity('update-user', 'user', user._id, req.admin._id, 'Admin', req, updateData);
-  } catch (err) {
-    console.error('Admin update user error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to update user'
-    });
-  }
-});
+
+
+
+
+
 
 
 // Admin Get Deposit Details Endpoint
@@ -15036,6 +14881,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
