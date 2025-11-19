@@ -9448,13 +9448,168 @@ app.get('/api/admin/investment/plans', adminProtect, async (req, res) => {
   }
 });
 
+// Admin Add User Endpoint
+app.post('/api/admin/users', adminProtect, [
+  body('firstName').trim().notEmpty().withMessage('First name is required'),
+  body('lastName').trim().notEmpty().withMessage('Last name is required'),
+  body('email').isEmail().withMessage('Please provide a valid email'),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+    
+    const { firstName, lastName, email, password, city, country } = req.body;
+    
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'User with this email already exists'
+      });
+    }
+    
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 12);
+    
+    // Generate referral code
+    const referralCode = generateReferralCode();
+    
+    // Create user
+    const user = await User.create({
+      firstName,
+      lastName,
+      email,
+      password: hashedPassword,
+      city,
+      country,
+      referralCode,
+      isVerified: true
+    });
+    
+    res.status(201).json({
+      status: 'success',
+      data: {
+        user: {
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email
+        }
+      }
+    });
+    
+    await logActivity('create-user', 'user', user._id, req.admin._id, 'Admin', req);
+  } catch (err) {
+    console.error('Admin add user error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to create user'
+    });
+  }
+});
 
+// Admin Get User Details Endpoint
+app.get('/api/admin/users/:id', adminProtect, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id)
+      .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires')
+      .lean();
+    
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+    
+    res.status(200).json({
+      status: 'success',
+      data: { user }
+    });
+  } catch (err) {
+    console.error('Admin get user error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch user details'
+    });
+  }
+});
 
-
-
-
-
-
+// Admin Update User Endpoint
+app.put('/api/admin/users/:id', adminProtect, [
+  body('firstName').optional().trim().notEmpty().withMessage('First name cannot be empty'),
+  body('lastName').optional().trim().notEmpty().withMessage('Last name cannot be empty'),
+  body('email').optional().isEmail().withMessage('Please provide a valid email')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'fail',
+        errors: errors.array()
+      });
+    }
+    
+    const { firstName, lastName, email, status, balances } = req.body;
+    
+    // Check if email is already taken by another user
+    if (email) {
+      const existingUser = await User.findOne({ 
+        email, 
+        _id: { $ne: req.params.id } 
+      });
+      
+      if (existingUser) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Email is already taken by another user'
+        });
+      }
+    }
+    
+    // Prepare update data
+    const updateData = {};
+    if (firstName) updateData.firstName = firstName;
+    if (lastName) updateData.lastName = lastName;
+    if (email) updateData.email = email;
+    if (status) updateData.status = status;
+    if (balances) updateData.balances = balances;
+    
+    // Update user
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true }
+    ).select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires');
+    
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+    
+    res.status(200).json({
+      status: 'success',
+      data: { user }
+    });
+    
+    await logActivity('update-user', 'user', user._id, req.admin._id, 'Admin', req, updateData);
+  } catch (err) {
+    console.error('Admin update user error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update user'
+    });
+  }
+});
 
 
 // Admin Get Deposit Details Endpoint
@@ -14754,201 +14909,6 @@ setInterval(async () => {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Admin Get User Details Endpoint - ENTERPRISE STANDARD
-app.get('/api/admin/users/:id', adminProtect, async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id)
-      .select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires')
-      .lean();
-    
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      data: { user }
-    });
-  } catch (err) {
-    console.error('Admin get user error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch user details'
-    });
-  }
-});
-
-// Admin Update User Endpoint - ENTERPRISE STANDARD WITH DIRECT BALANCE EDITING
-app.put('/api/admin/users/:id', adminProtect, [
-  body('firstName').optional().trim().notEmpty().withMessage('First name cannot be empty'),
-  body('lastName').optional().trim().notEmpty().withMessage('Last name cannot be empty'),
-  body('email').optional().isEmail().withMessage('Please provide a valid email'),
-  body('balances.main').optional().isFloat({ min: 0 }).withMessage('Main balance must be a positive number'),
-  body('balances.active').optional().isFloat({ min: 0 }).withMessage('Active balance must be a positive number'),
-  body('balances.matured').optional().isFloat({ min: 0 }).withMessage('Matured balance must be a positive number'),
-  body('balances.savings').optional().isFloat({ min: 0 }).withMessage('Savings balance must be a positive number'),
-  body('balances.loan').optional().isFloat({ min: 0 }).withMessage('Loan balance must be a positive number')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'fail',
-        errors: errors.array()
-      });
-    }
-    
-    const { firstName, lastName, email, status, balances, twoFactorAuth, adjustmentReason, adminNote } = req.body;
-    
-    // Check if email is already taken by another user
-    if (email) {
-      const existingUser = await User.findOne({ 
-        email, 
-        _id: { $ne: req.params.id } 
-      });
-      
-      if (existingUser) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'Email is already taken by another user'
-        });
-      }
-    }
-    
-    // Prepare update data
-    const updateData = {};
-    if (firstName) updateData.firstName = firstName;
-    if (lastName) updateData.lastName = lastName;
-    if (email) updateData.email = email;
-    if (status) updateData.status = status;
-    if (twoFactorAuth !== undefined) {
-      updateData.twoFactorAuth = { enabled: twoFactorAuth };
-    }
-    
-    // ENTERPRISE FEATURE: Direct balance editing by admin
-    if (balances) {
-      updateData.balances = {};
-      if (balances.main !== undefined) updateData.balances.main = parseFloat(balances.main);
-      if (balances.active !== undefined) updateData.balances.active = parseFloat(balances.active);
-      if (balances.matured !== undefined) updateData.balances.matured = parseFloat(balances.matured);
-      if (balances.savings !== undefined) updateData.balances.savings = parseFloat(balances.savings);
-      if (balances.loan !== undefined) updateData.balances.loan = parseFloat(balances.loan);
-    }
-    
-    // Update user with enhanced options
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { 
-        new: true, 
-        runValidators: true,
-        context: 'query'
-      }
-    ).select('-password -passwordChangedAt -passwordResetToken -passwordResetExpires');
-    
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found'
-      });
-    }
-    
-    // ENTERPRISE FEATURE: Create audit log for balance changes
-    if (balances) {
-      const balanceChanges = {};
-      Object.keys(balances).forEach(key => {
-        if (balances[key] !== undefined) {
-          balanceChanges[key] = {
-            oldValue: user.balances[key],
-            newValue: parseFloat(balances[key])
-          };
-        }
-      });
-      
-      // Log the balance modification
-      await SystemLog.create({
-        action: 'admin_balance_adjustment',
-        entity: 'User',
-        entityId: user._id,
-        performedBy: req.admin._id,
-        performedByModel: 'Admin',
-        ip: req.ip,
-        device: req.headers['user-agent'],
-        location: req.clientLocation?.location || 'Unknown',
-        changes: {
-          balances: balanceChanges,
-          reason: adjustmentReason || 'Administrative adjustment',
-          adminNote: adminNote || 'Balance updated by admin'
-        },
-        metadata: {
-          adminEmail: req.admin.email,
-          adminName: req.admin.name,
-          userId: user._id,
-          userEmail: user.email
-        }
-      });
-      
-      // ENTERPRISE FEATURE: Create transaction record for balance adjustments
-      if (Object.keys(balanceChanges).length > 0) {
-        await Transaction.create({
-          user: user._id,
-          type: 'admin_adjustment',
-          amount: 0, // Specific amounts handled in details
-          currency: 'USD',
-          status: 'completed',
-          method: 'internal',
-          reference: `ADJ-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-          details: {
-            balanceChanges: balanceChanges,
-            adjustedBy: req.admin._id,
-            adminName: req.admin.name,
-            reason: adjustmentReason || 'Administrative adjustment',
-            note: adminNote || 'Balance updated by admin'
-          },
-          fee: 0,
-          netAmount: 0,
-          processedBy: req.admin._id,
-          processedAt: new Date()
-        });
-      }
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      data: { user }
-    });
-    
-    await logActivity('update-user', 'user', user._id, req.admin._id, 'Admin', req, updateData);
-  } catch (err) {
-    console.error('Admin update user error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to update user'
-    });
-  }
-});
-
-
-
-
-
-
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -15076,9 +15036,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
 
 
 
