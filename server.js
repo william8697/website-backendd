@@ -14660,6 +14660,7 @@ app.use(async (req, res, next) => {
 
 
 
+
 // Stats endpoint with Redis caching and real-time updates
 app.get('/api/stats', async (req, res) => {
     try {
@@ -14688,18 +14689,13 @@ app.get('/api/stats', async (req, res) => {
             }
         };
 
-        // Get or initialize persistent investor count with maximum limit of 6,898,658
+        // Get or initialize persistent investor count
         let investorCount = await redis.get('persistent-investor-count');
         if (!investorCount) {
             investorCount = 7087098;
             await redis.set('persistent-investor-count', investorCount.toString());
         } else {
             investorCount = parseInt(investorCount);
-            // Ensure investor count never exceeds 6,898,658
-            if (investorCount > 6898658) {
-                investorCount = 6898658;
-                await redis.set('persistent-investor-count', investorCount.toString());
-            }
         }
         stats.totalInvestors = investorCount;
 
@@ -14805,7 +14801,7 @@ setInterval(async () => {
             lastUpdated: now.toISOString()
         };
 
-        // Get persistent investor count with maximum limit of 6,898,658
+        // Get persistent investor count
         let investorCount = await redis.get('persistent-investor-count');
         if (!investorCount) {
             investorCount = 7087098;
@@ -14822,22 +14818,30 @@ setInterval(async () => {
             stats.totalLoans = parsedStats.totalLoans;
         }
 
-        // Update investors every 15-30 seconds (13-999 increment) with maximum limit
+        // Update investors every 15-30 seconds (13-999 increment)
         if (seconds % getRandomInRange(15, 30, 0) === 0) {
-            const increment = getRandomInRange(13, 999, 0);
-            // Ensure total investors never exceeds 6,898,658
-            if (investorCount + increment <= 6898658) {
-                investorCount += increment;
-            } else {
-                investorCount = 6898658; // Cap at maximum
-            }
+            investorCount += getRandomInRange(13, 999, 0);
             await redis.set('persistent-investor-count', investorCount.toString());
         }
         stats.totalInvestors = investorCount;
 
-        // Update investment volume with daily limit of 200,000,000
+        // Update invested with daily limit of 50,000
         if (seconds % getRandomInRange(5, 20, 0) === 0) {
-            const availableVolume = 200000000 - dailyData.dailyInvestmentVolume;
+            const availableInvestment = 50000 - dailyData.dailyInvestment;
+            if (availableInvestment > 0) {
+                const increment = getRandomInRange(1200.33, 111368.21, 2);
+                const actualIncrement = Math.min(increment, availableInvestment);
+                
+                if (actualIncrement > 0) {
+                    stats.totalInvested += actualIncrement;
+                    dailyData.dailyInvestment += actualIncrement;
+                }
+            }
+        }
+
+        // Update investment volume with daily limit of 650,003,000
+        if (seconds % getRandomInRange(5, 20, 0) === 0) {
+            const availableVolume = 650003000 - dailyData.dailyInvestmentVolume;
             if (availableVolume > 0) {
                 const increment = getRandomInRange(1200.33, 111368.21, 2);
                 const actualIncrement = Math.min(increment, availableVolume);
@@ -14850,9 +14854,9 @@ setInterval(async () => {
             }
         }
 
-        // Update withdrawals with daily limit of 270,000,000
+        // Update withdrawals with daily limit of 370,423,500
         if (seconds % getRandomInRange(10, 25, 0) === 0) {
-            const availableWithdrawal = 270000000 - dailyData.dailyWithdrawal;
+            const availableWithdrawal = 370423500 - dailyData.dailyWithdrawal;
             if (availableWithdrawal > 0) {
                 const increment = getRandomInRange(4997.33, 321238.11, 2);
                 const actualIncrement = Math.min(increment, availableWithdrawal);
@@ -14864,9 +14868,9 @@ setInterval(async () => {
             }
         }
 
-        // Update loans with daily limit of 70,000,000
+        // Update loans with daily limit of 545,000,000
         if (seconds % getRandomInRange(8, 18, 0) === 0) {
-            const availableLoan = 70000000 - dailyData.dailyLoan;
+            const availableLoan = 545000000 - dailyData.dailyLoan;
             if (availableLoan > 0) {
                 const increment = getRandomInRange(1000, 100000, 2);
                 const actualIncrement = Math.min(increment, availableLoan);
@@ -14902,8 +14906,6 @@ setInterval(async () => {
         console.error('Stats updater error:', err);
     }
 }, 1000); // Run every second to check for updates
-
-
 
 
 
@@ -15042,6 +15044,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
