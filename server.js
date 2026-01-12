@@ -1611,63 +1611,613 @@ const Notification = mongoose.model('Notification', NotificationSchema);
 
 
 
-
 const LoanSchema = new mongoose.Schema({
+  // User Information
   user: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'User', 
     required: [true, 'User is required'],
     index: true
   },
+  
+  // Loan Amount Information
   amount: { 
     type: Number, 
     required: [true, 'Amount is required'], 
-    min: [0, 'Amount cannot be negative'] 
+    min: [1000, 'Minimum loan amount is $1,000'] 
   },
+  originalAmount: {
+    type: Number,
+    required: true,
+    min: [1000, 'Minimum loan amount is $1,000']
+  },
+  
+  // Loan Terms
   interestRate: { 
     type: Number, 
     required: [true, 'Interest rate is required'], 
-    min: [0, 'Interest rate cannot be negative'] 
+    min: [0, 'Interest rate cannot be negative'],
+    default: 9.99 // Monthly interest rate as specified
   },
   duration: { 
     type: Number, 
     required: [true, 'Duration is required'], 
-    min: [1, 'Duration must be at least 1 day'] 
+    min: [1, 'Duration must be at least 1 month'],
+    enum: [3, 6, 12, 24] // Loan terms as shown in frontend
   },
+  
+  // Collateral Information
   collateralAmount: { 
     type: Number, 
     required: [true, 'Collateral amount is required'], 
     min: [0, 'Collateral amount cannot be negative'] 
   },
-  collateralCurrency: { type: String, default: 'BTC' },
+  collateralCurrency: { 
+    type: String, 
+    default: 'USD',
+    enum: ['USD', 'BTC']
+  },
+  collateralType: {
+    type: String,
+    enum: ['main_balance', 'investment_portfolio', 'other'],
+    default: 'main_balance'
+  },
+  
+  // Loan Status and Lifecycle
   status: { 
     type: String, 
-    enum: ['pending', 'approved', 'rejected', 'active', 'repaid', 'defaulted'], 
+    enum: ['pending', 'approved', 'rejected', 'active', 'repaid', 'defaulted', 'processing'], 
     default: 'pending',
     index: true
   },
-  startDate: { type: Date },
-  endDate: { type: Date },
-  repaymentAmount: { type: Number },
-  adminNotes: { type: String },
-  approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
-  approvedAt: { type: Date }
+  statusHistory: [{
+    status: { type: String, required: true },
+    changedAt: { type: Date, default: Date.now },
+    changedBy: { type: mongoose.Schema.Types.ObjectId, refPath: 'statusHistory.changedByModel' },
+    changedByModel: { type: String, enum: ['User', 'Admin', 'System'] },
+    reason: String,
+    notes: String
+  }],
+  
+  // Timeline
+  applicationDate: { 
+    type: Date, 
+    default: Date.now,
+    index: true 
+  },
+  startDate: { 
+    type: Date,
+    index: true 
+  },
+  endDate: { 
+    type: Date,
+    index: true,
+    validate: {
+      validator: function(v) {
+        return !this.startDate || v > this.startDate;
+      },
+      message: 'End date must be after start date'
+    }
+  },
+  
+  // Repayment Information
+  repaidAmount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  remainingBalance: {
+    type: Number,
+    default: function() {
+      return this.amount;
+    }
+  },
+  repaymentAmount: { 
+    type: Number,
+    min: 0
+  },
+  monthlyPayment: {
+    type: Number,
+    min: 0
+  },
+  totalRepayment: {
+    type: Number,
+    min: 0
+  },
+  repaidAt: {
+    type: Date
+  },
+  lastPaymentDate: Date,
+  nextPaymentDate: Date,
+  
+  // Disbursement Information
+  disbursementFee: {
+    type: Number,
+    default: 0.99, // Percentage as specified
+    min: 0,
+    max: 100
+  },
+  disbursementFeeAmount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  netAmountDisbursed: {
+    type: Number,
+    min: 0
+  },
+  disbursedAt: Date,
+  
+  // Loan Purpose (from frontend dropdown)
+  purpose: {
+    type: String,
+    required: [true, 'Loan purpose is required'],
+    enum: [
+      'cloud_mining_expansion',
+      'equipment_upgrade',
+      'portfolio_diversification',
+      'emergency_funds',
+      'other'
+    ],
+    default: 'other'
+  },
+  purposeDescription: String,
+  
+  // Terms and Conditions
+  terms: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
+  termsAccepted: {
+    type: Boolean,
+    default: false
+  },
+  termsAcceptedAt: Date,
+  
+  // Eligibility Information
+  eligibilityData: {
+    creditScore: { type: Number, min: 300, max: 850 },
+    maxLoanAmount: Number,
+    availableCredit: Number,
+    currentDebt: Number,
+    requirementsMet: {
+      accountVerified: Boolean,
+      minimumInvestments: Boolean,
+      goodTransactionHistory: Boolean,
+      creditScoreThreshold: Boolean
+    },
+    calculatedAt: Date
+  },
+  
+  // Approval Information
+  approvedBy: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Admin' 
+  },
+  approvedAt: { 
+    type: Date 
+  },
+  autoApproved: {
+    type: Boolean,
+    default: false
+  },
+  
+  // Rejection Information
+  rejectedBy: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Admin' 
+  },
+  rejectedAt: { 
+    type: Date 
+  },
+  rejectionReason: { 
+    type: String 
+  },
+  rejectionDetails: String,
+  
+  // Admin Notes and Communication
+  adminNotes: { 
+    type: String 
+  },
+  internalNotes: [{
+    note: String,
+    createdBy: { type: mongoose.Schema.Types.ObjectId, refPath: 'internalNotes.createdByModel' },
+    createdByModel: { type: String, enum: ['Admin', 'System'] },
+    createdAt: { type: Date, default: Date.now }
+  }],
+  
+  // Payment History
+  paymentHistory: [{
+    paymentDate: { type: Date, default: Date.now },
+    amount: { type: Number, required: true, min: 0 },
+    paymentMethod: { type: String, enum: ['automatic', 'manual', 'deposit'] },
+    transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' },
+    remainingBalance: Number,
+    notes: String
+  }],
+  
+  // Fees and Charges
+  fees: [{
+    type: { type: String, enum: ['disbursement', 'late', 'processing', 'other'] },
+    amount: Number,
+    description: String,
+    appliedAt: { type: Date, default: Date.now }
+  }],
+  
+  // Default Management
+  daysPastDue: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  defaultedAt: Date,
+  defaultReason: String,
+  collectionStatus: {
+    type: String,
+    enum: ['current', 'warning', 'default', 'collections', 'written_off'],
+    default: 'current'
+  },
+  
+  // Security and Compliance
+  ipAddress: String,
+  userAgent: String,
+  deviceInfo: {
+    type: String,
+    enum: ['desktop', 'mobile', 'tablet', 'unknown']
+  },
+  kycVerified: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  complianceFlags: [{
+    type: String,
+    enum: ['aml_check', 'sanctions_check', 'pep_check', 'unusual_activity']
+  }],
+  
+  // Related Entities
+  relatedInvestment: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Investment'
+  },
+  relatedTransactions: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Transaction'
+  }],
+  
+  // Metadata
+  currency: {
+    type: String,
+    default: 'USD',
+    enum: ['USD', 'BTC']
+  },
+  version: {
+    type: Number,
+    default: 1
+  },
+  metadata: mongoose.Schema.Types.Mixed
+
 }, { 
   timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
+  toJSON: { 
+    virtuals: true,
+    transform: function(doc, ret) {
+      delete ret.__v;
+      delete ret.internalNotes;
+      delete ret.statusHistory;
+      return ret;
+    }
+  },
+  toObject: { 
+    virtuals: true,
+    transform: function(doc, ret) {
+      delete ret.__v;
+      return ret;
+    }
+  },
+  optimisticConcurrency: true
 });
 
-LoanSchema.index({ user: 1 });
-LoanSchema.index({ status: 1 });
-LoanSchema.index({ endDate: 1 });
+// Virtuals
+LoanSchema.virtual('isActive').get(function() {
+  return this.status === 'active';
+});
+
+LoanSchema.virtual('isPending').get(function() {
+  return this.status === 'pending';
+});
+
+LoanSchema.virtual('isRepaid').get(function() {
+  return this.status === 'repaid';
+});
 
 LoanSchema.virtual('daysRemaining').get(function() {
-  if (!this.endDate) return null;
-  return Math.max(0, Math.ceil((this.endDate - Date.now()) / (1000 * 60 * 60 * 24)));
+  if (!this.endDate || this.status !== 'active') return null;
+  const now = new Date();
+  const diffTime = this.endDate - now;
+  return Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
 });
 
+LoanSchema.virtual('progressPercentage').get(function() {
+  if (this.amount <= 0) return 0;
+  return Math.min(100, (this.repaidAmount / this.amount) * 100);
+});
+
+LoanSchema.virtual('totalInterest').get(function() {
+  if (!this.totalRepayment || !this.amount) return 0;
+  return this.totalRepayment - this.amount;
+});
+
+LoanSchema.virtual('netAmountAfterFees').get(function() {
+  if (!this.netAmountDisbursed) return this.amount - (this.disbursementFeeAmount || 0);
+  return this.netAmountDisbursed;
+});
+
+LoanSchema.virtual('nextPaymentDue').get(function() {
+  if (!this.nextPaymentDate) {
+    // Calculate next payment date if not set
+    if (this.startDate && this.duration) {
+      const nextDate = new Date(this.lastPaymentDate || this.startDate);
+      nextDate.setMonth(nextDate.getMonth() + 1);
+      return nextDate;
+    }
+    return null;
+  }
+  return this.nextPaymentDate;
+});
+
+// Indexes
+LoanSchema.index({ user: 1, status: 1 });
+LoanSchema.index({ status: 1, endDate: 1 });
+LoanSchema.index({ purpose: 1 });
+LoanSchema.index({ applicationDate: -1 });
+LoanSchema.index({ 'eligibilityData.creditScore': -1 });
+LoanSchema.index({ repaidAmount: 1 });
+LoanSchema.index({ remainingBalance: 1 });
+LoanSchema.index({ nextPaymentDate: 1 });
+
+// Compound indexes for common queries
+LoanSchema.index({ user: 1, applicationDate: -1 });
+LoanSchema.index({ status: 1, startDate: -1 });
+LoanSchema.index({ user: 1, status: 1, repaidAmount: 1 });
+
+// Middleware
+LoanSchema.pre('save', function(next) {
+  // Auto-calculate remaining balance
+  if (this.isModified('repaidAmount')) {
+    this.remainingBalance = Math.max(0, this.amount - this.repaidAmount);
+    
+    // Auto-update status if fully repaid
+    if (this.remainingBalance <= 0 && this.status === 'active') {
+      this.status = 'repaid';
+      this.repaidAt = new Date();
+    }
+  }
+  
+  // Auto-set disbursement fee amount if not set
+  if (this.isModified('amount') && this.disbursementFee && !this.disbursementFeeAmount) {
+    this.disbursementFeeAmount = (this.amount * this.disbursementFee) / 100;
+  }
+  
+  // Auto-calculate net amount disbursed
+  if (this.isModified('amount') || this.isModified('disbursementFeeAmount')) {
+    this.netAmountDisbursed = this.amount - (this.disbursementFeeAmount || 0);
+  }
+  
+  // Auto-calculate repayment schedule
+  if (this.isModified('amount') || this.isModified('interestRate') || this.isModified('duration')) {
+    if (this.amount > 0 && this.interestRate > 0 && this.duration > 0) {
+      const monthlyRate = this.interestRate / 100;
+      this.monthlyPayment = (this.amount * monthlyRate * Math.pow(1 + monthlyRate, this.duration)) /
+                           (Math.pow(1 + monthlyRate, this.duration) - 1);
+      this.totalRepayment = this.monthlyPayment * this.duration;
+    }
+  }
+  
+  // Track status changes
+  if (this.isModified('status')) {
+    this.statusHistory = this.statusHistory || [];
+    this.statusHistory.push({
+      status: this.status,
+      changedAt: new Date(),
+      changedBy: this._updatedBy || null,
+      changedByModel: this._updatedByModel || 'System',
+      reason: this._statusChangeReason
+    });
+    
+    // Clear temp fields
+    this._updatedBy = undefined;
+    this._updatedByModel = undefined;
+    this._statusChangeReason = undefined;
+  }
+  
+  next();
+});
+
+// Static Methods
+LoanSchema.statics.findActiveByUser = function(userId) {
+  return this.find({ user: userId, status: 'active' });
+};
+
+LoanSchema.statics.findPendingByUser = function(userId) {
+  return this.find({ user: userId, status: 'pending' });
+};
+
+LoanSchema.statics.calculateTotalDebt = async function(userId) {
+  const result = await this.aggregate([
+    { $match: { user: mongoose.Types.ObjectId(userId), status: 'active' } },
+    { $group: { _id: null, totalDebt: { $sum: '$remainingBalance' } } }
+  ]);
+  return result.length ? result[0].totalDebt : 0;
+};
+
+LoanSchema.statics.getLoanStatistics = async function(userId) {
+  const stats = await this.aggregate([
+    { $match: { user: mongoose.Types.ObjectId(userId) } },
+    {
+      $group: {
+        _id: null,
+        totalBorrowed: { $sum: '$amount' },
+        totalRepaid: { $sum: '$repaidAmount' },
+        activeLoans: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
+        repaidLoans: { $sum: { $cond: [{ $eq: ['$status', 'repaid'] }, 1, 0] } },
+        totalInterestPaid: { $sum: { $subtract: ['$totalRepayment', '$amount'] } }
+      }
+    }
+  ]);
+  
+  return stats.length ? stats[0] : {
+    totalBorrowed: 0,
+    totalRepaid: 0,
+    activeLoans: 0,
+    repaidLoans: 0,
+    totalInterestPaid: 0
+  };
+};
+
+// Instance Methods
+LoanSchema.methods.addPayment = async function(paymentAmount, paymentMethod = 'manual', transactionId = null) {
+  if (this.status !== 'active') {
+    throw new Error('Cannot add payment to non-active loan');
+  }
+  
+  if (paymentAmount <= 0) {
+    throw new Error('Payment amount must be positive');
+  }
+  
+  if (paymentAmount > this.remainingBalance) {
+    throw new Error('Payment amount exceeds remaining balance');
+  }
+  
+  // Add payment
+  this.repaidAmount += paymentAmount;
+  this.remainingBalance -= paymentAmount;
+  this.lastPaymentDate = new Date();
+  
+  // Calculate next payment date (1 month from now)
+  const nextDate = new Date(this.lastPaymentDate);
+  nextDate.setMonth(nextDate.getMonth() + 1);
+  this.nextPaymentDate = nextDate;
+  
+  // Add to payment history
+  this.paymentHistory.push({
+    paymentDate: new Date(),
+    amount: paymentAmount,
+    paymentMethod: paymentMethod,
+    transactionId: transactionId,
+    remainingBalance: this.remainingBalance
+  });
+  
+  // Update status if fully repaid
+  if (this.remainingBalance <= 0) {
+    this.status = 'repaid';
+    this.repaidAt = new Date();
+    this.nextPaymentDate = null;
+  }
+  
+  return this.save();
+};
+
+LoanSchema.methods.calculateDefaultRisk = function() {
+  if (this.status !== 'active') return 0;
+  
+  let riskScore = 0;
+  const now = new Date();
+  
+  // Check days past due
+  if (this.nextPaymentDate && now > this.nextPaymentDate) {
+    const daysLate = Math.ceil((now - this.nextPaymentDate) / (1000 * 60 * 60 * 24));
+    riskScore += Math.min(daysLate * 5, 50); // Max 50 points for lateness
+  }
+  
+  // Check repayment progress vs timeline
+  if (this.startDate && this.endDate) {
+    const totalDuration = this.endDate - this.startDate;
+    const elapsed = now - this.startDate;
+    const expectedProgress = elapsed / totalDuration;
+    const actualProgress = this.repaidAmount / this.amount;
+    
+    if (actualProgress < expectedProgress * 0.5) {
+      riskScore += 30; // Behind on payments
+    }
+  }
+  
+  // Check if nearing end date with significant balance
+  if (this.endDate) {
+    const daysRemaining = Math.ceil((this.endDate - now) / (1000 * 60 * 60 * 24));
+    if (daysRemaining < 30 && this.remainingBalance > this.amount * 0.5) {
+      riskScore += 20; // Little time left with high balance
+    }
+  }
+  
+  return Math.min(riskScore, 100);
+};
+
+LoanSchema.methods.getPaymentSchedule = function() {
+  if (!this.startDate || !this.duration || !this.monthlyPayment) {
+    return [];
+  }
+  
+  const schedule = [];
+  let balance = this.amount;
+  let paymentDate = new Date(this.startDate);
+  
+  for (let i = 1; i <= this.duration; i++) {
+    const interest = balance * (this.interestRate / 100);
+    const principal = this.monthlyPayment - interest;
+    balance = Math.max(0, balance - principal);
+    
+    schedule.push({
+      paymentNumber: i,
+      paymentDate: new Date(paymentDate),
+      amount: this.monthlyPayment,
+      interest: interest,
+      principal: principal,
+      remainingBalance: balance,
+      status: i === 1 && this.status === 'active' ? 'upcoming' : 'pending'
+    });
+    
+    paymentDate.setMonth(paymentDate.getMonth() + 1);
+  }
+  
+  return schedule;
+};
+
+// Query Helpers
+LoanSchema.query.byStatus = function(status) {
+  return this.where({ status });
+};
+
+LoanSchema.query.active = function() {
+  return this.where({ status: 'active' });
+};
+
+LoanSchema.query.overdue = function() {
+  const now = new Date();
+  return this.where({
+    status: 'active',
+    nextPaymentDate: { $lt: now }
+  });
+};
+
+LoanSchema.query.byUser = function(userId) {
+  return this.where({ user: userId });
+};
+
+LoanSchema.query.withBalanceGreaterThan = function(minBalance) {
+  return this.where({ remainingBalance: { $gt: minBalance } });
+};
+
 const Loan = mongoose.model('Loan', LoanSchema);
+
+
+
+
+
+
+
+
+
 
 
 
@@ -14914,6 +15464,617 @@ setInterval(async () => {
 
 
 
+// app.get('/api/loans/balances', protect, async (req, res) => {
+app.get('/api/loans/balances', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    let userId;
+    
+    if (token) {
+      try {
+        const decoded = verifyJWT(token);
+        userId = decoded.id;
+      } catch (err) {
+        return res.status(401).json({
+          status: 'fail',
+          message: 'Invalid or expired token'
+        });
+      }
+    } else {
+      // For non-authenticated users, return zeros
+      return res.status(200).json({
+        status: 'success',
+        loanLimit: 0,
+        debtBalance: 0,
+        availableCredit: 0
+      });
+    }
+
+    // Get user with balances
+    const user = await User.findById(userId).select('balances firstName lastName');
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Get user's active loans
+    const activeLoans = await Loan.find({
+      user: userId,
+      status: { $in: ['active', 'pending'] }
+    });
+
+    // Calculate loan limit (3x main balance as requested)
+    const loanLimit = user.balances.main * 3;
+    
+    // Calculate total debt balance
+    const debtBalance = activeLoans.reduce((total, loan) => {
+      if (loan.status === 'active') {
+        return total + loan.amount;
+      }
+      return total;
+    }, 0);
+
+    // Calculate available credit
+    const availableCredit = Math.max(0, loanLimit - debtBalance);
+
+    // Get user's investments for eligibility calculation
+    const investments = await Investment.find({
+      user: userId,
+      status: 'active'
+    });
+
+    // Check if user has at least 5 investments
+    const hasMinimumInvestments = investments.length >= 5;
+
+    // Calculate internal credit score (based on investments and activity)
+    let creditScore = 600; // Base score
+    
+    // Increase score based on number of investments
+    if (investments.length >= 5) creditScore += 50;
+    if (investments.length >= 10) creditScore += 50;
+    
+    // Increase score based on total investment amount
+    const totalInvested = investments.reduce((sum, inv) => sum + inv.amount, 0);
+    if (totalInvested >= 5000) creditScore += 50;
+    if (totalInvested >= 10000) creditScore += 50;
+    
+    // Cap score at 850
+    creditScore = Math.min(creditScore, 850);
+
+    res.status(200).json({
+      status: 'success',
+      loanLimit: loanLimit,
+      debtBalance: debtBalance,
+      availableCredit: availableCredit,
+      creditScore: creditScore,
+      hasMinimumInvestments: hasMinimumInvestments,
+      totalInvested: totalInvested,
+      activeInvestments: investments.length,
+      user: {
+        firstName: user.firstName,
+        lastName: user.lastName,
+        mainBalance: user.balances.main
+      }
+    });
+
+  } catch (err) {
+    console.error('Get loan balances error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching loan balances'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+// app.post('/api/loans/check-eligibility', protect, async (req, res) => {
+app.post('/api/loans/check-eligibility', async (req, res) => {
+  try {
+    const { requestedAmount } = req.body;
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Authentication required'
+      });
+    }
+
+    let userId;
+    try {
+      const decoded = verifyJWT(token);
+      userId = decoded.id;
+    } catch (err) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Invalid or expired token'
+      });
+    }
+
+    // Get user details
+    const user = await User.findById(userId).select('balances firstName lastName email kycStatus');
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Get user's loans
+    const activeLoans = await Loan.find({
+      user: userId,
+      status: 'active'
+    });
+
+    // Get user's investments
+    const investments = await Investment.find({
+      user: userId,
+      status: 'active'
+    });
+
+    // ELIGIBILITY CRITERIA (as shown in frontend)
+    const eligibilityCriteria = {
+      // 1. Verified Account Status
+      accountVerified: user.kycStatus?.identity === 'verified' && 
+                      user.kycStatus?.address === 'verified',
+      
+      // 2. Minimum 5 Investments (from frontend requirements)
+      minimumInvestments: investments.length >= 5,
+      
+      // 3. Good Transaction History
+      goodTransactionHistory: investments.length > 0,
+      
+      // 4. Credit Score ≥ 600 (calculate based on investments)
+      creditScore: 600 + (investments.length * 10) + (Math.min(user.balances.main / 100, 100))
+    };
+
+    // Calculate maximum loan amount (3x main balance)
+    const maxLoanAmount = user.balances.main * 3;
+    const totalDebt = activeLoans.reduce((sum, loan) => sum + loan.amount, 0);
+    const availableCredit = Math.max(0, maxLoanAmount - totalDebt);
+
+    // Check if requested amount is valid
+    if (requestedAmount < 1000) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Minimum loan amount is $1,000'
+      });
+    }
+
+    // Determine eligibility
+    const isEligible = eligibilityCriteria.accountVerified && 
+                       eligibilityCriteria.minimumInvestments && 
+                       eligibilityCriteria.creditScore >= 600 &&
+                       requestedAmount <= availableCredit;
+
+    const response = {
+      status: 'success',
+      eligible: isEligible,
+      maxLoanAmount: maxLoanAmount,
+      availableCredit: availableCredit,
+      currentDebt: totalDebt,
+      creditScore: Math.min(850, Math.floor(eligibilityCriteria.creditScore)),
+      eligibilityCriteria: eligibilityCriteria,
+      requirements: {
+        accountVerified: eligibilityCriteria.accountVerified,
+        minimumInvestments: eligibilityCriteria.minimumInvestments,
+        goodTransactionHistory: eligibilityCriteria.goodTransactionHistory,
+        creditScore: eligibilityCriteria.creditScore >= 600
+      },
+      reasons: !isEligible ? [] : [
+        ...(!eligibilityCriteria.accountVerified ? ['Account verification required'] : []),
+        ...(!eligibilityCriteria.minimumInvestments ? ['Minimum 5 investments required'] : []),
+        ...(eligibilityCriteria.creditScore < 600 ? ['Credit score below 600'] : []),
+        ...(requestedAmount > availableCredit ? ['Requested amount exceeds available credit'] : [])
+      ]
+    };
+
+    // Add specific messages based on eligibility
+    if (isEligible) {
+      response.message = `You qualify for a loan up to $${availableCredit.toFixed(2)}`;
+    } else {
+      response.message = 'You do not currently qualify for a loan';
+    }
+
+    res.status(200).json(response);
+
+  } catch (err) {
+    console.error('Check loan eligibility error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while checking loan eligibility'
+    });
+  }
+});
+
+
+
+
+
+
+// app.post('/api/loans/apply', protect, async (req, res) => {
+app.post('/api/loans/apply', async (req, res) => {
+  try {
+    const { amount, purpose, term, interestRate, disbursementFee } = req.body;
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Authentication required'
+      });
+    }
+
+    let userId;
+    try {
+      const decoded = verifyJWT(token);
+      userId = decoded.id;
+    } catch (err) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Invalid or expired token'
+      });
+    }
+
+    // Validate required fields
+    if (!amount || amount < 1000) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Minimum loan amount is $1,000'
+      });
+    }
+
+    if (!purpose || !term) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Please provide loan purpose and term'
+      });
+    }
+
+    // Get user details
+    const user = await User.findById(userId).select('balances firstName lastName email kycStatus');
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Check eligibility before processing
+    const investments = await Investment.find({
+      user: userId,
+      status: 'active'
+    });
+
+    const activeLoans = await Loan.find({
+      user: userId,
+      status: 'active'
+    });
+
+    const maxLoanAmount = user.balances.main * 3;
+    const totalDebt = activeLoans.reduce((sum, loan) => sum + loan.amount, 0);
+    const availableCredit = Math.max(0, maxLoanAmount - totalDebt);
+
+    // Eligibility checks
+    const isEligible = user.kycStatus?.identity === 'verified' &&
+                      user.kycStatus?.address === 'verified' &&
+                      investments.length >= 5 &&
+                      amount <= availableCredit;
+
+    if (!isEligible) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'You do not meet the eligibility criteria for this loan',
+        reasons: [
+          ...(user.kycStatus?.identity !== 'verified' ? ['Identity verification required'] : []),
+          ...(user.kycStatus?.address !== 'verified' ? ['Address verification required'] : []),
+          ...(investments.length < 5 ? ['Minimum 5 active investments required'] : []),
+          ...(amount > availableCredit ? ['Requested amount exceeds available credit'] : [])
+        ]
+      });
+    }
+
+    // Calculate disbursement fee
+    const calculatedDisbursementFee = (amount * (disbursementFee || 0.99)) / 100;
+    const netLoanAmount = amount - calculatedDisbursementFee;
+
+    // Calculate repayment amount with interest
+    const monthlyInterestRate = (interestRate || 9.99) / 100;
+    const monthlyPayment = (amount * monthlyInterestRate * Math.pow(1 + monthlyInterestRate, term)) /
+                          (Math.pow(1 + monthlyInterestRate, term) - 1);
+    const totalRepayment = monthlyPayment * term;
+
+    // Create loan record
+    const loan = await Loan.create({
+      user: userId,
+      amount: amount,
+      interestRate: interestRate || 9.99,
+      duration: term, // in months
+      collateralAmount: user.balances.main, // Using main balance as collateral
+      collateralCurrency: 'USD',
+      status: 'pending', // Will be auto-approved if eligible
+      startDate: new Date(),
+      endDate: new Date(Date.now() + term * 30 * 24 * 60 * 60 * 1000), // Approximate
+      repaymentAmount: totalRepayment,
+      purpose: purpose,
+      terms: {
+        disbursementFee: calculatedDisbursementFee,
+        netAmountDisbursed: netLoanAmount,
+        monthlyPayment: monthlyPayment,
+        totalRepayment: totalRepayment
+      }
+    });
+
+    // Auto-approve if eligible
+    loan.status = 'approved';
+    loan.approvedAt = new Date();
+    await loan.save();
+
+    // Add loan amount to user's main balance (net amount after fee)
+    user.balances.main += netLoanAmount;
+    user.balances.loan += amount; // Track total loan amount
+    await user.save();
+
+    // Create transaction for loan disbursement
+    const transaction = await Transaction.create({
+      user: userId,
+      type: 'loan',
+      amount: netLoanAmount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'loan',
+      reference: `LOAN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      details: {
+        loanId: loan._id,
+        purpose: purpose,
+        term: term,
+        interestRate: interestRate || 9.99,
+        disbursementFee: calculatedDisbursementFee,
+        grossAmount: amount,
+        netAmount: netLoanAmount,
+        monthlyPayment: monthlyPayment,
+        totalRepayment: totalRepayment
+      },
+      fee: calculatedDisbursementFee,
+      netAmount: netLoanAmount
+    });
+
+    // Record platform revenue from disbursement fee
+    await PlatformRevenue.create({
+      source: 'loan_disbursement_fee',
+      amount: calculatedDisbursementFee,
+      currency: 'USD',
+      transactionId: transaction._id,
+      userId: userId,
+      description: `Loan disbursement fee for ${purpose}`,
+      metadata: {
+        loanAmount: amount,
+        feePercentage: disbursementFee || 0.99,
+        loanId: loan._id
+      }
+    });
+
+    // Send email notification
+    try {
+      await sendProfessionalEmail({
+        email: user.email,
+        template: 'loan_approved',
+        data: {
+          name: user.firstName,
+          amount: amount,
+          netAmount: netLoanAmount,
+          disbursementFee: calculatedDisbursementFee,
+          purpose: purpose,
+          term: term,
+          monthlyPayment: monthlyPayment,
+          totalRepayment: totalRepayment,
+          loanId: loan._id
+        }
+      });
+    } catch (emailError) {
+      console.error('Failed to send loan approval email:', emailError);
+    }
+
+    const response = {
+      status: 'success',
+      message: 'Loan application approved and disbursed successfully',
+      data: {
+        loan: {
+          id: loan._id,
+          amount: amount,
+          netAmountDisbursed: netLoanAmount,
+          disbursementFee: calculatedDisbursementFee,
+          status: loan.status,
+          purpose: purpose,
+          term: term,
+          monthlyPayment: monthlyPayment,
+          totalRepayment: totalRepayment,
+          startDate: loan.startDate,
+          endDate: loan.endDate
+        },
+        newBalances: {
+          main: user.balances.main,
+          loan: user.balances.loan
+        },
+        transaction: {
+          id: transaction._id,
+          reference: transaction.reference
+        }
+      }
+    };
+
+    res.status(201).json(response);
+
+    // Log activity
+    await logActivity('loan_application_submitted', 'loan', loan._id, userId, 'User', null, {
+      amount: amount,
+      purpose: purpose,
+      term: term,
+      status: 'approved'
+    });
+
+  } catch (err) {
+    console.error('Submit loan application error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while processing your loan application'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+// Function to automatically repay loans from deposits
+const autoRepayLoansFromDeposit = async (userId, depositAmount) => {
+  try {
+    // Get user's active loans
+    const activeLoans = await Loan.find({
+      user: userId,
+      status: 'active'
+    }).sort({ startDate: 1 }); // Oldest first
+
+    if (activeLoans.length === 0) {
+      return { repaidAmount: 0, remainingBalance: depositAmount };
+    }
+
+    let remainingDeposit = depositAmount;
+    let totalRepaid = 0;
+
+    // Process each loan
+    for (const loan of activeLoans) {
+      if (remainingDeposit <= 0) break;
+
+      // Calculate remaining loan balance
+      const loanBalance = loan.amount - (loan.repaidAmount || 0);
+      
+      if (loanBalance > 0) {
+        const repaymentAmount = Math.min(remainingDeposit, loanBalance);
+        
+        // Update loan repayment
+        loan.repaidAmount = (loan.repaidAmount || 0) + repaymentAmount;
+        
+        if (loan.repaidAmount >= loan.amount) {
+          loan.status = 'repaid';
+          loan.repaidAt = new Date();
+        }
+        
+        await loan.save();
+        
+        // Create repayment transaction
+        await Transaction.create({
+          user: userId,
+          type: 'loan_repayment',
+          amount: -repaymentAmount,
+          currency: 'USD',
+          status: 'completed',
+          method: 'internal',
+          reference: `LOAN-REPAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          details: {
+            loanId: loan._id,
+            repaymentType: 'automatic',
+            remainingBalance: loanBalance - repaymentAmount
+          },
+          fee: 0,
+          netAmount: -repaymentAmount
+        });
+
+        totalRepaid += repaymentAmount;
+        remainingDeposit -= repaymentAmount;
+      }
+    }
+
+    // Update user's loan balance
+    await User.findByIdAndUpdate(userId, {
+      $inc: { 'balances.loan': -totalRepaid }
+    });
+
+    return {
+      repaidAmount: totalRepaid,
+      remainingBalance: remainingDeposit,
+      loansRepaid: activeLoans.filter(loan => loan.status === 'repaid').length
+    };
+
+  } catch (err) {
+    console.error('Auto repay loans error:', err);
+    return { repaidAmount: 0, remainingBalance: depositAmount };
+  }
+};
+
+// Update the deposit endpoint to use auto-repayment
+app.post('/api/transactions/deposit', protect, async (req, res) => {
+  try {
+    const { amount, method } = req.body;
+    
+    // ... existing deposit logic ...
+    
+    // After successful deposit, automatically repay loans
+    const repaymentResult = await autoRepayLoansFromDeposit(req.user.id, amount);
+    
+    // Adjust user's main balance based on repayment
+    const netDeposit = repaymentResult.remainingBalance;
+    await User.findByIdAndUpdate(req.user.id, {
+      $inc: { 'balances.main': netDeposit }
+    });
+    
+    // ... rest of deposit response ...
+    
+  } catch (err) {
+    console.error('Deposit error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred during deposit'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 // Error handling middleware
@@ -15043,3 +16204,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
