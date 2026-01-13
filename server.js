@@ -16740,161 +16740,230 @@ app.get('/api/loans/health', (req, res) => {
 
 
 
-// Add this in the User Endpoints section
-app.get('/api/users/investments/count', protect, async (req, res) => {
-    try {
-        // Count active investments for the user
-        const activeInvestmentsCount = await Investment.countDocuments({
-            user: req.user.id,
-            status: 'active'
-        });
 
-        // Count total investments (including completed ones)
-        const totalInvestmentsCount = await Investment.countDocuments({
-            user: req.user.id,
-            status: { $in: ['active', 'completed'] }
-        });
 
-        // Count total amount invested
-        const totalInvestmentResult = await Investment.aggregate([
-            {
-                $match: {
-                    user: req.user._id,
-                    status: { $in: ['active', 'completed'] }
-                }
-            },
-            {
-                $group: {
-                    _id: null,
-                    totalAmount: { $sum: '$amount' }
-                }
-            }
-        ]);
+// =============================================
+// LOAN ELIGIBILITY REQUIREMENTS ENDPOINT
+// =============================================
 
-        const totalAmountInvested = totalInvestmentResult[0]?.totalAmount || 0;
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                count: activeInvestmentsCount,
-                total: totalInvestmentsCount,
-                totalAmount: totalAmountInvested,
-                meetsMinimum: totalInvestmentsCount >= 5, // Frontend expects at least 5 investments
-                lastUpdated: new Date()
-            }
-        });
-
-    } catch (err) {
-        console.error('Error fetching investments count:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch investments count'
-        });
+app.get('/api/loans/eligibility/requirements', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    console.log('🔍 Loading loan eligibility requirements for user:', userId);
+    
+    // 1. Get user data
+    const user = await User.findById(userId)
+      .select('kycStatus createdAt balances isVerified')
+      .lean();
+    
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
     }
+    
+    // 2. Get user's investments
+    const investments = await Investment.find({
+      user: userId,
+      status: { $in: ['active', 'completed'] }
+    }).select('amount status startDate').lean();
+    
+    // 3. Get user's active loans
+    const activeLoans = await Loan.find({
+      user: userId,
+      status: { $in: ['active', 'pending'] }
+    }).select('amount repaidAmount remainingBalance status').lean();
+    
+    // 4. Get transaction history
+    const transactions = await Transaction.find({
+      user: userId
+    }).select('type amount status createdAt').lean();
+    
+    // 5. Calculate eligibility criteria from database data
+    
+    // Criterion 1: Account Verification Status
+    const accountVerified = user.kycStatus?.identity === 'verified' && 
+                           user.kycStatus?.address === 'verified' && 
+                           user.isVerified === true;
+    
+    // Criterion 2: Minimum 5 Investments
+    const minimumInvestments = investments.length >= 5;
+    
+    // Criterion 3: Good Transaction History
+    const successfulTransactions = transactions.filter(t => t.status === 'completed').length;
+    const failedTransactions = transactions.filter(t => t.status === 'failed').length;
+    const transactionSuccessRate = transactions.length > 0 ? 
+      (successfulTransactions / transactions.length) * 100 : 0;
+    
+    const goodTransactionHistory = transactionSuccessRate >= 80 && transactions.length >= 10;
+    
+    // Criterion 4: Active Account Status
+    const activeAccount = user.status === 'active';
+    
+    // Criterion 5: Account Age (minimum 30 days)
+    const accountAgeMs = new Date() - new Date(user.createdAt);
+    const accountAgeDays = accountAgeMs / (1000 * 60 * 60 * 24);
+    const matureAccount = accountAgeDays >= 30;
+    
+    // Criterion 6: Investment Performance
+    const totalInvested = investments.reduce((sum, inv) => sum + (inv.amount || 0), 0);
+    const goodInvestmentAmount = totalInvested >= 5000;
+    
+    // Criterion 7: No Defaulted Loans
+    const defaultedLoans = activeLoans.filter(loan => loan.status === 'defaulted').length;
+    const noDefaultedLoans = defaultedLoans === 0;
+    
+    // Criterion 8: Loan to Balance Ratio
+    const mainBalance = user.balances?.main || 0;
+    const totalLoanBalance = activeLoans.reduce((sum, loan) => sum + (loan.remainingBalance || loan.amount || 0), 0);
+    const loanToBalanceRatio = mainBalance > 0 ? totalLoanBalance / mainBalance : 0;
+    const acceptableLoanRatio = loanToBalanceRatio <= 3; // Max 3x balance as loan
+    
+    // Calculate maximum loan amount (3x main balance)
+    const maxLoanAmount = mainBalance * 3;
+    
+    // Calculate available credit
+    const availableCredit = Math.max(0, maxLoanAmount - totalLoanBalance);
+    
+    // Calculate credit score based on criteria
+    let creditScore = 600; // Base score
+    
+    // Add points for positive factors
+    if (accountVerified) creditScore += 50;
+    if (minimumInvestments) creditScore += 50;
+    if (goodTransactionHistory) creditScore += 30;
+    if (activeAccount) creditScore += 20;
+    if (matureAccount) creditScore += 25;
+    if (goodInvestmentAmount) creditScore += 40;
+    if (noDefaultedLoans) creditScore += 30;
+    if (acceptableLoanRatio) creditScore += 25;
+    
+    // Deduct points for negative factors
+    if (!accountVerified) creditScore -= 100;
+    if (!minimumInvestments) creditScore -= 50;
+    if (failedTransactions > 5) creditScore -= 20;
+    if (!matureAccount) creditScore -= 30;
+    if (defaultedLoans > 0) creditScore -= 100;
+    if (!acceptableLoanRatio) creditScore -= 50;
+    
+    // Cap score between 300 and 850
+    creditScore = Math.min(Math.max(creditScore, 300), 850);
+    const roundedCreditScore = Math.floor(creditScore);
+    
+    // Determine overall eligibility
+    const isEligible = accountVerified && 
+                      minimumInvestments && 
+                      goodTransactionHistory && 
+                      activeAccount && 
+                      matureAccount && 
+                      goodInvestmentAmount && 
+                      noDefaultedLoans && 
+                      acceptableLoanRatio &&
+                      creditScore >= 600;
+    
+    // Prepare requirements array for frontend
+    const requirements = [
+      {
+        name: 'Account Verification',
+        met: accountVerified,
+        description: accountVerified ? 'Identity and address verified' : 'Complete KYC verification',
+        value: accountVerified ? 'Verified' : 'Not Verified'
+      },
+      {
+        name: 'Minimum Investments',
+        met: minimumInvestments,
+        description: minimumInvestments ? `5+ investments (${investments.length})` : `Need ${5 - investments.length} more investments`,
+        value: `${investments.length}/5 investments`
+      },
+      {
+        name: 'Transaction History',
+        met: goodTransactionHistory,
+        description: goodTransactionHistory ? `Good history (${transactionSuccessRate.toFixed(1)}% success)` : `Improve success rate (${transactionSuccessRate.toFixed(1)}%)`,
+        value: `${transactionSuccessRate.toFixed(1)}% success rate`
+      },
+      {
+        name: 'Account Age',
+        met: matureAccount,
+        description: matureAccount ? `Account active for ${Math.floor(accountAgeDays)} days` : `Account needs to be ${30 - Math.floor(accountAgeDays)} days older`,
+        value: `${Math.floor(accountAgeDays)}/30 days`
+      },
+      {
+        name: 'Investment Amount',
+        met: goodInvestmentAmount,
+        description: goodInvestmentAmount ? `$${totalInvested.toFixed(2)} invested` : `Need $${(5000 - totalInvested).toFixed(2)} more invested`,
+        value: `$${totalInvested.toFixed(2)} invested`
+      },
+      {
+        name: 'Loan History',
+        met: noDefaultedLoans,
+        description: noDefaultedLoans ? 'No defaulted loans' : 'Has defaulted loans',
+        value: defaultedLoans > 0 ? `${defaultedLoans} defaulted` : 'Clean history'
+      },
+      {
+        name: 'Loan to Balance Ratio',
+        met: acceptableLoanRatio,
+        description: acceptableLoanRatio ? `Good ratio (${loanToBalanceRatio.toFixed(1)}x)` : `Ratio too high (${loanToBalanceRatio.toFixed(1)}x)`,
+        value: `${loanToBalanceRatio.toFixed(1)}x ratio`
+      },
+      {
+        name: 'Credit Score',
+        met: creditScore >= 600,
+        description: creditScore >= 600 ? `Good score (${roundedCreditScore})` : `Score too low (${roundedCreditScore})`,
+        value: `${roundedCreditScore} score`
+      }
+    ];
+    
+    const response = {
+      status: 'success',
+      data: {
+        eligible: isEligible,
+        maxLoanAmount: maxLoanAmount,
+        availableCredit: availableCredit,
+        creditScore: roundedCreditScore,
+        currentDebt: totalLoanBalance,
+        mainBalance: mainBalance,
+        requirements: requirements,
+        summary: {
+          accountAgeDays: Math.floor(accountAgeDays),
+          totalInvestments: investments.length,
+          totalInvested: totalInvested,
+          successfulTransactions: successfulTransactions,
+          transactionSuccessRate: transactionSuccessRate,
+          activeLoans: activeLoans.length,
+          loanToBalanceRatio: loanToBalanceRatio
+        },
+        nextSteps: isEligible ? 
+          `You can apply for up to $${Math.min(availableCredit, 1000000).toFixed(2)}` :
+          `Complete ${requirements.filter(r => !r.met).length} more requirements to qualify`
+      }
+    };
+    
+    // Cache the result in Redis for 5 minutes
+    const cacheKey = `loan_eligibility_req:${userId}`;
+    await redis.setex(cacheKey, 300, JSON.stringify(response));
+    
+    console.log(`✅ Loan eligibility requirements loaded for user ${userId}:`, {
+      eligible: isEligible,
+      maxLoanAmount: maxLoanAmount,
+      creditScore: roundedCreditScore,
+      unmetRequirements: requirements.filter(r => !r.met).length
+    });
+    
+    res.status(200).json(response);
+    
+  } catch (err) {
+    console.error('❌ Error loading loan eligibility requirements:', err);
+    
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while checking loan eligibility requirements',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
-
-
-
-
-
-
-
-
-
-// Add this in the User Endpoints section
-app.get('/api/users/kyc/status', protect, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).select('kycStatus');
-
-        if (!user) {
-            return res.status(404).json({
-                status: 'fail',
-                message: 'User not found'
-            });
-        }
-
-        // Check KYC status from KYC model if available
-        const kycRecord = await KYC.findOne({ user: req.user.id });
-        
-        let overallStatus = 'not-started';
-        let details = {};
-
-        if (kycRecord) {
-            // Get status from KYC model
-            overallStatus = kycRecord.overallStatus;
-            details = {
-                identity: kycRecord.identity?.status || 'not-submitted',
-                address: kycRecord.address?.status || 'not-submitted',
-                facial: kycRecord.facial?.status || 'not-submitted',
-                submittedAt: kycRecord.submittedAt,
-                reviewedAt: kycRecord.reviewedAt
-            };
-        } else {
-            // Fallback to User model KYC status
-            details = {
-                identity: user.kycStatus?.identity || 'not-submitted',
-                address: user.kycStatus?.address || 'not-submitted',
-                facial: user.kycStatus?.facial || 'not-submitted'
-            };
-            
-            // Determine overall status based on individual statuses
-            const allVerified = details.identity === 'verified' && 
-                               details.address === 'verified' && 
-                               details.facial === 'verified';
-            const anyPending = details.identity === 'pending' || 
-                              details.address === 'pending' || 
-                              details.facial === 'pending';
-            const anySubmitted = details.identity !== 'not-submitted' || 
-                                details.address !== 'not-submitted' || 
-                                details.facial !== 'not-submitted';
-
-            if (allVerified) {
-                overallStatus = 'verified';
-            } else if (anyPending) {
-                overallStatus = 'pending';
-            } else if (anySubmitted) {
-                overallStatus = 'in-progress';
-            } else {
-                overallStatus = 'not-started';
-            }
-        }
-
-        // Check if KYC is fully verified (all three components)
-        const isFullyVerified = details.identity === 'verified' && 
-                               details.address === 'verified' && 
-                               details.facial === 'verified';
-
-        res.status(200).json({
-            status: 'success',
-            data: {
-                overallStatus: overallStatus,
-                isVerified: isFullyVerified,
-                details: details,
-                requirementsMet: {
-                    identityVerified: details.identity === 'verified',
-                    addressVerified: details.address === 'verified',
-                    facialVerified: details.facial === 'verified',
-                    allVerified: isFullyVerified
-                },
-                lastChecked: new Date()
-            }
-        });
-
-    } catch (err) {
-        console.error('Error fetching KYC status:', err);
-        res.status(500).json({
-            status: 'error',
-            message: 'Failed to fetch KYC status'
-        });
-    }
-});
-
-
-
-
-
-
-
 
 
 
@@ -17031,6 +17100,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
