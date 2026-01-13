@@ -15579,7 +15579,7 @@ app.get('/api/loans/balances', async (req, res) => {
 
 
 // POST /api/loans/check-eligibility - Check loan eligibility with comprehensive database queries
-app.post('/api/loans/check-eligibility', async (req, res) => {
+app.post('/api/loans/eligibility/requirements', async (req, res) => {
   try {
     console.log('🔍 Loan eligibility check request received');
     
@@ -17031,6 +17031,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
