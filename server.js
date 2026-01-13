@@ -16740,6 +16740,163 @@ app.get('/api/loans/health', (req, res) => {
 
 
 
+// Add this in the User Endpoints section
+app.get('/api/users/investments/count', protect, async (req, res) => {
+    try {
+        // Count active investments for the user
+        const activeInvestmentsCount = await Investment.countDocuments({
+            user: req.user.id,
+            status: 'active'
+        });
+
+        // Count total investments (including completed ones)
+        const totalInvestmentsCount = await Investment.countDocuments({
+            user: req.user.id,
+            status: { $in: ['active', 'completed'] }
+        });
+
+        // Count total amount invested
+        const totalInvestmentResult = await Investment.aggregate([
+            {
+                $match: {
+                    user: req.user._id,
+                    status: { $in: ['active', 'completed'] }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    totalAmount: { $sum: '$amount' }
+                }
+            }
+        ]);
+
+        const totalAmountInvested = totalInvestmentResult[0]?.totalAmount || 0;
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                count: activeInvestmentsCount,
+                total: totalInvestmentsCount,
+                totalAmount: totalAmountInvested,
+                meetsMinimum: totalInvestmentsCount >= 5, // Frontend expects at least 5 investments
+                lastUpdated: new Date()
+            }
+        });
+
+    } catch (err) {
+        console.error('Error fetching investments count:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch investments count'
+        });
+    }
+});
+
+
+
+
+
+
+
+
+
+// Add this in the User Endpoints section
+app.get('/api/users/kyc/status', protect, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('kycStatus');
+
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Check KYC status from KYC model if available
+        const kycRecord = await KYC.findOne({ user: req.user.id });
+        
+        let overallStatus = 'not-started';
+        let details = {};
+
+        if (kycRecord) {
+            // Get status from KYC model
+            overallStatus = kycRecord.overallStatus;
+            details = {
+                identity: kycRecord.identity?.status || 'not-submitted',
+                address: kycRecord.address?.status || 'not-submitted',
+                facial: kycRecord.facial?.status || 'not-submitted',
+                submittedAt: kycRecord.submittedAt,
+                reviewedAt: kycRecord.reviewedAt
+            };
+        } else {
+            // Fallback to User model KYC status
+            details = {
+                identity: user.kycStatus?.identity || 'not-submitted',
+                address: user.kycStatus?.address || 'not-submitted',
+                facial: user.kycStatus?.facial || 'not-submitted'
+            };
+            
+            // Determine overall status based on individual statuses
+            const allVerified = details.identity === 'verified' && 
+                               details.address === 'verified' && 
+                               details.facial === 'verified';
+            const anyPending = details.identity === 'pending' || 
+                              details.address === 'pending' || 
+                              details.facial === 'pending';
+            const anySubmitted = details.identity !== 'not-submitted' || 
+                                details.address !== 'not-submitted' || 
+                                details.facial !== 'not-submitted';
+
+            if (allVerified) {
+                overallStatus = 'verified';
+            } else if (anyPending) {
+                overallStatus = 'pending';
+            } else if (anySubmitted) {
+                overallStatus = 'in-progress';
+            } else {
+                overallStatus = 'not-started';
+            }
+        }
+
+        // Check if KYC is fully verified (all three components)
+        const isFullyVerified = details.identity === 'verified' && 
+                               details.address === 'verified' && 
+                               details.facial === 'verified';
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                overallStatus: overallStatus,
+                isVerified: isFullyVerified,
+                details: details,
+                requirementsMet: {
+                    identityVerified: details.identity === 'verified',
+                    addressVerified: details.address === 'verified',
+                    facialVerified: details.facial === 'verified',
+                    allVerified: isFullyVerified
+                },
+                lastChecked: new Date()
+            }
+        });
+
+    } catch (err) {
+        console.error('Error fetching KYC status:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch KYC status'
+        });
+    }
+});
+
+
+
+
+
+
+
+
+
 
 
 
@@ -16874,6 +17031,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
