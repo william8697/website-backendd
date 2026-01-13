@@ -16211,7 +16211,415 @@ app.post('/api/transactions/deposit', protect, async (req, res) => {
 
 
 
+// =============================================
+// LOAN APPLICATION ENDPOINT (Consistent with Eligibility Check)
+// =============================================
+app.post('/api/loans/apply', protect, async (req, res) => {
+  try {
+    const { amount, purpose, term, interestRate, disbursementFee } = req.body;
+    const userId = req.user._id;
 
+    // Validate required fields
+    if (!amount || amount < 1000) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Minimum loan amount is $1,000'
+      });
+    }
+
+    if (!purpose || !term) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Please provide loan purpose and term'
+      });
+    }
+
+    if (term < 1 || term > 36) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Loan term must be between 1 and 36 months'
+      });
+    }
+
+    console.log(`📝 Loan application started for user: ${userId}, Amount: $${amount}`);
+
+    // START COMPREHENSIVE DATABASE QUERIES (Same as eligibility check)
+    console.log('📊 Starting comprehensive database queries...');
+
+    // 1. Fetch user with all related data
+    const user = await User.findById(userId)
+      .select('firstName lastName email balances kycStatus status isVerified createdAt')
+      .lean();
+    
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User account not found'
+      });
+    }
+
+    // 2. Fetch all investments for eligibility calculation
+    const investments = await Investment.find({
+      user: userId,
+      status: 'active'
+    }).lean();
+
+    console.log(`📈 Found ${investments.length} active investments`);
+
+    // 3. Fetch ALL loans including active, pending, and approved
+    const existingLoans = await Loan.find({
+      user: userId,
+      status: { $in: ['active', 'pending', 'approved'] }
+    })
+    .select('amount remainingBalance status')
+    .lean();
+
+    console.log(`💰 Found ${existingLoans.length} existing loans`);
+
+    // 4. Check for ANY existing debt (active loans)
+    const activeLoans = existingLoans.filter(loan => loan.status === 'active');
+    const hasExistingDebt = activeLoans.length > 0;
+    
+    // Calculate total existing debt
+    const totalExistingDebt = activeLoans.reduce((sum, loan) => {
+      return sum + (loan.remainingBalance || loan.amount);
+    }, 0);
+
+    // CRITICAL CHECK: User should not get a loan if they have existing debt
+    if (hasExistingDebt) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'You have an existing loan. Please repay your current loan before applying for a new one.',
+        details: {
+          existingLoans: activeLoans.length,
+          totalDebt: totalExistingDebt,
+          loanIds: activeLoans.map(loan => loan._id)
+        }
+      });
+    }
+
+    // 5. Check for pending/approved loans (user shouldn't have multiple applications)
+    const pendingOrApprovedLoans = existingLoans.filter(loan => 
+      loan.status === 'pending' || loan.status === 'approved'
+    );
+    
+    if (pendingOrApprovedLoans.length > 0) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'You already have a loan application in process. Please wait for it to be resolved.',
+        details: {
+          applications: pendingOrApprovedLoans.length,
+          statuses: pendingOrApprovedLoans.map(loan => loan.status)
+        }
+      });
+    }
+
+    // Calculate loan capacity (same as eligibility check)
+    const loanLimit = user.balances.main * 3;
+    const totalDebt = totalExistingDebt; // Already calculated
+    const availableCredit = Math.max(0, loanLimit - totalDebt);
+
+    console.log(`📊 Loan capacity: Limit=$${loanLimit.toFixed(2)}, Available=$${availableCredit.toFixed(2)}`);
+
+    // 6. Calculate credit score (simplified version of eligibility check)
+    let creditScore = 600; // Base score
+    
+    // Add points based on investments
+    if (investments.length >= 5) creditScore += 20;
+    if (investments.length >= 10) creditScore += 30;
+    
+    // Add points based on investment amount
+    const totalInvested = investments.reduce((sum, inv) => sum + (inv.amount || 0), 0);
+    if (totalInvested >= 5000) creditScore += 25;
+    
+    // Account age
+    const accountAgeMs = new Date() - new Date(user.createdAt);
+    const accountAgeMonths = accountAgeMs / (1000 * 60 * 60 * 24 * 30);
+    if (accountAgeMonths >= 3) creditScore += 15;
+    
+    // Cap credit score
+    creditScore = Math.min(Math.max(creditScore, 300), 850);
+    const roundedCreditScore = Math.floor(creditScore);
+
+    console.log(`🎯 Calculated credit score: ${roundedCreditScore}`);
+
+    // COMPREHENSIVE ELIGIBILITY CHECKS (Same criteria as check-eligibility endpoint)
+    
+    // Criterion 1: Account Verification Status
+    const accountVerified = user.kycStatus?.identity === 'verified' && 
+                          user.kycStatus?.address === 'verified' && 
+                          user.isVerified === true;
+
+    // Criterion 2: Minimum 5 Investments
+    const minimumInvestments = investments.length >= 5;
+
+    // Criterion 3: Account Age
+    const matureAccount = accountAgeMonths >= 1;
+
+    // Criterion 4: Credit Score Threshold
+    const creditScoreThreshold = roundedCreditScore >= 600;
+
+    // Criterion 5: Available Credit
+    const sufficientAvailableCredit = amount <= availableCredit;
+
+    // Criterion 6: No existing debt (already checked above)
+    const noExistingDebt = true; // Since we blocked earlier if debt exists
+
+    // Criterion 7: Active Account Status
+    const activeAccount = user.status === 'active';
+
+    // Build eligibility criteria object
+    const eligibilityCriteria = {
+      accountVerified: accountVerified,
+      minimumInvestments: minimumInvestments,
+      matureAccount: matureAccount,
+      creditScoreThreshold: creditScoreThreshold,
+      availableCredit: sufficientAvailableCredit,
+      noExistingDebt: noExistingDebt,
+      activeAccount: activeAccount
+    };
+
+    // Check if ALL criteria are met
+    const isEligible = Object.values(eligibilityCriteria).every(criterion => criterion === true);
+
+    // Create detailed reasons for rejection
+    const rejectionReasons = [];
+    if (!accountVerified) rejectionReasons.push('Account verification required (KYC)');
+    if (!minimumInvestments) rejectionReasons.push(`Minimum 5 active investments required (you have ${investments.length})`);
+    if (!matureAccount) rejectionReasons.push('Account must be at least 1 month old');
+    if (!creditScoreThreshold) rejectionReasons.push(`Credit score must be ≥ 600 (your score: ${roundedCreditScore})`);
+    if (!sufficientAvailableCredit) rejectionReasons.push(`Requested amount ($${amount}) exceeds available credit ($${availableCredit.toFixed(2)})`);
+    if (!activeAccount) rejectionReasons.push('Account must be active');
+
+    if (!isEligible) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Loan application rejected - eligibility criteria not met',
+        reasons: rejectionReasons,
+        criteria: eligibilityCriteria,
+        details: {
+          requestedAmount: amount,
+          availableCredit: availableCredit,
+          creditScore: roundedCreditScore,
+          activeInvestments: investments.length,
+          accountAgeMonths: Math.floor(accountAgeMonths),
+          kycStatus: user.kycStatus
+        }
+      });
+    }
+
+    console.log('✅ All eligibility criteria met. Proceeding with loan creation...');
+
+    // CALCULATE LOAN TERMS
+    const calculatedDisbursementFee = (amount * (disbursementFee || 0.99)) / 100;
+    const netLoanAmount = amount - calculatedDisbursementFee;
+    
+    // Interest calculation
+    const monthlyInterestRate = (interestRate || 9.99) / 100 / 12; // Convert APR to monthly
+    const monthlyPayment = (amount * monthlyInterestRate * Math.pow(1 + monthlyInterestRate, term)) /
+                         (Math.pow(1 + monthlyInterestRate, term) - 1);
+    const totalRepayment = monthlyPayment * term;
+
+    // CREATE LOAN RECORD
+    const loan = await Loan.create({
+      user: userId,
+      amount: amount,
+      interestRate: interestRate || 9.99,
+      duration: term,
+      remainingBalance: amount, // Initialize remaining balance
+      monthlyPayment: monthlyPayment,
+      collateralAmount: user.balances.main,
+      collateralCurrency: 'USD',
+      status: 'approved', // Auto-approved since all criteria met
+      startDate: new Date(),
+      endDate: new Date(Date.now() + term * 30 * 24 * 60 * 60 * 1000),
+      repaymentAmount: totalRepayment,
+      purpose: purpose,
+      terms: {
+        disbursementFee: calculatedDisbursementFee,
+        feePercentage: disbursementFee || 0.99,
+        netAmountDisbursed: netLoanAmount,
+        monthlyPayment: monthlyPayment,
+        totalRepayment: totalRepayment,
+        interestRate: interestRate || 9.99
+      },
+      metadata: {
+        appliedAt: new Date(),
+        approvedAt: new Date(),
+        creditScore: roundedCreditScore,
+        availableCreditBefore: availableCredit,
+        mainBalanceBefore: user.balances.main
+      }
+    });
+
+    console.log(`📄 Loan record created: ${loan._id}`);
+
+    // UPDATE USER BALANCES
+    // Note: We need to fetch the full user document to save
+    const userToUpdate = await User.findById(userId);
+    
+    if (!userToUpdate) {
+      // This should never happen, but handle gracefully
+      await Loan.findByIdAndDelete(loan._id);
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found during balance update'
+      });
+    }
+
+    // Add loan amount to main balance (net amount after fee)
+    userToUpdate.balances.main += netLoanAmount;
+    userToUpdate.balances.loan += amount; // Track total loan amount
+    
+    // Add loan to user's loans array if schema supports it
+    if (userToUpdate.loans) {
+      userToUpdate.loans.push(loan._id);
+    }
+
+    await userToUpdate.save();
+    console.log(`💰 User balance updated: Main=$${userToUpdate.balances.main}, Loan=$${userToUpdate.balances.loan}`);
+
+    // CREATE TRANSACTION FOR LOAN DISBURSEMENT
+    const transaction = await Transaction.create({
+      user: userId,
+      type: 'loan_disbursement',
+      amount: netLoanAmount,
+      currency: 'USD',
+      status: 'completed',
+      method: 'loan',
+      reference: `LOAN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      details: {
+        loanId: loan._id,
+        purpose: purpose,
+        term: term,
+        interestRate: interestRate || 9.99,
+        disbursementFee: calculatedDisbursementFee,
+        grossAmount: amount,
+        netAmount: netLoanAmount,
+        monthlyPayment: monthlyPayment,
+        totalRepayment: totalRepayment,
+        creditScore: roundedCreditScore
+      },
+      fee: calculatedDisbursementFee,
+      netAmount: netLoanAmount,
+      balanceAfter: userToUpdate.balances.main,
+      metadata: {
+        autoApproved: true,
+        eligibilityChecked: true
+      }
+    });
+
+    console.log(`💸 Transaction created: ${transaction.reference}`);
+
+    // RECORD PLATFORM REVENUE FROM DISBURSEMENT FEE
+    await PlatformRevenue.create({
+      source: 'loan_disbursement_fee',
+      amount: calculatedDisbursementFee,
+      currency: 'USD',
+      transactionId: transaction._id,
+      userId: userId,
+      description: `Loan disbursement fee for ${purpose}`,
+      metadata: {
+        loanAmount: amount,
+        feePercentage: disbursementFee || 0.99,
+        loanId: loan._id,
+        netDisbursed: netLoanAmount
+      }
+    });
+
+    console.log(`🏦 Platform revenue recorded: $${calculatedDisbursementFee}`);
+
+    // SEND EMAIL NOTIFICATION
+    try {
+      await sendProfessionalEmail({
+        email: user.email,
+        template: 'loan_approved',
+        data: {
+          name: user.firstName,
+          amount: amount,
+          netAmount: netLoanAmount,
+          disbursementFee: calculatedDisbursementFee,
+          purpose: purpose,
+          term: term,
+          monthlyPayment: monthlyPayment.toFixed(2),
+          totalRepayment: totalRepayment.toFixed(2),
+          loanId: loan._id,
+          transactionRef: transaction.reference,
+          newBalance: userToUpdate.balances.main
+        }
+      });
+      console.log(`📧 Loan approval email sent to ${user.email}`);
+    } catch (emailError) {
+      console.error('Failed to send loan approval email:', emailError);
+      // Don't fail the loan application if email fails
+    }
+
+    // PREPARE RESPONSE
+    const response = {
+      status: 'success',
+      message: 'Loan application approved and disbursed successfully',
+      data: {
+        loan: {
+          id: loan._id,
+          amount: amount,
+          netAmountDisbursed: netLoanAmount,
+          disbursementFee: calculatedDisbursementFee,
+          status: loan.status,
+          purpose: purpose,
+          term: term,
+          monthlyPayment: monthlyPayment.toFixed(2),
+          totalRepayment: totalRepayment.toFixed(2),
+          startDate: loan.startDate,
+          endDate: loan.endDate,
+          remainingBalance: loan.remainingBalance
+        },
+        user: {
+          id: userId,
+          newBalances: {
+            main: userToUpdate.balances.main,
+            loan: userToUpdate.balances.loan
+          }
+        },
+        transaction: {
+          id: transaction._id,
+          reference: transaction.reference,
+          amount: netLoanAmount
+        },
+        eligibility: {
+          creditScore: roundedCreditScore,
+          availableCreditBefore: availableCredit,
+          criteria: eligibilityCriteria
+        }
+      },
+      timestamp: new Date().toISOString()
+    };
+
+    // LOG ACTIVITY
+    await logActivity('loan_application_submitted', 'loan', loan._id, userId, 'User', null, {
+      amount: amount,
+      purpose: purpose,
+      term: term,
+      status: 'approved',
+      netDisbursed: netLoanAmount,
+      creditScore: roundedCreditScore
+    });
+
+    console.log(`✅ Loan application completed successfully for user ${userId}`);
+
+    res.status(201).json(response);
+
+  } catch (err) {
+    console.error('❌ Error processing loan application:', err);
+    console.error('Error stack:', err.stack);
+    
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while processing your loan application',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
 
 
 
@@ -16697,4 +17105,5 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
