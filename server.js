@@ -16211,211 +16211,155 @@ app.post('/api/transactions/deposit', protect, async (req, res) => {
 
 
 
-
-
 // =============================================
-// SHARED ELIGIBILITY SERVICE
+// SHARED ELIGIBILITY CHECK FUNCTION
 // =============================================
-class LoanEligibilityService {
-  static async checkEligibility(userId, requestedAmount = null) {
-    try {
-      // 1. Fetch user with balances
-      const user = await User.findById(userId)
-        .select('firstName lastName email balances kycStatus status isVerified createdAt')
-        .lean();
-      
-      if (!user) {
-        throw new Error('User not found');
-      }
-
-      // 2. Check if user has any debt (active loans)
-      const activeLoans = await Loan.find({
-        user: userId,
-        status: { $in: ['active', 'approved', 'pending'] }
-      }).lean();
-
-      const totalDebt = activeLoans.reduce((sum, loan) => {
-        if (loan.status === 'active') {
-          return sum + (loan.remainingBalance || loan.amount);
-        } else if (loan.status === 'approved' || loan.status === 'pending') {
-          // Include pending/approved loans as they will become debt
-          return sum + loan.amount;
-        }
-        return sum;
-      }, 0);
-
-      // 3. Fetch investments count
-      const investments = await Investment.find({
-        user: userId,
-        status: 'active'
-      }).lean();
-
-      // 4. Calculate loan capacity
-      const loanLimit = user.balances.main * 3;
-      const availableCredit = Math.max(0, loanLimit - totalDebt);
-
-      // 5. Eligibility criteria
-      const eligibilityCriteria = {
-        // Must have no existing debt to qualify for new loan
-        noExistingDebt: totalDebt === 0,
-        accountVerified: user.kycStatus?.identity === 'verified' && 
-                        user.kycStatus?.address === 'verified',
-        minimumInvestments: investments.length >= 5,
-        sufficientAvailableCredit: !requestedAmount || requestedAmount <= availableCredit,
-        accountActive: user.status === 'active',
-        accountMature: (new Date() - new Date(user.createdAt)) >= (30 * 24 * 60 * 60 * 1000) // 1 month
-      };
-
-      // 6. Determine overall eligibility
-      const isEligible = Object.values(eligibilityCriteria).every(criterion => criterion === true);
-
-      // 7. Prepare detailed reasons
-      const reasons = [];
-      if (!eligibilityCriteria.noExistingDebt) {
-        reasons.push(`You have existing debt of $${totalDebt.toFixed(2)}. Please repay existing loans before applying for a new one.`);
-      }
-      if (!eligibilityCriteria.accountVerified) {
-        reasons.push('Account verification required (both identity and address)');
-      }
-      if (!eligibilityCriteria.minimumInvestments) {
-        reasons.push(`Minimum 5 active investments required (you have ${investments.length})`);
-      }
-      if (requestedAmount && !eligibilityCriteria.sufficientAvailableCredit) {
-        reasons.push(`Requested amount ($${requestedAmount}) exceeds available credit ($${availableCredit.toFixed(2)})`);
-      }
-      if (!eligibilityCriteria.accountActive) {
-        reasons.push('Account must be active');
-      }
-      if (!eligibilityCriteria.accountMature) {
-        reasons.push('Account must be at least 1 month old');
-      }
-
-      return {
-        isEligible,
-        user,
-        loanLimit,
-        totalDebt,
-        availableCredit,
-        activeInvestments: investments.length,
-        eligibilityCriteria,
-        reasons,
-        requestedAmount
-      };
-    } catch (error) {
-      console.error('Eligibility check error:', error);
-      throw error;
-    }
-  }
-}
-
-// =============================================
-// LOAN ELIGIBILITY CHECK ENDPOINT (CONSISTENT)
-// =============================================
-app.post('/api/loans/check-eligibility', protect, async (req, res) => {
+const checkLoanEligibility = async (userId, requestedAmount) => {
   try {
-    const { requestedAmount } = req.body;
-    const userId = req.user._id;
+    // Get user details
+    const user = await User.findById(userId)
+      .select('firstName lastName email balances kycStatus status isVerified createdAt')
+      .lean();
+    
+    if (!user) {
+      return { 
+        eligible: false, 
+        message: 'User not found',
+        details: []
+      };
+    }
 
-    // Validate requested amount
-    if (!requestedAmount || requestedAmount < 1000) {
-      return res.status(400).json({
+    // Check active loans/debt first
+    const activeLoans = await Loan.find({
+      user: userId,
+      status: { $in: ['active', 'approved', 'pending'] }
+    }).lean();
+
+    const totalDebt = activeLoans.reduce((sum, loan) => {
+      if (loan.status === 'active') {
+        return sum + (loan.remainingBalance || loan.amount);
+      } else if (loan.status === 'approved' || loan.status === 'pending') {
+        return sum + loan.amount;
+      }
+      return sum;
+    }, 0);
+
+    // If user has any debt, they're not eligible
+    if (totalDebt > 0) {
+      return {
+        eligible: false,
+        message: 'You have existing loan debt and cannot apply for a new loan',
+        details: ['Outstanding loan balance must be $0'],
+        totalDebt,
+        loanLimit: 0,
+        availableCredit: 0
+      };
+    }
+
+    // Get active investments
+    const investments = await Investment.find({
+      user: userId,
+      status: 'active'
+    }).lean();
+
+    // Calculate loan limit (3x main balance)
+    const loanLimit = user.balances.main * 3;
+    const availableCredit = Math.max(0, loanLimit);
+
+    // Core eligibility criteria
+    const eligibilityCriteria = {
+      // 1. Account must be fully verified
+      accountVerified: user.kycStatus?.identity === 'verified' && 
+                      user.kycStatus?.address === 'verified' && 
+                      user.isVerified === true,
+
+      // 2. Minimum 5 active investments
+      minimumInvestments: investments.length >= 5,
+
+      // 3. Account must be active
+      activeAccount: user.status === 'active',
+
+      // 4. No existing debt
+      noDebt: totalDebt === 0,
+
+      // 5. Requested amount within available credit
+      sufficientCredit: requestedAmount <= availableCredit,
+
+      // 6. Minimum loan amount
+      minimumAmount: requestedAmount >= 1000
+    };
+
+    // Check all criteria
+    const isEligible = Object.values(eligibilityCriteria).every(criterion => criterion === true);
+
+    // Prepare detailed reasons
+    const details = [];
+    if (!eligibilityCriteria.accountVerified) {
+      details.push('Account must be fully verified (KYC completed)');
+    }
+    if (!eligibilityCriteria.minimumInvestments) {
+      details.push(`Minimum 5 active investments required (you have ${investments.length})`);
+    }
+    if (!eligibilityCriteria.activeAccount) {
+      details.push('Account must be active');
+    }
+    if (!eligibilityCriteria.noDebt) {
+      details.push(`Outstanding loan balance: $${totalDebt.toFixed(2)}`);
+    }
+    if (!eligibilityCriteria.sufficientCredit) {
+      details.push(`Requested amount ($${requestedAmount}) exceeds available credit ($${availableCredit.toFixed(2)})`);
+    }
+    if (!eligibilityCriteria.minimumAmount) {
+      details.push('Minimum loan amount is $1,000');
+    }
+
+    return {
+      eligible: isEligible,
+      message: isEligible ? 'Eligible for loan' : 'Not eligible for loan',
+      details,
+      user,
+      loanLimit,
+      availableCredit,
+      totalDebt,
+      investmentCount: investments.length,
+      criteria: eligibilityCriteria
+    };
+
+  } catch (error) {
+    console.error('Error in checkLoanEligibility:', error);
+    return {
+      eligible: false,
+      message: 'Error checking eligibility',
+      details: ['System error']
+    };
+  }
+};
+
+// =============================================
+// LOAN APPLICATION ENDPOINT
+// =============================================
+app.post('/api/loans/apply', async (req, res) => {
+  try {
+    const { amount, purpose, term } = req.body;
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({
         status: 'fail',
-        message: 'Minimum loan amount is $1,000'
+        message: 'Authentication required'
       });
     }
 
-    // Use shared service
-    const eligibilityResult = await LoanEligibilityService.checkEligibility(userId, requestedAmount);
-
-    // Prepare response
-    const response = {
-      status: 'success',
-      eligible: eligibilityResult.isEligible,
-      maxLoanAmount: eligibilityResult.loanLimit,
-      availableCredit: eligibilityResult.availableCredit,
-      currentDebt: eligibilityResult.totalDebt,
-      requestedAmount: eligibilityResult.requestedAmount,
-      mainBalance: eligibilityResult.user.balances.main,
-      monthlyInterest: 9.99,
-      disbursementFee: 0.99,
-      requirements: [
-        {
-          name: 'No Existing Debt',
-          met: eligibilityResult.eligibilityCriteria.noExistingDebt,
-          description: eligibilityResult.eligibilityCriteria.noExistingDebt ? 
-            'No existing debt' : 
-            `You have existing debt of $${eligibilityResult.totalDebt.toFixed(2)}`
-        },
-        {
-          name: 'Account Verification',
-          met: eligibilityResult.eligibilityCriteria.accountVerified,
-          description: eligibilityResult.eligibilityCriteria.accountVerified ? 
-            'Account fully verified' : 
-            'Account verification required'
-        },
-        {
-          name: 'Minimum 5 Investments',
-          met: eligibilityResult.eligibilityCriteria.minimumInvestments,
-          description: eligibilityResult.eligibilityCriteria.minimumInvestments ? 
-            `You have ${eligibilityResult.activeInvestments} active investments` : 
-            `You need ${5 - eligibilityResult.activeInvestments} more active investments`
-        },
-        {
-          name: 'Available Credit',
-          met: eligibilityResult.eligibilityCriteria.sufficientAvailableCredit,
-          description: eligibilityResult.eligibilityCriteria.sufficientAvailableCredit ? 
-            `Requested amount within limit (Available: $${eligibilityResult.availableCredit.toFixed(2)})` : 
-            `Requested amount exceeds available credit by $${(requestedAmount - eligibilityResult.availableCredit).toFixed(2)}`
-        },
-        {
-          name: 'Active Account',
-          met: eligibilityResult.eligibilityCriteria.accountActive,
-          description: eligibilityResult.eligibilityCriteria.accountActive ? 
-            'Account is active' : 
-            'Account must be active'
-        },
-        {
-          name: 'Mature Account',
-          met: eligibilityResult.eligibilityCriteria.accountMature,
-          description: eligibilityResult.eligibilityCriteria.accountMature ? 
-            'Account is at least 1 month old' : 
-            'Account must be at least 1 month old'
-        }
-      ],
-      userProfile: {
-        name: `${eligibilityResult.user.firstName} ${eligibilityResult.user.lastName}`,
-        email: eligibilityResult.user.email,
-        kycStatus: eligibilityResult.user.kycStatus
-      },
-      investmentSummary: {
-        activeInvestments: eligibilityResult.activeInvestments
-      },
-      timestamp: new Date().toISOString()
-    };
-
-    // If not eligible, add reasons to response
-    if (!eligibilityResult.isEligible) {
-      response.rejectionReasons = eligibilityResult.reasons;
+    let userId;
+    try {
+      const decoded = verifyJWT(token);
+      userId = decoded.id;
+    } catch (err) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Invalid or expired token'
+      });
     }
-
-    res.status(200).json(response);
-
-  } catch (err) {
-    console.error('Error checking loan eligibility:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'An error occurred while checking loan eligibility'
-    });
-  }
-});
-
-// =============================================
-// LOAN APPLICATION ENDPOINT (CONSISTENT)
-// =============================================
-app.post('/api/loans/apply', protect, async (req, res) => {
-  try {
-    const { amount, purpose, term, interestRate, disbursementFee } = req.body;
-    const userId = req.user._id;
 
     // Validate required fields
     if (!amount || amount < 1000) {
@@ -16432,7 +16376,18 @@ app.post('/api/loans/apply', protect, async (req, res) => {
       });
     }
 
-    // Get user details
+    // Use shared eligibility check
+    const eligibility = await checkLoanEligibility(userId, amount);
+    
+    if (!eligibility.eligible) {
+      return res.status(400).json({
+        status: 'fail',
+        message: eligibility.message,
+        reasons: eligibility.details
+      });
+    }
+
+    // Get user with write access
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
@@ -16441,48 +16396,14 @@ app.post('/api/loans/apply', protect, async (req, res) => {
       });
     }
 
-    // Use the SAME eligibility service for consistency
-    const eligibilityResult = await LoanEligibilityService.checkEligibility(userId, amount);
-
-    // Check eligibility - using same criteria as check-eligibility endpoint
-    if (!eligibilityResult.isEligible) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'You do not meet the eligibility criteria for this loan',
-        reasons: eligibilityResult.reasons,
-        eligibilityDetails: {
-          currentDebt: eligibilityResult.totalDebt,
-          availableCredit: eligibilityResult.availableCredit,
-          activeInvestments: eligibilityResult.activeInvestments,
-          kycStatus: eligibilityResult.user.kycStatus
-        }
-      });
-    }
-
-    // Check if user already has an active loan (additional safety check)
-    const existingActiveLoan = await Loan.findOne({
-      user: userId,
-      status: 'active'
-    });
-
-    if (existingActiveLoan) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'You already have an active loan. Please repay it before applying for a new one.',
-        existingLoan: {
-          id: existingActiveLoan._id,
-          amount: existingActiveLoan.amount,
-          remainingBalance: existingActiveLoan.remainingBalance
-        }
-      });
-    }
-
-    // Calculate disbursement fee
-    const calculatedDisbursementFee = (amount * (disbursementFee || 0.99)) / 100;
+    // Calculate loan terms
+    const interestRate = 9.99;
+    const disbursementFeePercentage = 0.99;
+    
+    const calculatedDisbursementFee = (amount * disbursementFeePercentage) / 100;
     const netLoanAmount = amount - calculatedDisbursementFee;
-
-    // Calculate repayment amount with interest
-    const monthlyInterestRate = (interestRate || 9.99) / 100;
+    
+    const monthlyInterestRate = interestRate / 100;
     const monthlyPayment = (amount * monthlyInterestRate * Math.pow(1 + monthlyInterestRate, term)) /
                           (Math.pow(1 + monthlyInterestRate, term) - 1);
     const totalRepayment = monthlyPayment * term;
@@ -16491,28 +16412,24 @@ app.post('/api/loans/apply', protect, async (req, res) => {
     const loan = await Loan.create({
       user: userId,
       amount: amount,
-      interestRate: interestRate || 9.99,
+      remainingBalance: totalRepayment,
+      interestRate: interestRate,
       duration: term,
       collateralAmount: user.balances.main,
       collateralCurrency: 'USD',
-      status: 'pending',
+      status: 'approved', // Auto-approved since eligibility passed
       startDate: new Date(),
       endDate: new Date(Date.now() + term * 30 * 24 * 60 * 60 * 1000),
-      remainingBalance: totalRepayment,
       repaymentAmount: totalRepayment,
       purpose: purpose,
       terms: {
         disbursementFee: calculatedDisbursementFee,
+        feePercentage: disbursementFeePercentage,
         netAmountDisbursed: netLoanAmount,
         monthlyPayment: monthlyPayment,
         totalRepayment: totalRepayment
       }
     });
-
-    // Auto-approve if eligible
-    loan.status = 'approved';
-    loan.approvedAt = new Date();
-    await loan.save();
 
     // Add loan amount to user's main balance (net amount after fee)
     user.balances.main += netLoanAmount;
@@ -16522,7 +16439,7 @@ app.post('/api/loans/apply', protect, async (req, res) => {
     // Create transaction for loan disbursement
     const transaction = await Transaction.create({
       user: userId,
-      type: 'loan',
+      type: 'loan_disbursement',
       amount: netLoanAmount,
       currency: 'USD',
       status: 'completed',
@@ -16532,7 +16449,7 @@ app.post('/api/loans/apply', protect, async (req, res) => {
         loanId: loan._id,
         purpose: purpose,
         term: term,
-        interestRate: interestRate || 9.99,
+        interestRate: interestRate,
         disbursementFee: calculatedDisbursementFee,
         grossAmount: amount,
         netAmount: netLoanAmount,
@@ -16553,7 +16470,7 @@ app.post('/api/loans/apply', protect, async (req, res) => {
       description: `Loan disbursement fee for ${purpose}`,
       metadata: {
         loanAmount: amount,
-        feePercentage: disbursementFee || 0.99,
+        feePercentage: disbursementFeePercentage,
         loanId: loan._id
       }
     });
@@ -16570,15 +16487,17 @@ app.post('/api/loans/apply', protect, async (req, res) => {
           disbursementFee: calculatedDisbursementFee,
           purpose: purpose,
           term: term,
-          monthlyPayment: monthlyPayment,
-          totalRepayment: totalRepayment,
-          loanId: loan._id
+          monthlyPayment: monthlyPayment.toFixed(2),
+          totalRepayment: totalRepayment.toFixed(2),
+          loanId: loan._id,
+          transactionId: transaction._id
         }
       });
     } catch (emailError) {
       console.error('Failed to send loan approval email:', emailError);
     }
 
+    // Prepare response
     const response = {
       status: 'success',
       message: 'Loan application approved and disbursed successfully',
@@ -16591,11 +16510,10 @@ app.post('/api/loans/apply', protect, async (req, res) => {
           status: loan.status,
           purpose: purpose,
           term: term,
-          monthlyPayment: monthlyPayment,
-          totalRepayment: totalRepayment,
+          monthlyPayment: monthlyPayment.toFixed(2),
+          totalRepayment: totalRepayment.toFixed(2),
           startDate: loan.startDate,
-          endDate: loan.endDate,
-          remainingBalance: loan.remainingBalance
+          endDate: loan.endDate
         },
         newBalances: {
           main: user.balances.main,
@@ -16603,7 +16521,8 @@ app.post('/api/loans/apply', protect, async (req, res) => {
         },
         transaction: {
           id: transaction._id,
-          reference: transaction.reference
+          reference: transaction.reference,
+          netAmount: netLoanAmount
         }
       }
     };
@@ -16611,12 +16530,12 @@ app.post('/api/loans/apply', protect, async (req, res) => {
     res.status(201).json(response);
 
     // Log activity
-    await logActivity('loan_application_submitted', 'loan', loan._id, userId, 'User', null, {
+    await logActivity('loan_application_approved', 'loan', loan._id, userId, 'User', null, {
       amount: amount,
       purpose: purpose,
       term: term,
-      status: 'approved',
-      eligibilityChecked: true
+      netDisbursed: netLoanAmount,
+      transactionId: transaction._id
     });
 
   } catch (err) {
@@ -16627,6 +16546,129 @@ app.post('/api/loans/apply', protect, async (req, res) => {
     });
   }
 });
+
+// =============================================
+// LOAN ELIGIBILITY CHECK ENDPOINT
+// =============================================
+app.post('/api/loans/check-eligibility', protect, async (req, res) => {
+  try {
+    const { requestedAmount } = req.body;
+    const userId = req.user._id;
+
+    // Validate requested amount
+    if (!requestedAmount || requestedAmount < 1000) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Minimum loan amount is $1,000'
+      });
+    }
+
+    // Use shared eligibility check
+    const eligibility = await checkLoanEligibility(userId, requestedAmount);
+
+    // Get additional user info for response
+    const user = await User.findById(userId)
+      .select('firstName lastName email createdAt')
+      .lean();
+
+    // Get investments for detailed summary
+    const investments = await Investment.find({
+      user: userId,
+      status: 'active'
+    }).lean();
+
+    const totalInvested = investments.reduce((sum, inv) => sum + (inv.amount || 0), 0);
+    const investmentPerformance = investments.length > 0 ? 
+      investments.reduce((sum, inv) => sum + (inv.actualReturn || 0), 0) / totalInvested * 100 : 0;
+
+    // Calculate account age
+    const accountAgeMs = new Date() - new Date(user.createdAt);
+    const accountAgeMonths = accountAgeMs / (1000 * 60 * 60 * 24 * 30);
+
+    // Prepare requirements array
+    const requirements = [
+      {
+        name: 'Account Verification',
+        met: eligibility.criteria?.accountVerified || false,
+        description: eligibility.criteria?.accountVerified ? 
+          'Account fully verified' : 
+          'Identity and address verification required'
+      },
+      {
+        name: 'No Existing Debt',
+        met: eligibility.criteria?.noDebt || false,
+        description: eligibility.criteria?.noDebt ? 
+          'No outstanding loans' : 
+          `Outstanding loan balance: $${eligibility.totalDebt?.toFixed(2) || 0}`
+      },
+      {
+        name: 'Minimum 5 Active Investments',
+        met: eligibility.criteria?.minimumInvestments || false,
+        description: eligibility.criteria?.minimumInvestments ? 
+          `You have ${eligibility.investmentCount} active investments` : 
+          `You need ${5 - (eligibility.investmentCount || 0)} more active investments`
+      },
+      {
+        name: 'Active Account',
+        met: eligibility.criteria?.activeAccount || false,
+        description: eligibility.criteria?.activeAccount ? 
+          'Account is active' : 
+          'Account must be active'
+      },
+      {
+        name: 'Available Credit',
+        met: eligibility.criteria?.sufficientCredit || false,
+        description: eligibility.criteria?.sufficientCredit ? 
+          `Requested amount within limit` : 
+          `Requested ($${requestedAmount}) > Available ($${eligibility.availableCredit?.toFixed(2) || 0})`
+      },
+      {
+        name: 'Minimum Amount',
+        met: eligibility.criteria?.minimumAmount || false,
+        description: eligibility.criteria?.minimumAmount ? 
+          'Meets minimum amount' : 
+          'Minimum loan amount is $1,000'
+      }
+    ];
+
+    const response = {
+      status: 'success',
+      eligible: eligibility.eligible,
+      message: eligibility.message,
+      maxLoanAmount: eligibility.loanLimit || 0,
+      availableCredit: eligibility.availableCredit || 0,
+      requestedAmount: requestedAmount,
+      currentDebt: eligibility.totalDebt || 0,
+      mainBalance: eligibility.user?.balances?.main || 0,
+      monthlyInterestRate: 9.99,
+      disbursementFeePercentage: 0.99,
+      requirements: requirements,
+      userProfile: {
+        name: `${user.firstName} ${user.lastName}`,
+        email: user.email,
+        accountAgeMonths: Math.floor(accountAgeMonths),
+        kycStatus: eligibility.user?.kycStatus
+      },
+      investmentSummary: {
+        totalInvestments: investments.length,
+        activeInvestments: investments.filter(inv => inv.status === 'active').length,
+        totalInvested: totalInvested,
+        performancePercentage: investmentPerformance.toFixed(2)
+      },
+      timestamp: new Date().toISOString()
+    };
+
+    res.status(200).json(response);
+
+  } catch (err) {
+    console.error('Error checking loan eligibility:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while checking loan eligibility'
+    });
+  }
+});
+
 
 
 
@@ -16767,6 +16809,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
