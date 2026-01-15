@@ -15388,6 +15388,109 @@ app.post('/api/loans/apply', protect, async (req, res) => {
 
 
 
+// app.get('/api/loans/balances', protect, async (req, res) => {
+app.get('/api/loans/balances', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    let userId;
+    
+    if (token) {
+      try {
+        const decoded = verifyJWT(token);
+        userId = decoded.id;
+      } catch (err) {
+        return res.status(401).json({
+          status: 'fail',
+          message: 'Invalid or expired token'
+        });
+      }
+    } else {
+      // For non-authenticated users, return zeros
+      return res.status(200).json({
+        status: 'success',
+        loanLimit: 0,
+        debtBalance: 0,
+        availableCredit: 0
+      });
+    }
+
+    // Get user with balances
+    const user = await User.findById(userId).select('balances firstName lastName');
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Get user's active loans
+    const activeLoans = await Loan.find({
+      user: userId,
+      status: { $in: ['active', 'pending'] }
+    });
+
+    // Calculate loan limit (3x main balance as requested)
+    const loanLimit = user.balances.main * 3;
+    
+    // Calculate total debt balance
+    const debtBalance = activeLoans.reduce((total, loan) => {
+      if (loan.status === 'active') {
+        return total + loan.amount;
+      }
+      return total;
+    }, 0);
+
+    // Calculate available credit
+    const availableCredit = Math.max(0, loanLimit - debtBalance);
+
+    // Get user's investments for eligibility calculation
+    const investments = await Investment.find({
+      user: userId,
+      status: 'active'
+    });
+
+    // Check if user has at least 5 investments
+    const hasMinimumInvestments = investments.length >= 5;
+
+    // Calculate internal credit score (based on investments and activity)
+    let creditScore = 600; // Base score
+    
+    // Increase score based on number of investments
+    if (investments.length >= 5) creditScore += 50;
+    if (investments.length >= 10) creditScore += 50;
+    
+    // Increase score based on total investment amount
+    const totalInvested = investments.reduce((sum, inv) => sum + inv.amount, 0);
+    if (totalInvested >= 5000) creditScore += 50;
+    if (totalInvested >= 10000) creditScore += 50;
+    
+    // Cap score at 850
+    creditScore = Math.min(creditScore, 850);
+
+    res.status(200).json({
+      status: 'success',
+      loanLimit: loanLimit,
+      debtBalance: debtBalance,
+      availableCredit: availableCredit,
+      creditScore: creditScore,
+      hasMinimumInvestments: hasMinimumInvestments,
+      totalInvested: totalInvested,
+      activeInvestments: investments.length,
+      user: {
+        firstName: user.firstName,
+        lastName: user.lastName,
+        mainBalance: user.balances.main
+      }
+    });
+
+  } catch (err) {
+    console.error('Get loan balances error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching loan balances'
+    });
+  }
+});
 
 
 
@@ -15523,6 +15626,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
