@@ -14916,6 +14916,981 @@ setInterval(async () => {
 
 
 
+
+
+
+
+
+// app.get('/api/loans/balances', protect, async (req, res) => {
+app.get('/api/loans/balances', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    let userId;
+    
+    if (token) {
+      try {
+        const decoded = verifyJWT(token);
+        userId = decoded.id;
+      } catch (err) {
+        return res.status(401).json({
+          status: 'fail',
+          message: 'Invalid or expired token'
+        });
+      }
+    } else {
+      // For non-authenticated users, return zeros
+      return res.status(200).json({
+        status: 'success',
+        loanLimit: 0,
+        debtBalance: 0,
+        availableCredit: 0
+      });
+    }
+
+    // Get user with balances
+    const user = await User.findById(userId).select('balances firstName lastName');
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Get user's active loans
+    const activeLoans = await Loan.find({
+      user: userId,
+      status: { $in: ['active', 'pending'] }
+    });
+
+    // Calculate loan limit (3x main balance as requested)
+    const loanLimit = user.balances.main * 3;
+    
+    // Calculate total debt balance
+    const debtBalance = activeLoans.reduce((total, loan) => {
+      if (loan.status === 'active') {
+        return total + loan.amount;
+      }
+      return total;
+    }, 0);
+
+    // Calculate available credit
+    const availableCredit = Math.max(0, loanLimit - debtBalance);
+
+    // Get user's investments for eligibility calculation
+    const investments = await Investment.find({
+      user: userId,
+      status: 'active'
+    });
+
+    // Check if user has at least 5 investments
+    const hasMinimumInvestments = investments.length >= 5;
+
+    // Calculate internal credit score (based on investments and activity)
+    let creditScore = 600; // Base score
+    
+    // Increase score based on number of investments
+    if (investments.length >= 5) creditScore += 50;
+    if (investments.length >= 10) creditScore += 50;
+    
+    // Increase score based on total investment amount
+    const totalInvested = investments.reduce((sum, inv) => sum + inv.amount, 0);
+    if (totalInvested >= 5000) creditScore += 50;
+    if (totalInvested >= 10000) creditScore += 50;
+    
+    // Cap score at 850
+    creditScore = Math.min(creditScore, 850);
+
+    res.status(200).json({
+      status: 'success',
+      loanLimit: loanLimit,
+      debtBalance: debtBalance,
+      availableCredit: availableCredit,
+      creditScore: creditScore,
+      hasMinimumInvestments: hasMinimumInvestments,
+      totalInvested: totalInvested,
+      activeInvestments: investments.length,
+      user: {
+        firstName: user.firstName,
+        lastName: user.lastName,
+        mainBalance: user.balances.main
+      }
+    });
+
+  } catch (err) {
+    console.error('Get loan balances error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while fetching loan balances'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+// POST /api/loans/check-eligibility - Check loan eligibility with comprehensive database queries
+app.post('/api/loans/eligibility/requirements', async (req, res) => {
+  try {
+    console.log('🔍 Loan eligibility check request received');
+    
+    const { requestedAmount } = req.body;
+    const authHeader = req.headers.authorization;
+    
+    // Validate authorization
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Authentication required. Please login to check loan eligibility.'
+      });
+    }
+
+    const token = authHeader.split(' ')[1];
+    let userId;
+    
+    try {
+      const decoded = verifyJWT(token);
+      userId = decoded.id;
+      console.log(`✅ Token verified for user ID: ${userId}`);
+    } catch (err) {
+      console.error('❌ Token verification failed:', err.message);
+      return res.status(401).json({
+        status: 'fail',
+        message: 'Invalid or expired token. Please login again.'
+      });
+    }
+
+    // Validate requested amount
+    if (!requestedAmount || requestedAmount < 1000) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Minimum loan amount is $1,000'
+      });
+    }
+
+    // START COMPREHENSIVE DATABASE QUERIES
+    console.log('📊 Starting comprehensive database queries...');
+
+    // 1. Fetch user with all related data
+    const user = await User.findById(userId)
+      .select('firstName lastName email phone country city address balances kycStatus status isVerified createdAt referralCode referredBy')
+      .populate('referredBy', 'firstName lastName email')
+      .lean();
+    
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User account not found'
+      });
+    }
+
+    console.log(`👤 User loaded: ${user.firstName} ${user.lastName}`);
+
+    // 2. Fetch all investments for eligibility calculation
+    const investments = await Investment.find({
+      user: userId
+    })
+    .select('amount plan status startDate endDate expectedReturn actualReturn')
+    .populate('plan', 'name percentage duration minAmount maxAmount')
+    .sort({ startDate: -1 })
+    .lean();
+
+    console.log(`📈 Found ${investments.length} investments`);
+
+    // 3. Fetch active loans (debt)
+    const activeLoans = await Loan.find({
+      user: userId,
+      status: { $in: ['active', 'pending', 'approved'] }
+    })
+    .select('amount repaidAmount remainingBalance status startDate endDate interestRate purpose')
+    .sort({ startDate: -1 })
+    .lean();
+
+    console.log(`💰 Found ${activeLoans.length} active loans`);
+
+    // 4. Fetch transaction history
+    const transactions = await Transaction.find({
+      user: userId
+    })
+    .select('type amount status method reference createdAt')
+    .sort({ createdAt: -1 })
+    .limit(100) // Limit to recent transactions
+    .lean();
+
+    console.log(`💸 Found ${transactions.length} transactions`);
+
+    // 5. Fetch downline relationships (for commission history)
+    const downlineRelationships = await DownlineRelationship.find({
+      upline: userId,
+      status: 'active'
+    })
+    .populate('downline', 'firstName lastName email')
+    .lean();
+
+    console.log(`👥 Found ${downlineRelationships.length} downline relationships`);
+
+    // 6. Fetch commission history
+    const commissionHistory = await CommissionHistory.find({
+      $or: [{ upline: userId }, { downline: userId }]
+    })
+    .populate('upline', 'firstName lastName')
+    .populate('downline', 'firstName lastName')
+    .populate('investment')
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .lean();
+
+    console.log(`🎯 Found ${commissionHistory.length} commission records`);
+
+    // 7. Fetch user logs for activity analysis
+    const userLogs = await UserLog.find({
+      user: userId
+    })
+    .select('action status createdAt ipAddress location')
+    .sort({ createdAt: -1 })
+    .limit(100)
+    .lean();
+
+    console.log(`📝 Found ${userLogs.length} user logs`);
+
+    // 8. Fetch KYC details if available
+    const kycDetails = await KYC.findOne({ user: userId })
+      .select('identity address facial overallStatus submittedAt reviewedAt')
+      .lean();
+
+    console.log(`📋 KYC status: ${kycDetails ? kycDetails.overallStatus : 'Not submitted'}`);
+
+    // END DATABASE QUERIES
+
+    // CALCULATE ELIGIBILITY CRITERIA FROM DATABASE DATA
+
+    // Criterion 1: Account Verification Status
+    const accountVerified = user.kycStatus?.identity === 'verified' && 
+                           user.kycStatus?.address === 'verified' && 
+                           user.isVerified === true;
+
+    // Criterion 2: Minimum 5 Investments (from investments schema)
+    const minimumInvestments = investments.length >= 5;
+
+    // Criterion 3: Good Transaction History (analyze from transaction schema)
+    const successfulTransactions = transactions.filter(t => t.status === 'completed').length;
+    const failedTransactions = transactions.filter(t => t.status === 'failed').length;
+    const transactionSuccessRate = transactions.length > 0 ? 
+      (successfulTransactions / transactions.length) * 100 : 0;
+    
+    const goodTransactionHistory = transactionSuccessRate >= 80 && transactions.length >= 10;
+
+    // Criterion 4: Active Account Status
+    const activeAccount = user.status === 'active';
+
+    // Criterion 5: Account Age (from user schema)
+    const accountAgeMs = new Date() - new Date(user.createdAt);
+    const accountAgeMonths = accountAgeMs / (1000 * 60 * 60 * 24 * 30);
+    const matureAccount = accountAgeMonths >= 1; // At least 1 month old
+
+    // Criterion 6: Investment Performance (from investment schema)
+    const activeInvestments = investments.filter(inv => inv.status === 'active');
+    const completedInvestments = investments.filter(inv => inv.status === 'completed');
+    
+    const totalInvested = investments.reduce((sum, inv) => sum + (inv.amount || 0), 0);
+    const totalReturns = completedInvestments.reduce((sum, inv) => sum + (inv.actualReturn || 0), 0);
+    
+    const investmentPerformance = completedInvestments.length > 0 ? 
+      (totalReturns / totalInvested) * 100 : 0;
+    const goodInvestmentPerformance = investmentPerformance >= 0; // Positive returns
+
+    // Criterion 7: Referral Activity (from user schema and downline relationships)
+    const hasReferralActivity = downlineRelationships.length > 0 || user.referredBy !== null;
+
+    // Criterion 8: Commission History (from commission history schema)
+    const hasCommissionHistory = commissionHistory.length > 0;
+
+    // Criterion 9: User Activity (from user logs schema)
+    const recentActivity = userLogs.filter(log => 
+      new Date(log.createdAt) > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+    ).length;
+    const activeUser = recentActivity >= 10; // At least 10 activities in last 30 days
+
+    // CALCULATE CREDIT SCORE FROM DATABASE DATA
+    let creditScore = 600; // Base score
+
+    // Add points based on investments
+    if (investments.length >= 5) creditScore += 20;
+    if (investments.length >= 10) creditScore += 30;
+    if (investments.length >= 20) creditScore += 50;
+
+    // Add points based on investment amount
+    if (totalInvested >= 5000) creditScore += 25;
+    if (totalInvested >= 10000) creditScore += 50;
+    if (totalInvested >= 50000) creditScore += 75;
+
+    // Add points based on transaction history
+    if (transactions.length >= 20) creditScore += 20;
+    if (transactions.length >= 50) creditScore += 30;
+    if (transactionSuccessRate >= 90) creditScore += 25;
+
+    // Add points based on account age
+    if (accountAgeMonths >= 3) creditScore += 15;
+    if (accountAgeMonths >= 6) creditScore += 25;
+    if (accountAgeMonths >= 12) creditScore += 40;
+
+    // Add points based on investment performance
+    if (investmentPerformance > 0) creditScore += 20;
+    if (investmentPerformance > 10) creditScore += 30;
+    if (investmentPerformance > 20) creditScore += 50;
+
+    // Add points for referral activity
+    if (hasReferralActivity) creditScore += 15;
+    if (downlineRelationships.length >= 3) creditScore += 25;
+
+    // Add points for commission history
+    if (hasCommissionHistory) creditScore += 10;
+
+    // Deduct points for failed transactions
+    if (failedTransactions > 5) creditScore -= 20;
+    if (failedTransactions > 10) creditScore -= 40;
+
+    // Deduct points for inactive account
+    if (!activeUser) creditScore -= 30;
+
+    // Cap credit score between 300 and 850
+    creditScore = Math.min(Math.max(creditScore, 300), 850);
+    const roundedCreditScore = Math.floor(creditScore);
+
+    console.log(`🎯 Calculated credit score: ${roundedCreditScore}`);
+
+    // CALCULATE LOAN CAPACITY FROM DATABASE DATA
+
+    // Loan limit: 3x main balance (from user.balances schema)
+    const loanLimit = user.balances.main * 3;
+
+    // Total debt from active loans schema
+    const totalDebt = activeLoans.reduce((sum, loan) => {
+      if (loan.status === 'active') {
+        return sum + (loan.remainingBalance || loan.amount);
+      }
+      return sum;
+    }, 0);
+
+    // Available credit
+    const availableCredit = Math.max(0, loanLimit - totalDebt);
+
+    console.log(`📊 Loan capacity: Limit=$${loanLimit.toFixed(2)}, Debt=$${totalDebt.toFixed(2)}, Available=$${availableCredit.toFixed(2)}`);
+
+    // DETERMINE ELIGIBILITY
+
+    const eligibilityCriteria = {
+      accountVerified: accountVerified,
+      minimumInvestments: minimumInvestments,
+      goodTransactionHistory: goodTransactionHistory,
+      activeAccount: activeAccount,
+      matureAccount: matureAccount,
+      goodInvestmentPerformance: goodInvestmentPerformance,
+      creditScoreThreshold: roundedCreditScore >= 600,
+      availableCredit: requestedAmount <= availableCredit
+    };
+
+    const isEligible = Object.values(eligibilityCriteria).every(criterion => criterion === true);
+
+    // Collect reasons for ineligibility
+    const reasons = [];
+    if (!accountVerified) reasons.push('Account verification required');
+    if (!minimumInvestments) reasons.push(`Minimum 5 investments required (you have ${investments.length})`);
+    if (!goodTransactionHistory) reasons.push(`Good transaction history required (success rate: ${transactionSuccessRate.toFixed(1)}%)`);
+    if (!activeAccount) reasons.push('Account must be active');
+    if (!matureAccount) reasons.push('Account must be at least 1 month old');
+    if (!goodInvestmentPerformance) reasons.push('Positive investment performance required');
+    if (!eligibilityCriteria.creditScoreThreshold) reasons.push(`Credit score below 600 (your score: ${roundedCreditScore})`);
+    if (!eligibilityCriteria.availableCredit) reasons.push(`Requested amount ($${requestedAmount}) exceeds available credit ($${availableCredit.toFixed(2)})`);
+
+    // PREPARE COMPREHENSIVE RESPONSE WITH ALL DATABASE DATA
+
+    const response = {
+      status: 'success',
+      eligible: isEligible,
+      maxLoanAmount: loanLimit,
+      availableCredit: availableCredit,
+      creditScore: roundedCreditScore,
+      requestedAmount: requestedAmount,
+      currentDebt: totalDebt,
+      mainBalance: user.balances.main,
+      
+      // Eligibility criteria breakdown
+      eligibilityCriteria: eligibilityCriteria,
+      
+      // Reasons for ineligibility (if any)
+      reasons: reasons,
+      
+      // User profile summary
+      userProfile: {
+        name: `${user.firstName} ${user.lastName}`,
+        email: user.email,
+        accountAgeMonths: Math.floor(accountAgeMonths),
+        status: user.status,
+        isVerified: user.isVerified,
+        kycStatus: user.kycStatus
+      },
+      
+      // Investment summary (from investments schema)
+      investmentSummary: {
+        totalInvestments: investments.length,
+        activeInvestments: activeInvestments.length,
+        completedInvestments: completedInvestments.length,
+        totalInvested: totalInvested,
+        totalReturns: totalReturns,
+        performancePercentage: investmentPerformance.toFixed(2),
+        averageInvestment: investments.length > 0 ? (totalInvested / investments.length).toFixed(2) : 0
+      },
+      
+      // Transaction summary (from transactions schema)
+      transactionSummary: {
+        totalTransactions: transactions.length,
+        successfulTransactions: successfulTransactions,
+        failedTransactions: failedTransactions,
+        successRate: transactionSuccessRate.toFixed(1),
+        recentActivity: recentActivity
+      },
+      
+      // Loan history (from loans schema)
+      loanHistory: {
+        totalLoans: activeLoans.length,
+        activeLoans: activeLoans.filter(l => l.status === 'active').length,
+        totalBorrowed: activeLoans.reduce((sum, loan) => sum + loan.amount, 0),
+        totalRepaid: activeLoans.reduce((sum, loan) => sum + (loan.repaidAmount || 0), 0)
+      },
+      
+      // Network activity (from downline and commission schemas)
+      networkActivity: {
+        downlineCount: downlineRelationships.length,
+        commissionRecords: commissionHistory.length,
+        hasReferralActivity: hasReferralActivity,
+        referredBy: user.referredBy ? `${user.referredBy.firstName} ${user.referredBy.lastName}` : null
+      },
+      
+      // Timestamp and metadata
+      timestamp: new Date().toISOString(),
+      dataSources: [
+        'User',
+        'Investment',
+        'Loan', 
+        'Transaction',
+        'DownlineRelationship',
+        'CommissionHistory',
+        'UserLog',
+        'KYC'
+      ]
+    };
+
+    // Cache the eligibility result
+    const cacheKey = `loan_eligibility:${userId}:${requestedAmount}`;
+    await redis.setex(cacheKey, 300, JSON.stringify(response));
+
+    console.log(`✅ Eligibility check completed: ${isEligible ? 'APPROVED' : 'REJECTED'}`);
+    console.log(`📋 Reasons: ${reasons.length > 0 ? reasons.join(', ') : 'All criteria met'}`);
+
+    res.status(200).json(response);
+
+  } catch (err) {
+    console.error('❌ Error checking loan eligibility:', err);
+    console.error('Error stack:', err.stack);
+    
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while checking loan eligibility',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Helper function to generate detailed eligibility report
+function generateEligibilityReport(user, investments, transactions, loans, creditScore) {
+  return {
+    summary: {
+      overallEligibility: creditScore >= 600 && investments.length >= 5,
+      confidenceScore: calculateConfidenceScore(investments, transactions),
+      recommendation: creditScore >= 600 ? 'APPROVE' : 'REVIEW',
+      riskLevel: calculateRiskLevel(loans, transactions)
+    },
+    metrics: {
+      financialStability: calculateFinancialStability(investments, user.balances),
+      activityLevel: calculateActivityLevel(transactions),
+      investmentConsistency: calculateInvestmentConsistency(investments),
+      repaymentHistory: calculateRepaymentHistory(loans)
+    },
+    suggestions: generateImprovementSuggestions(investments, transactions, creditScore)
+  };
+}
+
+function calculateConfidenceScore(investments, transactions) {
+  const investmentScore = Math.min(50, investments.length * 5);
+  const transactionScore = Math.min(30, Math.min(transactions.length / 2, 30));
+  const successRateScore = transactions.length > 0 ? 
+    (transactions.filter(t => t.status === 'completed').length / transactions.length) * 20 : 0;
+  
+  return Math.min(100, investmentScore + transactionScore + successRateScore);
+}
+
+function calculateRiskLevel(loans, transactions) {
+  if (loans.length === 0) return 'LOW';
+  
+  const defaultedLoans = loans.filter(l => l.status === 'defaulted').length;
+  const failedTransactions = transactions.filter(t => t.status === 'failed').length;
+  
+  if (defaultedLoans > 0 || failedTransactions > 10) return 'HIGH';
+  if (failedTransactions > 5) return 'MEDIUM';
+  return 'LOW';
+}
+
+function calculateFinancialStability(investments, balances) {
+  const totalAssets = investments.reduce((sum, inv) => sum + inv.amount, 0) + balances.main;
+  const activeInvestments = investments.filter(inv => inv.status === 'active').length;
+  
+  if (totalAssets > 10000 && activeInvestments >= 3) return 'HIGH';
+  if (totalAssets > 5000 && activeInvestments >= 2) return 'MEDIUM';
+  return 'LOW';
+}
+
+function calculateActivityLevel(transactions) {
+  const recentTransactions = transactions.filter(t => 
+    new Date(t.createdAt) > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+  ).length;
+  
+  if (recentTransactions >= 20) return 'HIGH';
+  if (recentTransactions >= 10) return 'MEDIUM';
+  return 'LOW';
+}
+
+function calculateInvestmentConsistency(investments) {
+  if (investments.length < 3) return 'LOW';
+  
+  const investmentDates = investments.map(inv => new Date(inv.startDate)).sort();
+  const timeGaps = [];
+  
+  for (let i = 1; i < investmentDates.length; i++) {
+    const gap = investmentDates[i] - investmentDates[i - 1];
+    timeGaps.push(gap);
+  }
+  
+  const averageGap = timeGaps.reduce((sum, gap) => sum + gap, 0) / timeGaps.length;
+  const daysBetweenInvestments = averageGap / (1000 * 60 * 60 * 24);
+  
+  if (daysBetweenInvestments <= 15) return 'HIGH';
+  if (daysBetweenInvestments <= 30) return 'MEDIUM';
+  return 'LOW';
+}
+
+function calculateRepaymentHistory(loans) {
+  const repaidLoans = loans.filter(l => l.status === 'repaid');
+  if (repaidLoans.length === 0) return 'NO_HISTORY';
+  
+  const onTimeRepayments = repaidLoans.filter(loan => {
+    if (!loan.endDate || !loan.repaidAt) return false;
+    return loan.repaidAt <= loan.endDate;
+  }).length;
+  
+  const repaymentRate = (onTimeRepayments / repaidLoans.length) * 100;
+  
+  if (repaymentRate >= 90) return 'EXCELLENT';
+  if (repaymentRate >= 70) return 'GOOD';
+  if (repaymentRate >= 50) return 'FAIR';
+  return 'POOR';
+}
+
+function generateImprovementSuggestions(investments, transactions, creditScore) {
+  const suggestions = [];
+  
+  if (investments.length < 5) {
+    suggestions.push(`Make ${5 - investments.length} more investments to meet minimum requirement`);
+  }
+  
+  if (transactions.length < 10) {
+    suggestions.push('Increase transaction activity to build better history');
+  }
+  
+  const failedTransactions = transactions.filter(t => t.status === 'failed').length;
+  if (failedTransactions > 0) {
+    suggestions.push(`Reduce failed transactions (currently ${failedTransactions})`);
+  }
+  
+  if (creditScore < 600) {
+    suggestions.push(`Increase credit score from ${creditScore} to at least 600`);
+  }
+  
+  return suggestions;
+}
+
+// Additional endpoint for eligibility simulation
+app.post('/api/loans/eligibility-simulation', async (req, res) => {
+  try {
+    const { userId, simulatedAmount, simulatedInvestments } = req.body;
+    
+    // This endpoint can be used to simulate eligibility without affecting real data
+    // Useful for showing users "what-if" scenarios
+    
+    res.status(200).json({
+      status: 'success',
+      message: 'Eligibility simulation endpoint (to be implemented)',
+      note: 'This would run the same eligibility checks with simulated data'
+    });
+    
+  } catch (err) {
+    console.error('Simulation error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Simulation failed'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+// Function to automatically repay loans from deposits
+const autoRepayLoansFromDeposit = async (userId, depositAmount) => {
+  try {
+    // Get user's active loans
+    const activeLoans = await Loan.find({
+      user: userId,
+      status: 'active'
+    }).sort({ startDate: 1 }); // Oldest first
+
+    if (activeLoans.length === 0) {
+      return { repaidAmount: 0, remainingBalance: depositAmount };
+    }
+
+    let remainingDeposit = depositAmount;
+    let totalRepaid = 0;
+
+    // Process each loan
+    for (const loan of activeLoans) {
+      if (remainingDeposit <= 0) break;
+
+      // Calculate remaining loan balance
+      const loanBalance = loan.amount - (loan.repaidAmount || 0);
+      
+      if (loanBalance > 0) {
+        const repaymentAmount = Math.min(remainingDeposit, loanBalance);
+        
+        // Update loan repayment
+        loan.repaidAmount = (loan.repaidAmount || 0) + repaymentAmount;
+        
+        if (loan.repaidAmount >= loan.amount) {
+          loan.status = 'repaid';
+          loan.repaidAt = new Date();
+        }
+        
+        await loan.save();
+        
+        // Create repayment transaction
+        await Transaction.create({
+          user: userId,
+          type: 'loan_repayment',
+          amount: -repaymentAmount,
+          currency: 'USD',
+          status: 'completed',
+          method: 'internal',
+          reference: `LOAN-REPAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          details: {
+            loanId: loan._id,
+            repaymentType: 'automatic',
+            remainingBalance: loanBalance - repaymentAmount
+          },
+          fee: 0,
+          netAmount: -repaymentAmount
+        });
+
+        totalRepaid += repaymentAmount;
+        remainingDeposit -= repaymentAmount;
+      }
+    }
+
+    // Update user's loan balance
+    await User.findByIdAndUpdate(userId, {
+      $inc: { 'balances.loan': -totalRepaid }
+    });
+
+    return {
+      repaidAmount: totalRepaid,
+      remainingBalance: remainingDeposit,
+      loansRepaid: activeLoans.filter(loan => loan.status === 'repaid').length
+    };
+
+  } catch (err) {
+    console.error('Auto repay loans error:', err);
+    return { repaidAmount: 0, remainingBalance: depositAmount };
+  }
+};
+
+// Update the deposit endpoint to use auto-repayment
+app.post('/api/transactions/deposit', protect, async (req, res) => {
+  try {
+    const { amount, method } = req.body;
+    
+    // ... existing deposit logic ...
+    
+    // After successful deposit, automatically repay loans
+    const repaymentResult = await autoRepayLoansFromDeposit(req.user.id, amount);
+    
+    // Adjust user's main balance based on repayment
+    const netDeposit = repaymentResult.remainingBalance;
+    await User.findByIdAndUpdate(req.user.id, {
+      $inc: { 'balances.main': netDeposit }
+    });
+    
+    // ... rest of deposit response ...
+    
+  } catch (err) {
+    console.error('Deposit error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'An error occurred during deposit'
+    });
+  }
+});
+
+
+
+
+
+
+// =============================================
+// COMPREHENSIVE LOAN ELIGIBILITY CHECK ENDPOINT
+// =============================================
+app.post('/api/loans/check-eligibility', protect, async (req, res) => {
+    try {
+        console.log('🔍 Loan eligibility check request received');
+        
+        const { requestedAmount } = req.body;
+        const userId = req.user._id;
+
+        // Validate requested amount
+        if (!requestedAmount || requestedAmount < 1000) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'Minimum loan amount is $1,000'
+            });
+        }
+
+        // Fetch user data
+        const user = await User.findById(userId)
+            .select('balances firstName lastName email kycStatus isVerified')
+            .lean();
+        
+        if (!user) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'User not found'
+            });
+        }
+
+        // Fetch all investments (both active and completed)
+        const investments = await Investment.find({
+            user: userId
+        })
+        .select('amount plan status')
+        .lean();
+
+        // Fetch ALL loans including pending and active
+        const allLoans = await Loan.find({
+            user: userId,
+            status: { $in: ['active', 'pending', 'approved'] }
+        })
+        .select('amount repaidAmount remainingBalance status')
+        .lean();
+
+        // Check if user has ANY active debt
+        const hasActiveDebt = allLoans.some(loan => 
+            loan.status === 'active' || loan.status === 'pending'
+        );
+
+        // Calculate total debt from active loans only
+        const totalDebt = allLoans
+            .filter(loan => loan.status === 'active')
+            .reduce((sum, loan) => sum + (loan.remainingBalance || loan.amount), 0);
+
+        // Calculate loan capacity (3x main balance)
+        const loanLimit = user.balances.main * 3;
+        const availableCredit = Math.max(0, loanLimit - totalDebt);
+
+        // Check if user has at least 5 investments (active or completed)
+        const totalInvestments = investments.length;
+        const hasMinimumInvestments = totalInvestments >= 5;
+
+        // Check KYC verification
+        const isKYCVerified = user.kycStatus?.identity === 'verified' && 
+                              user.kycStatus?.address === 'verified';
+
+        // Calculate credit score AFTER all checks
+        let creditScore = 600; // Base score
+
+        // Add points based on investments
+        if (totalInvestments >= 5) creditScore += 20;
+        if (totalInvestments >= 10) creditScore += 30;
+        if (totalInvestments >= 20) creditScore += 50;
+
+        // Add points based on investment amount
+        const totalInvested = investments.reduce((sum, inv) => sum + (inv.amount || 0), 0);
+        if (totalInvested >= 5000) creditScore += 25;
+        if (totalInvested >= 10000) creditScore += 50;
+        if (totalInvested >= 50000) creditScore += 75;
+
+        // Add points for completed investments
+        const completedInvestments = investments.filter(inv => inv.status === 'completed').length;
+        if (completedInvestments >= 3) creditScore += 20;
+        if (completedInvestments >= 5) creditScore += 30;
+
+        // Add points for KYC verification
+        if (isKYCVerified) creditScore += 50;
+
+        // Deduct points for having active debt
+        if (hasActiveDebt) {
+            creditScore -= 100; // Significant deduction for existing debt
+        }
+
+        // Cap credit score
+        creditScore = Math.min(Math.max(creditScore, 300), 850);
+        const roundedCreditScore = Math.floor(creditScore);
+
+        // DETERMINE ELIGIBILITY CRITERIA
+        const eligibilityCriteria = {
+            kycVerified: isKYCVerified,
+            minimumInvestments: hasMinimumInvestments,
+            noActiveDebt: !hasActiveDebt, // CRITICAL: No active/pending loans
+            sufficientCredit: requestedAmount <= availableCredit,
+            creditScoreThreshold: roundedCreditScore >= 600
+        };
+
+        const isEligible = Object.values(eligibilityCriteria).every(criterion => criterion === true);
+
+        // Create requirements array
+        const requirements = [
+            {
+                name: 'KYC Verification',
+                met: isKYCVerified,
+                description: isKYCVerified ? 'Identity & address verified' : 'Complete KYC verification'
+            },
+            {
+                name: 'Minimum 5 Investments',
+                met: hasMinimumInvestments,
+                description: hasMinimumInvestments ? `You have ${totalInvestments} investments` : `Need ${5 - totalInvestments} more investments`
+            },
+            {
+                name: 'No Active Debt',
+                met: !hasActiveDebt,
+                description: !hasActiveDebt ? 'No active loans' : 'You have active/pending loans'
+            },
+            {
+                name: 'Sufficient Credit',
+                met: requestedAmount <= availableCredit,
+                description: requestedAmount <= availableCredit ? 
+                    `Within credit limit` : 
+                    `Exceeds available credit ($${availableCredit.toFixed(2)})`
+            },
+            {
+                name: 'Credit Score ≥ 600',
+                met: roundedCreditScore >= 600,
+                description: `Your score: ${roundedCreditScore}`
+            }
+        ];
+
+        // Response data
+        const response = {
+            status: 'success',
+            eligible: isEligible,
+            maxLoanAmount: loanLimit,
+            availableCredit: availableCredit,
+            creditScore: roundedCreditScore,
+            requestedAmount: requestedAmount,
+            currentDebt: totalDebt,
+            mainBalance: user.balances.main,
+            monthlyInterest: 9.99,
+            disbursementFee: 0.99,
+            requirements: requirements,
+            userProfile: {
+                name: `${user.firstName} ${user.lastName}`,
+                hasActiveDebt: hasActiveDebt,
+                totalInvestments: totalInvestments,
+                completedInvestments: completedInvestments
+            },
+            timestamp: new Date().toISOString()
+        };
+
+        res.status(200).json(response);
+
+    } catch (err) {
+        console.error('❌ Error checking loan eligibility:', err);
+        res.status(500).json({
+            status: 'error',
+            message: 'An error occurred while checking loan eligibility',
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+
+
+
+
+
+
+// In the submitLoanApplication function, update the error handling:
+if (response.ok) {
+    // Show success message
+    document.getElementById('loan-application-form').style.display = 'none';
+    document.getElementById('loan-success-message').style.display = 'block';
+    
+    showNotification('success', 'Application Submitted', 
+        `Your loan application for $${amount.toFixed(2)} has been submitted successfully.`);
+    
+    // Refresh data after delay
+    setTimeout(() => {
+        loadBalances();
+        checkLoanEligibility();
+    }, 2000);
+} else {
+    const errorData = await response.json();
+    
+    // Check for specific error types
+    if (errorData.status === 'fail' && errorData.reasons) {
+        // Show detailed eligibility errors
+        const errorMessage = `Loan application failed: ${errorData.reasons.join(', ')}`;
+        throw new Error(errorMessage);
+    } else if (errorData.message) {
+        throw new Error(errorData.message);
+    } else {
+        throw new Error('Failed to submit loan application');
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -15043,4 +16018,5 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
