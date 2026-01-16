@@ -9841,9 +9841,14 @@ app.post('/api/admin/withdrawals/:id/approve', adminProtect, [
   }
 });
 
-// Admin Reject Withdrawal Endpoint
+
+
+
+
+
+// CORRECTED Admin Reject Withdrawal Endpoint
 app.post('/api/admin/withdrawals/:id/reject', adminProtect, [
-  body('rejectionReason').trim().notEmpty().withMessage('Rejection reason is required')
+  body('reason').trim().notEmpty().withMessage('Rejection reason is required')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -9854,7 +9859,7 @@ app.post('/api/admin/withdrawals/:id/reject', adminProtect, [
       });
     }
     
-    const { rejectionReason } = req.body;
+    const { reason } = req.body;
     
     // Find withdrawal
     const withdrawal = await Transaction.findById(req.params.id)
@@ -9889,7 +9894,7 @@ app.post('/api/admin/withdrawals/:id/reject', adminProtect, [
     
     // Update withdrawal status
     withdrawal.status = 'failed';
-    withdrawal.adminNotes = rejectionReason;
+    withdrawal.adminNotes = reason; // Changed from rejectionReason to reason
     await withdrawal.save();
     
     res.status(200).json({
@@ -9899,7 +9904,7 @@ app.post('/api/admin/withdrawals/:id/reject', adminProtect, [
     
     await logActivity('reject-withdrawal', 'transaction', withdrawal._id, req.admin._id, 'Admin', req, {
       amount: withdrawal.amount,
-      reason: rejectionReason,
+      reason: reason,
       userId: user._id
     });
   } catch (err) {
@@ -9910,6 +9915,10 @@ app.post('/api/admin/withdrawals/:id/reject', adminProtect, [
     });
   }
 });
+
+
+
+
 
 
 
@@ -15626,6 +15635,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
