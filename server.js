@@ -9889,7 +9889,7 @@ app.post('/api/admin/withdrawals/:id/reject', adminProtect, [
     }
     
     // Return funds to user balance
-    user.balances.main += withdrawal.amount;
+    user.balances.matured += withdrawal.amount;
     await user.save();
     
     // Update withdrawal status
@@ -15635,6 +15635,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
