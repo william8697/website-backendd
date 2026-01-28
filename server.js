@@ -15258,6 +15258,13 @@ app.get('/api/loans/balances', async (req, res) => {
 
 
 
+
+
+
+
+
+
+
 // Stats endpoint with Redis caching and real-time updates
 app.get('/api/stats', async (req, res) => {
     try {
@@ -15500,6 +15507,9 @@ setInterval(async () => {
 
 
 
+
+
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
@@ -15627,11 +15637,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
 
 
 
