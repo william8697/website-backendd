@@ -15263,7 +15263,7 @@ app.get('/api/loans/balances', async (req, res) => {
 
 
 
-
+```javascript
 // Stats endpoint with Redis caching and real-time updates
 app.get('/api/stats', async (req, res) => {
     try {
@@ -15284,6 +15284,7 @@ app.get('/api/stats', async (req, res) => {
             totalInvested: 105000000.00,
             totalWithdrawals: 155000000.00,
             totalLoans: 85000000.00,
+            totalCloudMiners: 4251235, // 4,251,235 cloud miners
             lastUpdated: now.toISOString(),
             changeRates: {
                 investors: 0,
@@ -15295,6 +15296,8 @@ app.get('/api/stats', async (req, res) => {
 
         // Set persistent investor count with YOUR FIGURE
         await redis.set('persistent-investor-count', '4254256');
+        // Set persistent cloud miner count with YOUR FIGURE
+        await redis.set('persistent-cloud-miner-count', '4251235');
 
         // Initialize fresh daily tracking data with YOUR LIMITS
         let dailyData = {
@@ -15302,7 +15305,8 @@ app.get('/api/stats', async (req, res) => {
             dailyInvestment: 0, // Will grow up to 10 million daily
             dailyInvestmentVolume: 0,
             dailyWithdrawal: 0, // Will grow up to 17 million daily
-            dailyLoan: 0 // Will grow up to 10 million daily
+            dailyLoan: 0, // Will grow up to 10 million daily
+            dailyCloudMiners: 0 // Will grow up to 9999 daily
         };
 
         // Calculate change rates (random between -11.3% to 31%)
@@ -15336,8 +15340,16 @@ function getRandomInRange(min, max, decimals = 2) {
 // Clear previous Redis data to start fresh
 async function initializeFreshStats() {
     try {
+        // Delete all history from redis
+        const keys = await redis.keys('*');
+        if (keys.length > 0) {
+            await redis.del(keys);
+        }
+        
         // Set initial investor count
         await redis.set('persistent-investor-count', '4254256');
+        // Set initial cloud miner count
+        await redis.set('persistent-cloud-miner-count', '4251235');
         
         // Clear any existing stats
         await redis.del('stats-data');
@@ -15346,9 +15358,11 @@ async function initializeFreshStats() {
         
         console.log('Fresh stats initialized with:');
         console.log('- Investors: 4,254,256');
+        console.log('- Cloud Miners: 4,251,235');
         console.log('- 24h Investment limit: 10 million');
         console.log('- 24h Withdrawal limit: 17 million');
         console.log('- 24h Loan limit: 10 million');
+        console.log('- 24h Cloud Miner join limit: 9999');
     } catch (err) {
         console.error('Failed to initialize fresh stats:', err);
     }
@@ -15373,7 +15387,8 @@ setInterval(async () => {
                 dailyInvestment: 0, // 10 million daily limit
                 dailyInvestmentVolume: 0,
                 dailyWithdrawal: 0, // 17 million daily limit
-                dailyLoan: 0 // 10 million daily limit
+                dailyLoan: 0, // 10 million daily limit
+                dailyCloudMiners: 0 // 9999 daily limit
             };
         } else {
             dailyData = JSON.parse(dailyData);
@@ -15384,7 +15399,8 @@ setInterval(async () => {
                     dailyInvestment: 0,
                     dailyInvestmentVolume: 0,
                     dailyWithdrawal: 0,
-                    dailyLoan: 0
+                    dailyLoan: 0,
+                    dailyCloudMiners: 0
                 };
             }
         }
@@ -15395,6 +15411,7 @@ setInterval(async () => {
             totalInvested: 105000000.00,
             totalWithdrawals: 155000000.00,
             totalLoans: 85000000.00,
+            totalCloudMiners: 4251235,
             lastUpdated: now.toISOString(),
             changeRates: {
                 investors: 0,
@@ -15413,6 +15430,15 @@ setInterval(async () => {
             investorCount = parseInt(investorCount);
         }
 
+        // Get current cloud miner count (start with YOUR FIGURE)
+        let cloudMinerCount = await redis.get('persistent-cloud-miner-count');
+        if (!cloudMinerCount) {
+            cloudMinerCount = 4251235; // YOUR SPECIFIED FIGURE
+            await redis.set('persistent-cloud-miner-count', cloudMinerCount.toString());
+        } else {
+            cloudMinerCount = parseInt(cloudMinerCount);
+        }
+
         // Get cached stats if they exist
         const cachedStats = await redis.get('stats-data');
         if (cachedStats) {
@@ -15422,10 +15448,12 @@ setInterval(async () => {
             stats.totalInvested = parsedStats.totalInvested || 105000000.00;
             stats.totalWithdrawals = parsedStats.totalWithdrawals || 155000000.00;
             stats.totalLoans = parsedStats.totalLoans || 85000000.00;
+            stats.totalCloudMiners = parsedStats.totalCloudMiners || cloudMinerCount;
             stats.changeRates = parsedStats.changeRates || stats.changeRates;
         } else {
             // If no cache, use base values from your specifications
             stats.totalInvestors = investorCount;
+            stats.totalCloudMiners = cloudMinerCount;
         }
 
         // Update investors every 15-30 seconds (13-999 increment)
@@ -15434,6 +15462,23 @@ setInterval(async () => {
             investorCount += increment;
             await redis.set('persistent-investor-count', investorCount.toString());
             stats.totalInvestors = investorCount;
+        }
+
+        // Update cloud miners in random seconds with daily limit of 9999
+        if (Math.random() < 0.1) { // Random check (~10% chance per second)
+            const dailyCloudMinerLimit = 9999; // YOUR SPECIFIED: 9999 daily limit
+            if (dailyData.dailyCloudMiners < dailyCloudMinerLimit) {
+                const remainingDaily = dailyCloudMinerLimit - dailyData.dailyCloudMiners;
+                const increment = getRandomInRange(1, 9999, 0); // Random increment 1-9999
+                const actualIncrement = Math.min(increment, remainingDaily);
+                
+                if (actualIncrement > 0) {
+                    cloudMinerCount += actualIncrement;
+                    dailyData.dailyCloudMiners += actualIncrement;
+                    await redis.set('persistent-cloud-miner-count', cloudMinerCount.toString());
+                    stats.totalCloudMiners = cloudMinerCount;
+                }
+            }
         }
 
         // Update invested with daily limit of 10 million
@@ -15501,6 +15546,7 @@ setInterval(async () => {
         console.error('Stats updater error:', err);
     }
 }, 1000); // Run every second to check for updates
+
 
 
 
@@ -15637,6 +15683,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
