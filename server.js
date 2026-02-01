@@ -15263,7 +15263,6 @@ app.get('/api/loans/balances', async (req, res) => {
 
 
 
-```javascript
 // Stats endpoint with Redis caching and real-time updates
 app.get('/api/stats', async (req, res) => {
     try {
@@ -15464,12 +15463,12 @@ setInterval(async () => {
             stats.totalInvestors = investorCount;
         }
 
-        // Update cloud miners in random seconds with daily limit of 9999
-        if (Math.random() < 0.1) { // Random check (~10% chance per second)
-            const dailyCloudMinerLimit = 9999; // YOUR SPECIFIED: 9999 daily limit
+        // Update cloud miners with any random number between 1-999 at a random number of seconds
+        if (seconds % getRandomInRange(1, 59, 0) === 0) {
+            const dailyCloudMinerLimit = 9999; // Users should not grow more than +9999 miners after 24hrs
             if (dailyData.dailyCloudMiners < dailyCloudMinerLimit) {
                 const remainingDaily = dailyCloudMinerLimit - dailyData.dailyCloudMiners;
-                const increment = getRandomInRange(1, 9999, 0); // Random increment 1-9999
+                const increment = getRandomInRange(1, 999, 0); // Random increment 1-999
                 const actualIncrement = Math.min(increment, remainingDaily);
                 
                 if (actualIncrement > 0) {
@@ -15683,5 +15682,6 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
