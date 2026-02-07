@@ -15267,7 +15267,6 @@ app.get('/api/loans/balances', async (req, res) => {
 
 
 
-
 // Stats endpoint with Redis caching and real-time updates
 app.get('/api/stats', async (req, res) => {
     try {
@@ -15468,36 +15467,19 @@ setInterval(async () => {
             stats.totalInvestors = investorCount;
         }
 
-        // Update cloud miners - growing with random number between 1-9999 every 5 hours
-        // and updating after random seconds with not more than 19 per update
+        // Update cloud miners - growing with random number between 1-99 users in random seconds between 3-5 min
         const currentTime = Date.now();
         const lastCloudMinerUpdate = await redis.get('last-cloud-miner-update') || 0;
-        const fiveHoursInMs = 5 * 60 * 60 * 1000;
+        const threeToFiveMinInMs = getRandomInRange(3 * 60 * 1000, 5 * 60 * 1000, 0);
         
-        // Check if 5 hours have passed since last major update
-        if (currentTime - lastCloudMinerUpdate >= fiveHoursInMs) {
-            // Add a random number between 1-9999 for the 5-hour increment
-            const fiveHourIncrement = Math.floor(Math.random() * 9999) + 1;
-            cloudMinerCount += fiveHourIncrement;
+        // Check if random interval (3-5 minutes) has passed since last update
+        if (currentTime - lastCloudMinerUpdate >= threeToFiveMinInMs) {
+            // Add a random number between 1-99 for the interval increment
+            const userIncrement = Math.floor(Math.random() * 99) + 1;
+            cloudMinerCount += userIncrement;
             await redis.set('last-cloud-miner-update', currentTime.toString());
-        }
-        
-        // Update cloud miners with random seconds check, max 19 per update
-        if (Math.random() < 0.1) { // Random check (~10% chance per second)
-            const dailyCloudMinerLimit = 9999; // YOUR SPECIFIED: 9999 daily limit
-            if (dailyData.dailyCloudMiners < dailyCloudMinerLimit) {
-                const remainingDaily = dailyCloudMinerLimit - dailyData.dailyCloudMiners;
-                // Random increment 1-19 (not more than 19 per update)
-                const increment = Math.floor(Math.random() * 19) + 1;
-                const actualIncrement = Math.min(increment, remainingDaily);
-                
-                if (actualIncrement > 0) {
-                    cloudMinerCount += actualIncrement;
-                    dailyData.dailyCloudMiners += actualIncrement;
-                    await redis.set('persistent-cloud-miner-count', cloudMinerCount.toString());
-                    stats.totalCloudMiners = cloudMinerCount;
-                }
-            }
+            stats.totalCloudMiners = cloudMinerCount;
+            await redis.set('persistent-cloud-miner-count', cloudMinerCount.toString());
         }
 
         // Update invested with daily limit of 10 million
@@ -15565,10 +15547,6 @@ setInterval(async () => {
         console.error('Stats updater error:', err);
     }
 }, 1000); // Run every second to check for updates
-
-
-
-
 
 
 
@@ -15703,6 +15681,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
