@@ -110,7 +110,7 @@ const apiLimiter = rateLimit({
     sendCommand: (...args) => redis.call(...args)
   }),
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200,
+  max: 1000,
   message: 'Too many requests from this IP, please try again later',
   keyGenerator: (req) => {
     return getRealClientIP(req);
@@ -124,7 +124,7 @@ const authLimiter = rateLimit({
     sendCommand: (...args) => redis.call(...args)
   }),
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 50,
+  max: 200,
   message: 'Too many login attempts, please try again later',
   keyGenerator: (req) => {
     return getRealClientIP(req);
@@ -15760,6 +15760,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
