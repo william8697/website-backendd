@@ -54,6 +54,24 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token']
 }));
 
+
+
+
+app.use((req, res, next) => {
+  // Allow fonts from Google
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  
+  // Cache static responses
+  if (req.url.includes('/api/plans') || req.url.includes('/api/stats')) {
+    res.setHeader('Cache-Control', 'public, max-age=300');
+  }
+  next();
+});
+
+
+
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(cookieParser());
@@ -15760,6 +15778,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
