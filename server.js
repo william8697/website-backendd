@@ -27,7 +27,7 @@ const OpenAI = require('openai');
 const app = express();
 const { createServer } = require('http');
 const { Server } = require('socket.io');
-
+app.set('trust proxy', 1);
 // FIXED Helmet Configuration - Remove unsafe Cross-Origin-Opener-Policy
 app.use(helmet({
   contentSecurityPolicy: {
@@ -15720,6 +15720,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
