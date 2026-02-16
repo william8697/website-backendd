@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const RedisStore = require('rate-limit-redis');
 const mongoSanitize = require('express-mongo-sanitize');
 const xss = require('xss-clean');
 const hpp = require('hpp');
@@ -27,7 +28,7 @@ const OpenAI = require('openai');
 const app = express();
 const { createServer } = require('http');
 const { Server } = require('socket.io');
-
+app.set('trust proxy', 1);
 // FIXED Helmet Configuration - Remove unsafe Cross-Origin-Opener-Policy
 app.use(helmet({
   contentSecurityPolicy: {
@@ -53,6 +54,24 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token']
 }));
 
+
+
+
+app.use((req, res, next) => {
+  // Allow fonts from Google
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  
+  // Cache static responses
+  if (req.url.includes('/api/plans') || req.url.includes('/api/stats')) {
+    res.setHeader('Cache-Control', 'public, max-age=300');
+  }
+  next();
+});
+
+
+
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(cookieParser());
@@ -60,40 +79,7 @@ app.use(mongoSanitize());
 app.use(xss());
 app.use(hpp());
 
-// Rate limiting
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200,
-  message: 'Too many requests from this IP, please try again later'
-});
-
-const authLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 50,
-  message: 'Too many login attempts, please try again later'
-});
-
-app.use('/api', apiLimiter);
-app.use('/api/login', authLimiter);
-app.use('/api/signup', authLimiter);
-app.use('/api/auth/forgot-password', authLimiter);
-
-// Database connection with enhanced settings
-mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://elvismwangike:JFJmHvP4ktikRYDC@cluster0.vm6hrog.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
-  autoIndex: true,
-  connectTimeoutMS: 30000,
-  socketTimeoutMS: 30000,
-  maxPoolSize: 50,
-  wtimeoutMS: 2500,
-  retryWrites: true
-})
-.then(() => console.log('MongoDB connected successfully'))
-.catch(err => {
-  console.error('MongoDB connection error:', err);
-  process.exit(1);
-});
-
-// Redis connection with enhanced settings
+// Redis connection with enhanced settings for autoscaling (MOVE THIS UP)
 const redis = new Redis({
   host: process.env.REDIS_HOST || 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: process.env.REDIS_PORT || 14450,
@@ -102,11 +88,105 @@ const redis = new Redis({
     const delay = Math.min(times * 50, 2000);
     return delay;
   },
-  maxRetriesPerRequest: 3
+  maxRetriesPerRequest: 3,
+  enableReadyCheck: true,
+  lazyConnect: false,
+  keepAlive: 10000, // Keep Redis connections alive
+  connectTimeout: 10000
 });
 
 redis.on('error', (err) => {
   console.error('Redis error:', err);
+});
+
+redis.on('connect', () => {
+  console.log('Redis connected successfully');
+});
+
+// Helper function to get real client IP from request
+const getRealClientIP = (req) => {
+  // Check X-Forwarded-For header first (this is what Render uses)
+  const forwardedFor = req.headers['x-forwarded-for'];
+  if (forwardedFor) {
+    // Get the first IP in the list (the real client IP)
+    return forwardedFor.split(',')[0].trim();
+  }
+  
+  // Fallback to other headers or remote address
+  return req.ip || 
+         req.connection?.remoteAddress || 
+         req.socket?.remoteAddress || 
+         req.connection?.socket?.remoteAddress ||
+         '0.0.0.0';
+};
+
+// Rate limiting with Redis store (required for autoscaling)
+const apiLimiter = rateLimit({
+  store: new RedisStore({
+    client: redis,
+    prefix: 'rl:api:',
+    sendCommand: (...args) => redis.call(...args)
+  }),
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000,
+  message: 'Too many requests from this IP, please try again later',
+  keyGenerator: (req) => {
+    return getRealClientIP(req);
+  }
+});
+
+const authLimiter = rateLimit({
+  store: new RedisStore({
+    client: redis,
+    prefix: 'rl:auth:',
+    sendCommand: (...args) => redis.call(...args)
+  }),
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 200,
+  message: 'Too many login attempts, please try again later',
+  keyGenerator: (req) => {
+    return getRealClientIP(req);
+  }
+});
+
+app.use('/api', apiLimiter);
+app.use('/api/login', authLimiter);
+app.use('/api/signup', authLimiter);
+app.use('/api/auth/forgot-password', authLimiter);
+
+// Health check endpoint required for Render autoscaling
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+// Database connection with enhanced settings for autoscaling
+mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://elvismwangike:JFJmHvP4ktikRYDC@cluster0.vm6hrog.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
+  autoIndex: true,
+  connectTimeoutMS: 30000,
+  socketTimeoutMS: 30000,
+  maxPoolSize: 50, // Connection pool for each instance
+  minPoolSize: 5,  // Minimum connections to keep alive
+  maxIdleTimeMS: 10000, // Close idle connections
+  waitQueueTimeoutMS: 5000, // How long to wait for a connection
+  retryWrites: true,
+  retryReads: true
+})
+.then(() => console.log('MongoDB connected successfully'))
+.catch(err => {
+  console.error('MongoDB connection error:', err);
+  process.exit(1);
 });
 
 const transporter = nodemailer.createTransport({
@@ -2623,7 +2703,7 @@ const initializePlans = async () => {
         description: '12% After 10 hours',
         percentage: 12,
         duration: 10,
-        minAmount: 200,
+        minAmount: 50,
         maxAmount: 499,
         referralBonus: 5
       },
@@ -15698,9 +15778,3 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
