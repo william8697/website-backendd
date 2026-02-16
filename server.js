@@ -60,24 +60,46 @@ app.use(mongoSanitize());
 app.use(xss());
 app.use(hpp());
 
-// Rate limiting
+// Helper function to get real client IP from request
+const getRealClientIP = (req) => {
+  // Check X-Forwarded-For header first (this is what Render uses)
+  const forwardedFor = req.headers['x-forwarded-for'];
+  if (forwardedFor) {
+    // Get the first IP in the list (the real client IP)
+    return forwardedFor.split(',')[0].trim();
+  }
+  
+  // Fallback to other headers or remote address
+  return req.ip || 
+         req.connection?.remoteAddress || 
+         req.socket?.remoteAddress || 
+         req.connection?.socket?.remoteAddress ||
+         '0.0.0.0';
+};
+
+// Rate limiting with proper IP detection
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 200,
-  message: 'Too many requests from this IP, please try again later'
+  message: 'Too many requests from this IP, please try again later',
+  keyGenerator: (req) => {
+    return getRealClientIP(req);
+  }
 });
 
 const authLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 50,
-  message: 'Too many login attempts, please try again later'
+  message: 'Too many login attempts, please try again later',
+  keyGenerator: (req) => {
+    return getRealClientIP(req);
+  }
 });
 
 app.use('/api', apiLimiter);
 app.use('/api/login', authLimiter);
 app.use('/api/signup', authLimiter);
 app.use('/api/auth/forgot-password', authLimiter);
-
 // Database connection with enhanced settings
 mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://elvismwangike:JFJmHvP4ktikRYDC@cluster0.vm6hrog.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
   autoIndex: true,
@@ -15698,6 +15720,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
