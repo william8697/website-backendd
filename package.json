@@ -34,6 +34,7 @@
     "express-session": "^1.17.3",
     "express-validator": "^7.0.1",
     "google-auth-library": "^9.1.1",
+    "rate-limit-redis": "^3.0.0",
     "helmet": "^7.0.0",
     "multer": "^1.4.5-lts.1",
     "socket.io": "^4.7.2",
@@ -63,3 +64,4 @@
     "node": ">=18.0.0"
   }
 }
+
