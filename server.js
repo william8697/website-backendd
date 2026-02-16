@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const RedisStore = require('rate-limit-redis');
 const mongoSanitize = require('express-mongo-sanitize');
 const xss = require('xss-clean');
 const hpp = require('hpp');
@@ -77,8 +78,13 @@ const getRealClientIP = (req) => {
          '0.0.0.0';
 };
 
-// Rate limiting with proper IP detection
+// Rate limiting with Redis store (required for autoscaling)
 const apiLimiter = rateLimit({
+  store: new RedisStore({
+    client: redis,
+    prefix: 'rl:api:',
+    sendCommand: (...args) => redis.call(...args)
+  }),
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 200,
   message: 'Too many requests from this IP, please try again later',
@@ -88,6 +94,11 @@ const apiLimiter = rateLimit({
 });
 
 const authLimiter = rateLimit({
+  store: new RedisStore({
+    client: redis,
+    prefix: 'rl:auth:',
+    sendCommand: (...args) => redis.call(...args)
+  }),
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 50,
   message: 'Too many login attempts, please try again later',
@@ -100,14 +111,35 @@ app.use('/api', apiLimiter);
 app.use('/api/login', authLimiter);
 app.use('/api/signup', authLimiter);
 app.use('/api/auth/forgot-password', authLimiter);
-// Database connection with enhanced settings
+
+// Health check endpoint required for Render autoscaling
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+// Database connection with enhanced settings for autoscaling
 mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://elvismwangike:JFJmHvP4ktikRYDC@cluster0.vm6hrog.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
   autoIndex: true,
   connectTimeoutMS: 30000,
   socketTimeoutMS: 30000,
-  maxPoolSize: 50,
-  wtimeoutMS: 2500,
-  retryWrites: true
+  maxPoolSize: 50, // Connection pool for each instance
+  minPoolSize: 5,  // Minimum connections to keep alive
+  maxIdleTimeMS: 10000, // Close idle connections
+  waitQueueTimeoutMS: 5000, // How long to wait for a connection
+  retryWrites: true,
+  retryReads: true
 })
 .then(() => console.log('MongoDB connected successfully'))
 .catch(err => {
@@ -115,7 +147,7 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://elvismwangike:JFJmHvP
   process.exit(1);
 });
 
-// Redis connection with enhanced settings
+// Redis connection with enhanced settings for autoscaling
 const redis = new Redis({
   host: process.env.REDIS_HOST || 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
   port: process.env.REDIS_PORT || 14450,
@@ -124,11 +156,19 @@ const redis = new Redis({
     const delay = Math.min(times * 50, 2000);
     return delay;
   },
-  maxRetriesPerRequest: 3
+  maxRetriesPerRequest: 3,
+  enableReadyCheck: true,
+  lazyConnect: false,
+  keepAlive: 10000, // Keep Redis connections alive
+  connectTimeout: 10000
 });
 
 redis.on('error', (err) => {
   console.error('Redis error:', err);
+});
+
+redis.on('connect', () => {
+  console.log('Redis connected successfully');
 });
 
 const transporter = nodemailer.createTransport({
@@ -15720,6 +15760,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
