@@ -61,6 +61,30 @@ app.use(mongoSanitize());
 app.use(xss());
 app.use(hpp());
 
+// Redis connection with enhanced settings for autoscaling (MOVE THIS UP)
+const redis = new Redis({
+  host: process.env.REDIS_HOST || 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
+  port: process.env.REDIS_PORT || 14450,
+  password: process.env.REDIS_PASSWORD || 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR',
+  retryStrategy: (times) => {
+    const delay = Math.min(times * 50, 2000);
+    return delay;
+  },
+  maxRetriesPerRequest: 3,
+  enableReadyCheck: true,
+  lazyConnect: false,
+  keepAlive: 10000, // Keep Redis connections alive
+  connectTimeout: 10000
+});
+
+redis.on('error', (err) => {
+  console.error('Redis error:', err);
+});
+
+redis.on('connect', () => {
+  console.log('Redis connected successfully');
+});
+
 // Helper function to get real client IP from request
 const getRealClientIP = (req) => {
   // Check X-Forwarded-For header first (this is what Render uses)
@@ -145,30 +169,6 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://elvismwangike:JFJmHvP
 .catch(err => {
   console.error('MongoDB connection error:', err);
   process.exit(1);
-});
-
-// Redis connection with enhanced settings for autoscaling
-const redis = new Redis({
-  host: process.env.REDIS_HOST || 'redis-14450.c276.us-east-1-2.ec2.redns.redis-cloud.com',
-  port: process.env.REDIS_PORT || 14450,
-  password: process.env.REDIS_PASSWORD || 'qjXgsg0YrsLaSumlEW9HkIZbvLjXEwXR',
-  retryStrategy: (times) => {
-    const delay = Math.min(times * 50, 2000);
-    return delay;
-  },
-  maxRetriesPerRequest: 3,
-  enableReadyCheck: true,
-  lazyConnect: false,
-  keepAlive: 10000, // Keep Redis connections alive
-  connectTimeout: 10000
-});
-
-redis.on('error', (err) => {
-  console.error('Redis error:', err);
-});
-
-redis.on('connect', () => {
-  console.log('Redis connected successfully');
 });
 
 const transporter = nodemailer.createTransport({
@@ -15760,6 +15760,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
