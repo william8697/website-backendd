@@ -15340,6 +15340,8 @@ app.get('/api/loans/balances', async (req, res) => {
 
 
 
+
+
 // Stats endpoint with Redis caching and real-time updates
 app.get('/api/stats', async (req, res) => {
     try {
@@ -15382,7 +15384,8 @@ app.get('/api/stats', async (req, res) => {
             dailyInvestmentVolume: 0,
             dailyWithdrawal: 0, // Will grow up to 17 million daily
             dailyLoan: 0, // Will grow up to 10 million daily
-            dailyCloudMiners: 0 // Will grow up to 9999 daily
+            dailyCloudMiners: 0, // Will grow up to 9999 daily
+            hourlyInvestors: 0 // Track investors added this hour (max 599)
         };
 
         // Calculate change rates (random between -11.3% to 31%)
@@ -15453,6 +15456,8 @@ setInterval(async () => {
         // Get current UTC date for daily tracking
         const now = new Date();
         const todayUTC = now.toISOString().split('T')[0];
+        const currentHour = now.getUTCHours(); // Track hour for hourly investor limit
+        const seconds = now.getSeconds();
 
         // Get or initialize daily tracking data with YOUR LIMITS
         let dailyData = await redis.get('daily-stats');
@@ -15463,7 +15468,9 @@ setInterval(async () => {
                 dailyInvestmentVolume: 0,
                 dailyWithdrawal: 0, // 17 million daily limit
                 dailyLoan: 0, // 10 million daily limit
-                dailyCloudMiners: 0 // 9999 daily limit
+                dailyCloudMiners: 0, // 9999 daily limit
+                hourlyInvestors: 0, // Track investors this hour
+                lastHour: currentHour // Track which hour we're in
             };
         } else {
             dailyData = JSON.parse(dailyData);
@@ -15475,8 +15482,15 @@ setInterval(async () => {
                     dailyInvestmentVolume: 0,
                     dailyWithdrawal: 0,
                     dailyLoan: 0,
-                    dailyCloudMiners: 0
+                    dailyCloudMiners: 0,
+                    hourlyInvestors: 0,
+                    lastHour: currentHour
                 };
+            }
+            // Reset hourly counter if hour changed
+            if (dailyData.lastHour !== currentHour) {
+                dailyData.hourlyInvestors = 0;
+                dailyData.lastHour = currentHour;
             }
         }
 
@@ -15531,63 +15545,50 @@ setInterval(async () => {
             stats.totalCloudMiners = cloudMinerCount;
         }
 
-        // Track total investors added in this hour
-        const currentHour = Math.floor(Date.now() / (60 * 60 * 1000));
-        const lastUpdateHour = await redis.get('last-update-hour') || 0;
-        let hourlyInvestorCount = await redis.get('hourly-investor-count') || 0;
+        // Update investors - grow with up to 599 per hour, added randomly over time
+        // Random number of people at random number of seconds (example: 3 sec 1 person, 15 sec 4 people, etc.)
+        const lastInvestorUpdate = await redis.get('last-investor-update') || 0;
+        const currentTime = Date.now();
         
-        // Reset hourly count if it's a new hour
-        if (currentHour > lastUpdateHour) {
-            hourlyInvestorCount = 0;
-            await redis.set('last-update-hour', currentHour.toString());
-        }
+        // Generate random seconds between 1 and 60 for the next update
+        const randomSecondsDelay = Math.floor(Math.random() * 60) + 1; // 1 to 60 seconds
+        const minUpdateInterval = randomSecondsDelay * 1000; // Convert to milliseconds
         
-        hourlyInvestorCount = parseInt(hourlyInvestorCount);
-
-        // Update investors with random increments at random intervals (max 599 per hour)
-        if (hourlyInvestorCount < 599) {
-            // Generate random interval between 1 second and 5 minutes (300 seconds)
-            const randomInterval = getRandomInRange(1000, 300000, 0);
-            
-            // Get last update time
-            const lastInvestorUpdate = await redis.get('last-investor-update') || 0;
-            const currentTime = Date.now();
-            const timeSinceLastUpdate = currentTime - parseInt(lastInvestorUpdate);
-            
-            if (timeSinceLastUpdate >= randomInterval) {
-                // Calculate remaining investors for the hour
-                const remainingHourly = 599 - hourlyInvestorCount;
-                // Random increment between 1 and 599, but not more than remaining
-                const increment = Math.floor(Math.random() * 599) + 1;
+        // Check if enough random time has passed since last update
+        const timeSinceLastUpdate = currentTime - lastInvestorUpdate;
+        
+        if (timeSinceLastUpdate >= minUpdateInterval) {
+            const maxHourlyInvestors = 599; // Maximum 599 per hour
+            if (dailyData.hourlyInvestors < maxHourlyInvestors) {
+                const remainingHourly = maxHourlyInvestors - dailyData.hourlyInvestors;
+                
+                // Generate random number of investors (1 to 15 people per update)
+                // But ensure we don't exceed remaining hourly limit
+                let increment = Math.floor(Math.random() * 15) + 1; // 1 to 15 people
                 const actualIncrement = Math.min(increment, remainingHourly);
                 
                 if (actualIncrement > 0) {
                     investorCount += actualIncrement;
-                    hourlyInvestorCount += actualIncrement;
-                    
-                    // Update Redis with new counts
+                    dailyData.hourlyInvestors += actualIncrement;
                     await redis.set('persistent-investor-count', investorCount.toString());
-                    await redis.set('hourly-investor-count', hourlyInvestorCount.toString());
                     await redis.set('last-investor-update', currentTime.toString());
-                    
                     stats.totalInvestors = investorCount;
                     
-                    console.log(`Added ${actualIncrement} investors after ${timeSinceLastUpdate/1000} seconds. Hourly total: ${hourlyInvestorCount}/599`);
+                    console.log(`Investor update: +${actualIncrement} after ${randomSecondsDelay} seconds (Hourly total: ${dailyData.hourlyInvestors}/599)`);
                 }
             }
         }
 
         // Update cloud miners - grow with 1-9 users in random time between 3 sec -5 min
-        const currentTime = Date.now();
         const lastCloudMinerUpdate = await redis.get('last-cloud-miner-update') || 0;
-        const minUpdateInterval = 3000; // 3 seconds in milliseconds
-        const maxUpdateInterval = 300000; // 5 minutes in milliseconds
+        const minCloudMinerInterval = 3000; // 3 seconds in milliseconds
+        const maxCloudMinerInterval = 300000; // 5 minutes in milliseconds
         
         // Check if enough random time has passed since last update
-        const timeSinceLastUpdate = currentTime - lastCloudMinerUpdate;
-        const randomUpdateInterval = getRandomInRange(minUpdateInterval, maxUpdateInterval, 0);
+        const timeSinceLastCloudMinerUpdate = currentTime - lastCloudMinerUpdate;
+        const randomCloudMinerInterval = getRandomInRange(minCloudMinerInterval, maxCloudMinerInterval, 0);
         
-        if (timeSinceLastUpdate >= randomUpdateInterval) {
+        if (timeSinceLastCloudMinerUpdate >= randomCloudMinerInterval) {
             const dailyCloudMinerLimit = 9999; // YOUR SPECIFIED: 9999 daily limit
             if (dailyData.dailyCloudMiners < dailyCloudMinerLimit) {
                 const remainingDaily = dailyCloudMinerLimit - dailyData.dailyCloudMiners;
@@ -15606,7 +15607,6 @@ setInterval(async () => {
         }
 
         // Update invested with daily limit of 10 million
-        const seconds = now.getSeconds();
         if (seconds % getRandomInRange(5, 20, 0) === 0) {
             const dailyInvestmentLimit = 10000000; // YOUR SPECIFIED: 10 million daily limit
             if (dailyData.dailyInvestment < dailyInvestmentLimit) {
@@ -15807,6 +15807,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
