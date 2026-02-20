@@ -16205,16 +16205,6 @@ app.post('/api/convert', protect, async (req, res) => {
   }
 });
 
-// =============================================
-// Helper function to get real client IP
-// =============================================
-const getRealClientIP = (req) => {
-  const forwardedFor = req.headers['x-forwarded-for'];
-  if (forwardedFor) {
-    return forwardedFor.split(',')[0].trim();
-  }
-  return req.ip || req.connection?.remoteAddress || req.socket?.remoteAddress || '0.0.0.0';
-};
 
 
 
@@ -16351,6 +16341,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
