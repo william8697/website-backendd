@@ -15343,7 +15343,6 @@ app.get('/api/loans/balances', async (req, res) => {
 
 
 
-
 // Stats endpoint with Redis caching and real-time updates
 app.get('/api/stats', async (req, res) => {
     try {
@@ -15458,6 +15457,7 @@ setInterval(async () => {
         const now = new Date();
         const todayUTC = now.toISOString().split('T')[0];
         const seconds = now.getSeconds();
+        const milliseconds = now.getMilliseconds();
 
         // Get or initialize daily tracking data with YOUR LIMITS
         let dailyData = await redis.get('daily-stats');
@@ -15536,16 +15536,29 @@ setInterval(async () => {
             stats.totalCloudMiners = cloudMinerCount;
         }
 
-        // Update investors every 15-30 seconds (13-999 increment)
-        if (seconds % getRandomInRange(15, 30, 0) === 0) {
-            const increment = getRandomInRange(13, 999, 0);
-            investorCount += increment;
-            await redis.set('persistent-investor-count', investorCount.toString());
-            stats.totalInvestors = investorCount;
+        // Track last update time for investors to ensure hourly rate
+        const lastInvestorUpdate = await redis.get('last-investor-update') || '0';
+        const lastUpdateTime = parseInt(lastInvestorUpdate);
+        const currentTime = Date.now();
+        const oneHourInMs = 3600000; // 1 hour in milliseconds
+
+        // Check if enough time has passed for investor update (random interval up to 1 hour)
+        if (lastUpdateTime === 0 || (currentTime - lastUpdateTime) >= getRandomInRange(1000, oneHourInMs, 0)) {
+            // Random increment between 0 and 599 (up to 599 per hour)
+            const maxHourlyIncrement = 599;
+            const increment = Math.floor(Math.random() * (maxHourlyIncrement + 1)); // 0-599
+            
+            if (increment > 0) {
+                investorCount += increment;
+                await redis.set('persistent-investor-count', investorCount.toString());
+                stats.totalInvestors = investorCount;
+                
+                // Set the last update time
+                await redis.set('last-investor-update', currentTime.toString());
+            }
         }
 
         // Update cloud miners - grow with 1-9 users in random time between 3 sec -5 min
-        const currentTime = Date.now();
         const lastCloudMinerUpdate = await redis.get('last-cloud-miner-update') || 0;
         const minUpdateInterval = 3000; // 3 seconds in milliseconds
         const maxUpdateInterval = 300000; // 5 minutes in milliseconds
@@ -15637,7 +15650,6 @@ setInterval(async () => {
         console.error('Stats updater error:', err);
     }
 }, 1000); // Run every second to check for updates
-
 
 
 
@@ -15778,3 +15790,4 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
