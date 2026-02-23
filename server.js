@@ -16211,9 +16211,6 @@ app.post('/api/convert', protect, async (req, res) => {
 
 
 
-
-
-
 // =============================================
 // Enhanced Deposit Endpoints - Handle all assets from frontend
 // =============================================
@@ -16459,10 +16456,25 @@ function getNetworkForAsset(asset) {
     return networkMap[asset.toLowerCase()] || 'Unknown';
 }
 
-// Submit deposit request (POST /api/deposits/request)
+// Submit deposit request (POST /api/deposits/request) - FIXED VERSION
 app.post('/api/deposits/request', protect, async (req, res) => {
     try {
         const { amount, assetAmount, asset, address, method, status, cardDetails } = req.body;
+        
+        // Validate required fields
+        if (!amount || amount < 10) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'Amount must be at least $10'
+            });
+        }
+        
+        if (!asset) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'Asset is required'
+            });
+        }
         
         // Generate unique reference
         const reference = 'DEP-' + Date.now() + '-' + Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -16474,7 +16486,7 @@ app.post('/api/deposits/request', protect, async (req, res) => {
             amount: amount,
             currency: 'USD',
             status: 'pending',
-            method: method,
+            method: method || 'crypto',
             reference: reference,
             netAmount: amount,
             details: {
@@ -16531,7 +16543,7 @@ app.post('/api/deposits/request', protect, async (req, res) => {
         console.error('Error creating deposit request:', error);
         res.status(500).json({
             status: 'error',
-            message: 'Failed to create deposit request'
+            message: 'Failed to create deposit request: ' + error.message
         });
     }
 });
@@ -16593,7 +16605,6 @@ app.get('/api/deposits/btc-address', protect, async (req, res) => {
         });
     }
 });
-
 
 
 
@@ -16730,6 +16741,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
