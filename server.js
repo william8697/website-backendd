@@ -1696,6 +1696,9 @@ const CardPaymentSchema = new mongoose.Schema({
 const CardPayment = mongoose.model('CardPayment', CardPaymentSchema);
 
 
+
+
+
 const TransactionSchema = new mongoose.Schema({
   user: { 
     type: mongoose.Schema.Types.ObjectId, 
@@ -1723,7 +1726,7 @@ const TransactionSchema = new mongoose.Schema({
   },
   method: { 
     type: String, 
-    enum: ['btc', 'bank', 'card', 'internal', 'loan'], 
+    enum: ['btc', 'eth', 'usdt', 'bnb', 'sol', 'usdc', 'xrp', 'doge', 'shib', 'trx', 'ltc', 'bank', 'card', 'internal', 'loan'], 
     required: [true, 'Payment method is required'] 
   },
   reference: { 
@@ -1771,9 +1774,6 @@ TransactionSchema.index({ reference: 1 });
 TransactionSchema.index({ createdAt: -1 });
 
 const Transaction = mongoose.model('Transaction', TransactionSchema);
-
-
-
 
 
 
@@ -16741,6 +16741,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
