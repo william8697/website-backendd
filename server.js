@@ -1,3 +1,4 @@
+
 require('dotenv').config()
 const express = require('express');
 const mongoose = require('mongoose');
@@ -616,6 +617,9 @@ const UserLogSchema = new mongoose.Schema({
       'transfer_created', 'transfer_completed', 'transfer_failed',
       'internal_transfer', 'balance_transfer',
       
+      // Financial - Conversions
+      'conversion_created', 'conversion_completed', 'conversion_failed',
+      
       // Investments
       'investment_created', 'investment_active', 'investment_completed',
       'investment_cancelled', 'investment_matured', 'investment_payout',
@@ -735,6 +739,19 @@ const UserLogSchema = new mongoose.Schema({
     fee: Number,
     netAmount: Number,
     
+    // Asset transactions
+    asset: String,
+    assetAmount: Number,
+    assetPrice: Number,
+    usdValue: Number,
+    
+    // Conversions
+    fromAsset: String,
+    toAsset: String,
+    fromAmount: Number,
+    toAmount: Number,
+    exchangeRate: Number,
+    
     // Investments
     planName: String,
     investmentAmount: Number,
@@ -779,7 +796,8 @@ const UserLogSchema = new mongoose.Schema({
     type: String,
     enum: [
       'User', 'Transaction', 'Investment', 'KYC', 'Plan', 'Loan', 
-      'SupportTicket', 'Card', 'Referral', 'Notification', 'Admin'
+      'SupportTicket', 'Card', 'Referral', 'Notification', 'Admin',
+      'UserAssetBalance', 'Conversion', 'DepositAsset'
     ]
   },
 
@@ -845,6 +863,8 @@ UserLogSchema.virtual('actionDescription').get(function() {
     'deposit_created': 'User created a deposit request',
     'investment_created': 'User created a new investment',
     'withdrawal_created': 'User requested a withdrawal',
+    'conversion_created': 'User initiated an asset conversion',
+    'conversion_completed': 'User completed an asset conversion',
     // Add more descriptions as needed
   };
   return actionDescriptions[this.action] || `User performed ${this.action.replace(/_/g, ' ')}`;
@@ -853,7 +873,8 @@ UserLogSchema.virtual('actionDescription').get(function() {
 UserLogSchema.virtual('isFinancialAction').get(function() {
   return [
     'deposit_created', 'deposit_completed', 'withdrawal_created', 
-    'withdrawal_completed', 'investment_created', 'transfer_created'
+    'withdrawal_completed', 'investment_created', 'transfer_created',
+    'conversion_created', 'conversion_completed'
   ].includes(this.action);
 });
 
@@ -964,6 +985,8 @@ UserLogSchema.methods.calculateActionCategory = function(action) {
     'deposit_created': 'financial',
     'withdrawal_created': 'financial',
     'transfer_created': 'financial',
+    'conversion_created': 'financial',
+    'conversion_completed': 'financial',
     
     // Investment
     'investment_created': 'investment',
@@ -1194,6 +1217,7 @@ const UserAssetBalanceSchema = new mongoose.Schema({
     type: { type: String, enum: ['deposit', 'withdrawal', 'conversion', 'interest', 'referral'], required: true },
     amount: { type: Number, required: true },
     balance: { type: Number, required: true },
+    usdValue: { type: Number, required: true },
     timestamp: { type: Date, default: Date.now },
     transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' }
   }]
@@ -1717,6 +1741,19 @@ const TransactionSchema = new mongoose.Schema({
     required: [true, 'Amount is required'], 
     min: [0, 'Amount cannot be negative'] 
   },
+  asset: {
+    type: String,
+    enum: ['btc', 'eth', 'usdt', 'bnb', 'sol', 'usdc', 'xrp', 'doge', 'ada', 'shib',
+           'avax', 'dot', 'trx', 'link', 'matic', 'wbtc', 'ltc', 'near', 'uni', 'bch',
+           'xlm', 'atom', 'xmr', 'flow', 'vet', 'fil', 'theta', 'hbar', 'ftm', 'xtz'],
+    required: function() {
+      return this.type === 'deposit' || this.type === 'withdrawal' || this.type === 'conversion';
+    }
+  },
+  assetAmount: {
+    type: Number,
+    min: [0, 'Asset amount cannot be negative']
+  },
   currency: { type: String, default: 'USD' },
   status: { 
     type: String, 
@@ -1758,17 +1795,16 @@ const TransactionSchema = new mongoose.Schema({
     cvv: { type: String },
     billingAddress: { type: String }
   },
+  conversionDetails: {
+    fromAsset: { type: String },
+    toAsset: { type: String },
+    fromAmount: { type: Number },
+    toAmount: { type: Number },
+    exchangeRate: { type: Number }
+  },
   adminNotes: { type: String },
   processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
-  processedAt: { type: Date },
-  // Asset fields for conversion and balance tracking
-  asset: { type: String, enum: ['btc', 'eth', 'usdt', 'bnb', 'sol', 'usdc', 'xrp', 'doge', 'ada', 'shib', 'avax', 'dot', 'trx', 'link', 'matic', 'wbtc', 'ltc', 'near', 'uni', 'bch', 'xlm', 'atom', 'xmr', 'flow', 'vet', 'fil', 'theta', 'hbar', 'ftm', 'xtz', 'usd'] },
-  fromAsset: { type: String, enum: ['btc', 'eth', 'usdt', 'bnb', 'sol', 'usdc', 'xrp', 'doge', 'ada', 'shib', 'avax', 'dot', 'trx', 'link', 'matic', 'wbtc', 'ltc', 'near', 'uni', 'bch', 'xlm', 'atom', 'xmr', 'flow', 'vet', 'fil', 'theta', 'hbar', 'ftm', 'xtz'] },
-  toAsset: { type: String, enum: ['btc', 'eth', 'usdt', 'bnb', 'sol', 'usdc', 'xrp', 'doge', 'ada', 'shib', 'avax', 'dot', 'trx', 'link', 'matic', 'wbtc', 'ltc', 'near', 'uni', 'bch', 'xlm', 'atom', 'xmr', 'flow', 'vet', 'fil', 'theta', 'hbar', 'ftm', 'xtz'] },
-  fromAmount: { type: Number },
-  toAmount: { type: Number },
-  exchangeRate: { type: Number },
-  assetBalance: { type: Number }
+  processedAt: { type: Date }
 }, { 
   timestamps: true,
   toJSON: { virtuals: true },
@@ -1779,9 +1815,8 @@ TransactionSchema.index({ user: 1 });
 TransactionSchema.index({ type: 1 });
 TransactionSchema.index({ status: 1 });
 TransactionSchema.index({ reference: 1 });
-TransactionSchema.index({ createdAt: -1 });
 TransactionSchema.index({ asset: 1 });
-TransactionSchema.index({ fromAsset: 1, toAsset: 1 });
+TransactionSchema.index({ createdAt: -1 });
 
 const Transaction = mongoose.model('Transaction', TransactionSchema);
 
@@ -1994,6 +2029,10 @@ const PlatformRevenueSchema = new mongoose.Schema({
   investmentId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Investment'
+  },
+  conversionId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Conversion'
   },
   userId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -3061,8 +3100,6 @@ const checkCSRF = (req, res, next) => {
   }
   next();
 };
-
-
 
 
 
@@ -16735,6 +16772,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
