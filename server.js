@@ -1708,7 +1708,7 @@ const TransactionSchema = new mongoose.Schema({
   },
   type: { 
     type: String, 
-    enum: ['deposit', 'withdrawal', 'transfer', 'investment', 'interest', 'referral', 'loan'], 
+    enum: ['deposit', 'withdrawal', 'transfer', 'investment', 'interest', 'referral', 'loan', 'conversion'], 
     required: [true, 'Transaction type is required'],
     index: true
   },
@@ -1760,7 +1760,15 @@ const TransactionSchema = new mongoose.Schema({
   },
   adminNotes: { type: String },
   processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
-  processedAt: { type: Date }
+  processedAt: { type: Date },
+  // Asset fields for conversion and balance tracking
+  asset: { type: String, enum: ['btc', 'eth', 'usdt', 'bnb', 'sol', 'usdc', 'xrp', 'doge', 'ada', 'shib', 'avax', 'dot', 'trx', 'link', 'matic', 'wbtc', 'ltc', 'near', 'uni', 'bch', 'xlm', 'atom', 'xmr', 'flow', 'vet', 'fil', 'theta', 'hbar', 'ftm', 'xtz', 'usd'] },
+  fromAsset: { type: String, enum: ['btc', 'eth', 'usdt', 'bnb', 'sol', 'usdc', 'xrp', 'doge', 'ada', 'shib', 'avax', 'dot', 'trx', 'link', 'matic', 'wbtc', 'ltc', 'near', 'uni', 'bch', 'xlm', 'atom', 'xmr', 'flow', 'vet', 'fil', 'theta', 'hbar', 'ftm', 'xtz'] },
+  toAsset: { type: String, enum: ['btc', 'eth', 'usdt', 'bnb', 'sol', 'usdc', 'xrp', 'doge', 'ada', 'shib', 'avax', 'dot', 'trx', 'link', 'matic', 'wbtc', 'ltc', 'near', 'uni', 'bch', 'xlm', 'atom', 'xmr', 'flow', 'vet', 'fil', 'theta', 'hbar', 'ftm', 'xtz'] },
+  fromAmount: { type: Number },
+  toAmount: { type: Number },
+  exchangeRate: { type: Number },
+  assetBalance: { type: Number }
 }, { 
   timestamps: true,
   toJSON: { virtuals: true },
@@ -1772,6 +1780,8 @@ TransactionSchema.index({ type: 1 });
 TransactionSchema.index({ status: 1 });
 TransactionSchema.index({ reference: 1 });
 TransactionSchema.index({ createdAt: -1 });
+TransactionSchema.index({ asset: 1 });
+TransactionSchema.index({ fromAsset: 1, toAsset: 1 });
 
 const Transaction = mongoose.model('Transaction', TransactionSchema);
 
@@ -1965,7 +1975,7 @@ const OTP = mongoose.model('OTP', OTPSchema);
 const PlatformRevenueSchema = new mongoose.Schema({
   source: {
     type: String,
-    enum: ['investment_fee', 'withdrawal_fee', 'other'],
+    enum: ['investment_fee', 'withdrawal_fee', 'conversion_fee', 'other'],
     required: true
   },
   amount: {
@@ -3051,22 +3061,6 @@ const checkCSRF = (req, res, next) => {
   }
   next();
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -16741,6 +16735,7 @@ processMaturedInvestments();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
